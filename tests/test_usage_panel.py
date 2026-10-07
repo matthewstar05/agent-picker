@@ -129,7 +129,8 @@ class UsagePanelTests(unittest.TestCase):
             view = panel.View([agent])
             for theme in ("brand", "sunset", "rainbow"):
                 preferences.put(panel.THEME.key, theme)
-                expected = panel.WHITE if theme == "rainbow" else tuple(agent["color"])
+                expected = (panel.WHITE if theme == "rainbow" or agent.get("pastel") == "rainbow"
+                            else tuple(agent.get("pastel") or agent["color"]))
                 waves = []
                 for workers in (1, 3, 12):
                     first_count, first_wave = header(view, workers, 0.4)

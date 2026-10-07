@@ -591,7 +591,8 @@ def _card(view, i, cw, t, now, entry, fetching, working, dots=None, rows=3, pane
     #             head.at(end + k, glyph, color)
     if live:
         clock = t if view.anim else 0.0
-        count_color = WHITE if rainbow else agent["color"]
+        count_color = (WHITE if rainbow or agent.get("pastel") == "rainbow"
+                       else agent.get("pastel") or agent["color"])
         lead = len(str(working)) + 1
         for k, ch in enumerate(status):
             if ch.isdigit():
