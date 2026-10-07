@@ -171,6 +171,79 @@ class PickerTests(unittest.TestCase):
                     settings.update_checkout()
                 run.assert_not_called()
 
+    @unittest.skipUnless(shutil.which("git"), "Git required")
+    def test_push_then_update_other_checkout(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            remote, author, consumer = (root / name for name in ("remote.git", "author", "consumer"))
+            def git(*args):
+                return subprocess.run(["git"] + list(map(str, args)), check=True, capture_output=True, text=True)
+            git("init", "--bare", remote)
+            git("init", "-b", "main", author)
+            git("-C", author, "config", "user.name", "Test")
+            git("-C", author, "config", "user.email", "test@example.invalid")
+            git("-C", author, "remote", "add", "origin", remote)
+            (author / "shared.json").write_text('{"model":"first"}\n')
+            git("-C", author, "add", ".")
+            git("-C", author, "commit", "-m", "Initial")
+            git("-C", author, "push", "-u", "origin", "main")
+            git("clone", "--branch", "main", remote, consumer)
+            (author / "shared.json").write_text('{"model":"updated"}\n')
+            git("-C", author, "commit", "-am", "Update")
+            git("-C", author, "push")
+            with patch.object(settings, "ROOT", consumer):
+                settings.update_checkout()
+            self.assertEqual((consumer / "shared.json").read_text(), (author / "shared.json").read_text())
+
+    @unittest.skipIf(os.name == "nt", "POSIX pseudo-terminal")
+    def test_interactive_menu_restores_terminal_after_resize_and_quit(self):
+        import fcntl
+        import pty
+        import select
+        import struct
+        import termios
+        import time
+        master, slave = pty.openpty()
+        old = termios.tcgetattr(slave)
+        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
+        code = "import sys;sys.path.insert(0,sys.argv[1]);import agent_picker as a;a.installed=lambda x:True;a.refresh_usage=lambda x:None;a.main()"
+        process = subprocess.Popen([sys.executable, "-c", code, str(ROOT / "src")], stdin=slave, stdout=slave, stderr=slave)
+        data = b""
+        start = time.monotonic()
+        moved = quit_sent = False
+        try:
+            while time.monotonic() - start < 5:
+                elapsed = time.monotonic() - start
+                if elapsed > 0.25 and not moved:
+                    os.write(master, b"\x1b[B")
+                    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 10, 40, 0, 0))
+                    moved = True
+                if elapsed > 0.6 and not quit_sent:
+                    os.write(master, b"q")
+                    quit_sent = True
+                if select.select([master], [], [], 0.01)[0]:
+                    data += os.read(master, 65536)
+                if process.poll() is not None:
+                    while select.select([master], [], [], 0.02)[0]:
+                        data += os.read(master, 65536)
+                    break
+            self.assertEqual(process.poll(), 0, data[-500:])
+            new = termios.tcgetattr(slave)
+            # macOS may add the kernel's PENDIN flag after canonical input is restored.
+            pending = getattr(termios, "PENDIN", 0)
+            old[3] &= ~pending
+            new[3] &= ~pending
+            self.assertEqual(new, old)
+            self.assertIn(b"\x1b[?1049h", data)
+            self.assertIn(b"\x1b[?1049l", data)
+            self.assertIn(b"\x1b[?25h", data)
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait()
+            os.close(master)
+            os.close(slave)
+
 
 if __name__ == "__main__":
     unittest.main()
