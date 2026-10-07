@@ -30,16 +30,20 @@ def main():
         sys.exit("Use scripts/install-windows.ps1 on Windows.")
     bindir = Path.home() / ".local/bin"
     bindir.mkdir(parents=True, exist_ok=True)
-    wrapper = bindir / "agent-picker"
-    content = "#!/bin/sh\n# agent-picker managed launcher\nexec " + shlex.quote(sys.executable) + " " + shlex.quote(str(ROOT / "src/agent_picker.py")) + ' "$@"\n'
-    if not wrapper.exists() or wrapper.read_text() != content:
-        backup(wrapper)
-        if wrapper.is_symlink():
-            wrapper.unlink()
-        wrapper.write_text(content)
-        wrapper.chmod(0o755)
+    wrappers = {}
+    for name, entry in (("agent-picker", "agent_picker.py"), ("usage-panel", "usage_panel.py")):
+        wrapper = bindir / name
+        content = "#!/bin/sh\n# agent-picker managed launcher\nexec " + shlex.quote(sys.executable) + " " + shlex.quote(str(ROOT / "src" / entry)) + ' "$@"\n'
+        if not wrapper.exists() or wrapper.read_text() != content:
+            backup(wrapper)
+            if wrapper.is_symlink():
+                wrapper.unlink()
+            wrapper.write_text(content)
+            wrapper.chmod(0o755)
+        wrappers[name] = wrapper
     block = (START + "\n" + 'export PATH="$HOME/.local/bin:$PATH"\n'
-             + "alias agent=" + shlex.quote(str(wrapper)) + "\n" + END + "\n")
+             + "alias agent=" + shlex.quote(str(wrappers["agent-picker"])) + "\n"
+             + "alias usage=" + shlex.quote(str(wrappers["usage-panel"])) + "\n" + END + "\n")
     for rc in (Path.home() / ".zshrc", Path.home() / ".bashrc"):
         original = rc.read_text() if rc.exists() else ""
         text = re.sub(re.escape(START) + r".*?" + re.escape(END) + r"\n?", "", original, flags=re.S)
@@ -54,7 +58,7 @@ def main():
         if text != original:
             backup(rc)
             rc.write_text(text)
-    print("Installed. Open a new terminal, then run agent --picker-doctor.")
+    print("Installed. Open a new terminal, then run agent --picker-doctor, or usage for the limits panel.")
     print(f"Updates are read directly from: {ROOT}")
 
 

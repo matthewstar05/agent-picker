@@ -88,6 +88,27 @@
     ]
   },
   {
+    "name": "Antigravity",
+    "pastel": "rainbow",
+    "gradient": "rainbow",
+    "model": "gemini-3.8-flash",
+    "short": "gemini flash",
+    "color": [
+      66,
+      133,
+      244
+    ],
+    "detail": "gemini-3.8-flash \u00b7 high",
+    "argv": [
+      "agy",
+      "--model",
+      "gemini-3.8-flash-high",
+      "--effort",
+      "high",
+      "--dangerously-skip-permissions"
+    ]
+  },
+  {
     "name": "Cursor",
     "pastel": [
       255,
@@ -114,6 +135,28 @@
         150,
         15,
         28
+      ]
+    ],
+    "bar_gradient": [
+      [
+        240,
+        60,
+        75
+      ],
+      [
+        190,
+        35,
+        50
+      ],
+      [
+        255,
+        120,
+        130
+      ],
+      [
+        215,
+        45,
+        60
       ]
     ],
     "model": "grok-4.7",
@@ -189,27 +232,6 @@
       "--effort",
       "medium",
       "--trust-all-tools"
-    ]
-  },
-  {
-    "name": "Antigravity",
-    "pastel": "rainbow",
-    "gradient": "rainbow",
-    "model": "gemini-3.8-flash",
-    "short": "gemini flash",
-    "color": [
-      66,
-      133,
-      244
-    ],
-    "detail": "gemini-3.8-flash \u00b7 high",
-    "argv": [
-      "agy",
-      "--model",
-      "gemini-3.8-flash-high",
-      "--effort",
-      "high",
-      "--dangerously-skip-permissions"
     ]
   }
 ]

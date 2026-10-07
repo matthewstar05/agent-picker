@@ -56,6 +56,9 @@ agent --picker-doctor                 inspect detected providers and local paths
 agent --picker-update                 pull shared updates from GitHub
 agent --picker-help                   show picker help
 agent -- --picker-help                pass a management-looking argument to the CLI
+usage                                live usage-limit panel for every provider
+usage --theme vapor                  start the panel in a theme (remembered)
+usage --themes                       list the panel's color themes
 ```
 
 Updates are explicit, use `git pull --ff-only`, and refuse a dirty checkout. If the two machines have diverging commits, resolve them with normal Git operations before updating. The command does not commit, stash, reset, push, or update provider CLIs automatically.
@@ -101,6 +104,16 @@ Usage collection runs in background threads and never refreshes authentication t
 | Antigravity | Existing macOS Keychain token | No verified native credential reader yet |
 
 Claude's [authentication documentation](https://code.claude.com/docs/en/authentication#credential-management) describes its platform-specific credential files. `CLAUDE_CONFIG_DIR` and `CODEX_HOME` are respected by the usage readers. Cursor and Antigravity usage endpoints and credential formats come from the original Mac implementation and may change. Windows meters for those providers show a dash until a verified reader is added; their launch commands still work when installed. Login, expired credentials, provider-specific model access, and live usage accuracy need verification on each computer.
+
+## Usage panel
+
+`usage` is a full-pane dashboard of the same meters, meant to stay open in a Herdr pane. It reads limits with the picker's readers and shares its cache, so both commands show the same numbers. Cards stack in tall panes and sit side by side in wide, short ones; very small panes fall back to one line per provider.
+
+Refreshing follows the agents. Every two seconds the panel asks Herdr (`herdr pane list`) which panes are working. A provider with a working agent is read often (Codex every 5 seconds from its local logs, the web endpoints every 45 to 60 seconds). It is read again a few seconds after one of its agents finishes a turn, and only every 5 to 15 minutes while idle. Failed reads back off. Without Herdr it falls back to fixed intervals between those two.
+
+Each bar fills to the percentage used. The empty track is brighter up to where an even pace through the window would be by now, and any filled part beyond that point turns hot. When the current pace would reach the limit before the window resets, the countdown changes from `↻ 2h 31m` to `out 1h 20m`. In wide cards, a small sparkline shows how quickly the first limit was used over the last five hours.
+
+Keys: `t` or `→` next theme, `T` or `←` previous theme, `r` refresh now, `a` toggle animation (off redraws once a second), `q` quit. The theme and animation choice are saved in the local state directory.
 
 ## Iterate from either computer
 

@@ -79,7 +79,7 @@ class Terminal:
             import msvcrt
             ch = msvcrt.getwch()
             if ch in ("\x00", "\xe0"):
-                return {"H": "up", "P": "down"}.get(msvcrt.getwch(), "")
+                return {"H": "up", "P": "down", "M": "right", "K": "left"}.get(msvcrt.getwch(), "")
             return "esc" if ch == "\x1b" else ch
         ch = os.read(self.fd, 1)
         if not ch:
@@ -91,7 +91,8 @@ class Terminal:
             seq += os.read(self.fd, 1)
             if len(seq) >= 2:
                 break
-        return {b"[A": "up", b"[B": "down", b"OA": "up", b"OB": "down"}.get(seq, "esc")
+        return {b"[A": "up", b"[B": "down", b"OA": "up", b"OB": "down",
+                b"[C": "right", b"[D": "left", b"OC": "right", b"OD": "left"}.get(seq, "esc")
 
     def write(self, text):
         if WINDOWS:

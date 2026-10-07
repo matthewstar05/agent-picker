@@ -61,6 +61,7 @@ if (-not (Test-Path -LiteralPath $cmdPath) -or [IO.File]::ReadAllText($cmdPath) 
 }
 $escapedPython = $Python.Replace("'", "''")
 $escapedEntry = $entry.Replace("'", "''")
+$escapedUsage = (Join-Path $repo 'src\usage_panel.py').Replace("'", "''")
 $start = '# >>> agent-picker managed >>>'
 $end = '# <<< agent-picker managed <<<'
 $block = @"
@@ -69,6 +70,7 @@ Remove-Item Alias:agent -ErrorAction SilentlyContinue
 Remove-Item Alias:agent-picker -ErrorAction SilentlyContinue
 function global:agent { & '$escapedPython' '$escapedEntry' @args }
 function global:agent-picker { & '$escapedPython' '$escapedEntry' @args }
+function global:usage { & '$escapedPython' '$escapedUsage' @args }
 $end
 "@
 $profiles = @($PROFILE.CurrentUserAllHosts)

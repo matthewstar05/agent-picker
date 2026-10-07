@@ -29,8 +29,9 @@ class PickerTests(unittest.TestCase):
             config.write_text(json.dumps({"agents": {"Cursor": {"argv": ["custom-cursor", "--custom"]}}}))
             with patch.dict(os.environ, {"AGENT_PICKER_CONFIG": str(config)}), patch.object(settings, "WINDOWS", True):
                 agents = settings.load_agents()
-                self.assertEqual(agents[2]["argv"], ["custom-cursor", "--custom"])
-                self.assertEqual(agents[1]["argv"][0], "codex")
+                by_name = {a["name"]: a for a in agents}
+                self.assertEqual(by_name["Cursor"]["argv"], ["custom-cursor", "--custom"])
+                self.assertEqual(by_name["Codex"]["argv"][0], "codex")
 
     def test_config_rejects_recursive_provider(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -46,9 +47,10 @@ class PickerTests(unittest.TestCase):
             config.write_text(json.dumps({"agents": {"Cursor": {"command": "vendor-cursor"}}}))
             with patch.dict(os.environ, {"AGENT_PICKER_CONFIG": str(config)}):
                 agents = settings.load_agents()
-            original = json.loads((ROOT / "agents.json").read_text())[2]
-            self.assertEqual(agents[2]["argv"], ["vendor-cursor"] + original["argv"][1:])
-            self.assertEqual(agents[2]["executables"], [])
+            original = next(a for a in json.loads((ROOT / "agents.json").read_text()) if a["name"] == "Cursor")
+            cursor = next(a for a in agents if a["name"] == "Cursor")
+            self.assertEqual(cursor["argv"], ["vendor-cursor"] + original["argv"][1:])
+            self.assertEqual(cursor["executables"], [])
 
     def test_resolution_uses_cursor_fallback_without_generic_agent(self):
         seen = []
