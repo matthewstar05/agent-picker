@@ -599,8 +599,11 @@ def _card(view, i, cw, t, now, entry, fetching, working, dots=None, rows=3, pane
                 color = count_color
             else:
                 pos = k - lead
-                hue = ap.grad(st, pos / 7 * 0.7 - clock * 0.15)
-                color = mix(hue, WHITE, 0.2 + 0.3 * wave(pos, clock))
+                if rainbow:
+                    color = ap.rainbow_rgb(pos / 11 - clock * 0.24, 0.2)
+                else:
+                    hue = ap.grad(st, pos / 7 * 0.7 - clock * 0.15)
+                    color = mix(hue, WHITE, 0.2 + 0.3 * wave(pos, clock))
             head.at(right + k, ch, color, bold=ch.isdigit())
     else:
         head.at(right, status, scol)

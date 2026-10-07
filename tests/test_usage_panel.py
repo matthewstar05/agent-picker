@@ -139,6 +139,9 @@ class UsagePanelTests(unittest.TestCase):
                     self.assertEqual(first_count, next_count)
                     self.assertNotEqual(first_wave, next_wave)
                     self.assertGreater(len({color for _, color in first_wave}), 1)
+                    if theme == "rainbow":
+                        for _, color in first_wave:
+                            self.assertAlmostEqual(1 - min(color) / max(color), 0.2, places=2)
                     waves.append(first_wave)
                 self.assertEqual(waves[0], waves[1])
                 self.assertEqual(waves[1], waves[2])
