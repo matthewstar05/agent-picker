@@ -98,7 +98,7 @@ def main(argv=None, herdr=None, cwd=None):
     panes = {"agy": json.loads(out)["result"]["root_pane"]["pane_id"]}
 
     panes["claude"] = split(panes["agy"], "right", 0.72)    # right column: Claude over usage
-    panes["usage"] = split(panes["claude"], "down", 0.59)
+    panes["usage"] = split(panes["claude"], "down", 0.54)
     split(panes["agy"], "down", 0.80, focus=True)           # terminal across the bottom of the left 2/3
     panes["codex"] = split(panes["agy"], "right", 0.49)
     panes["picker"] = split(panes["agy"], "down", 0.54)
