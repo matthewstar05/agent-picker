@@ -12,6 +12,7 @@ import agent_picker as picker
 import model_catalog as catalog
 import provider_defaults as defaults
 import settings
+import platform_runtime
 
 
 class CatalogTests(unittest.TestCase):
@@ -78,6 +79,14 @@ class CatalogTests(unittest.TestCase):
                 self.assertLessEqual(len(frame), rows)
                 self.assertTrue(all(picker.visible_len(line) <= cols for line in frame), (cols, rows))
         self.assertIn("ultra", menu.efforts())
+
+    @unittest.skipIf(os.name == "nt", "POSIX input decoding")
+    def test_escape_preserves_a_quick_following_key(self):
+        terminal = platform_runtime.Terminal()
+        terminal.fd = 0
+        with patch.object(platform_runtime.os, "read", side_effect=[b"\x1b", b"y"]), patch.object(terminal, "wait", return_value=True):
+            self.assertEqual(terminal.read_key(), "esc")
+            self.assertEqual(terminal.read_key(), "y")
 
 
 if __name__ == "__main__":

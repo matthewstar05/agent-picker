@@ -62,6 +62,8 @@ class Terminal:
             termios.tcsetattr(self.fd, termios.TCSADRAIN, self.old)
 
     def wait(self, seconds):
+        if getattr(self, "_pending", b""):
+            return True
         if WINDOWS:
             import msvcrt
             deadline = time.monotonic() + max(0, seconds)
@@ -81,16 +83,20 @@ class Terminal:
             if ch in ("\x00", "\xe0"):
                 return {"H": "up", "P": "down", "M": "right", "K": "left"}.get(msvcrt.getwch(), "")
             return "esc" if ch == "\x1b" else ch
-        ch = os.read(self.fd, 1)
+        pending = getattr(self, "_pending", b"")
+        ch = pending[:1] if pending else os.read(self.fd, 1)
+        self._pending = pending[1:]
         if not ch:
             return "esc"
         if ch != b"\x1b":
             return ch.decode(errors="ignore")
-        seq = b""
-        while self.wait(0.03):
-            seq += os.read(self.fd, 1)
-            if len(seq) >= 2:
-                break
+        if not self.wait(0.03):
+            return "esc"
+        prefix = os.read(self.fd, 1)
+        if prefix not in (b"[", b"O"):
+            self._pending = prefix + self._pending
+            return "esc"
+        seq = prefix + (os.read(self.fd, 1) if self.wait(0.03) else b"")
         return {b"[A": "up", b"[B": "down", b"OA": "up", b"OB": "down",
                 b"[C": "right", b"[D": "left", b"OC": "right", b"OD": "left"}.get(seq, "esc")
 

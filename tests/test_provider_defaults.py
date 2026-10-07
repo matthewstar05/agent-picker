@@ -184,18 +184,38 @@ class DefaultsTests(unittest.TestCase):
             master, slave = pty.openpty()
             original = termios.tcgetattr(slave)
             fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
-            code = "import sys;sys.path.insert(0,sys.argv[1]);import agent_picker as a;import usage_panel as u;a.installed=lambda _:True;a.refresh_usage=lambda _:None;a.main()"
+            code = '''import sys
+from pathlib import Path
+sys.path.insert(0,sys.argv[1])
+import agent_picker as a
+import usage_panel as u
+class Keyboard(a.Terminal):
+    def __enter__(self):
+        super().__enter__()
+        Path(sys.argv[2]).write_text("ready")
+        return self
+    def read_key(self):
+        key = super().read_key()
+        with Path(sys.argv[3]).open("a") as stream:
+            stream.write(repr(key) + "\\n")
+        return key
+a.Terminal=Keyboard
+a.installed=lambda _:True
+a.refresh_usage=lambda _:None
+a.main()
+'''
             env = dict(os.environ, AGENT_PICKER_CONFIG=str(root / "config.json"), AGENT_PICKER_STATE_HOME=str(root / "state"))
-            process = subprocess.Popen([sys.executable, "-c", code, str(ROOT / "src")], stdin=slave, stdout=slave, stderr=slave, env=env)
+            ready, acknowledged = root / "ready", root / "keys"
+            process = subprocess.Popen([sys.executable, "-c", code, str(ROOT / "src"), str(ready), str(acknowledged)], stdin=slave, stdout=slave, stderr=slave, env=env)
             output = b""
             keys = [b"\x1b[C", b"\x1b[B", b"\x1b[D", b"\x1b[B", b"\x1b[D", b"\x1b", b"\x1b", b"\x1b[C", b"\r"]
-            start, next_key, sent = time.monotonic(), 0.2, 0
+            start, sent = time.monotonic(), 0
             try:
-                while time.monotonic() - start < 8:
-                    if time.monotonic() - start >= next_key and sent < len(keys):
+                while time.monotonic() - start < 15:
+                    received = acknowledged.read_text().count("\n") if acknowledged.exists() else 0
+                    if ready.exists() and received == sent and sent < len(keys):
                         os.write(master, keys[sent])
                         sent += 1
-                        next_key += 0.1
                     if select.select([master], [], [], 0.01)[0]:
                         output += os.read(master, 65536)
                     if process.poll() is not None:
