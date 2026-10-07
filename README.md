@@ -138,7 +138,7 @@ Each bar fills to the percentage used, and the empty track is brighter up to whe
 
 Keys: `t` or `→` next theme, `T` or `←` previous theme, `r` refresh now, `a` toggle animation (off redraws once a second), `s` settings, `u` or Esc back to the picker, `q` quit.
 
-Brand uses an animated gray outer border. Each working provider gets the same animated border as its row in the agent selector; choosing another theme changes both the outer border and provider borders to that theme. Provider titles and their dots retain their brand colors in every theme. Short panes drop the top and bottom of provider borders to keep the limits visible. Border space is reserved even while idle, so titles, bars, and card positions stay fixed as providers start or stop working. The layout changes only when the pane size or installed providers change. The theme name appears in the outer border for 2.5 seconds after changing themes, then disappears.
+Brand uses an animated gray outer border. Each working provider gets the same animated border as its row in the agent selector; choosing another theme changes both the outer border and provider borders to that theme. Provider titles and their dots retain their brand colors, except Rainbow also gives Claude and Codex rainbow titles. All usage percentages stay white in Rainbow, including stale and high-usage values. Short panes drop the top and bottom of provider borders to keep the limits visible. Border space is reserved even while idle, so titles, bars, and card positions stay fixed as providers start or stop working. The layout changes only when the pane size or installed providers change. The theme name appears in the outer border for 2.5 seconds after changing themes, then disappears.
 
 ## Settings
 
