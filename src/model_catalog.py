@@ -16,7 +16,7 @@ PATH = state_dir() / "models.json"
 LOCK = threading.Lock()
 PENDING = set()
 _live = {}
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 EFFORT = re.compile(r"-(minimal|none|low|medium|high|xhigh|max|ultra)(?=-fast$|$)")
 
 
@@ -53,6 +53,37 @@ def cursor_models(output):
     return list(grouped.values())
 
 
+def claude_models(folder):
+    """Prefer the per-account catalog Claude Code refreshes often, then the published document."""
+    rows, best = [], (-1, 0)
+    for path in folder.glob("*.json"):
+        data = read(path)
+        config = data.get("catalog", {}).get("config", {}) if isinstance(data.get("catalog"), dict) else {}
+        models = config.get("models") if isinstance(config, dict) else None
+        if not isinstance(models, list) or not models:
+            continue
+        rank = (config.get("id") == "cc", data.get("fetchedAt") or 0)
+        if rank > best:
+            best = rank
+            rows = [{"id": m["id"], "name": m.get("name", m["id"]),
+                     "efforts": [e["id"] for e in (m.get("thinking") or {}).get("effort_options", []) if e.get("id")]}
+                    for m in models if isinstance(m, dict) and m.get("id")]
+    if rows:
+        return rows
+    files = sorted(folder.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+    for path in files:
+        document = read(path).get("document", {})
+        if not isinstance(document, dict):
+            continue
+        configs = document.get("surfaces", {}).get("cc", {}).get("model_selector_config", [])
+        models = [m for config in configs for m in config.get("models", [])]
+        if models:
+            return [{"id": m["id"], "name": m.get("name", m["id"]),
+                     "efforts": m.get("runtime", {}).get("effort_levels") or []}
+                    for m in models if m.get("id")]
+    return []
+
+
 def fetch(agent):
     name = agent["name"]
     if name == "Codex":
@@ -61,19 +92,7 @@ def fetch(agent):
                  "efforts": [e["effort"] for e in m.get("supported_reasoning_levels", [])]}
                 for m in read(path).get("models", []) if m.get("visibility") == "list" and m.get("slug")]
     if name == "Claude":
-        folder = Path(os.environ.get("CLAUDE_CONFIG_DIR", str(Path.home() / ".claude"))) / "cache/model-catalog"
-        files = sorted(folder.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
-        for path in files:
-            document = read(path).get("document", {})
-            if not isinstance(document, dict):
-                continue
-            configs = document.get("surfaces", {}).get("cc", {}).get("model_selector_config", [])
-            models = [m for config in configs for m in config.get("models", [])]
-            if models:
-                return [{"id": m["id"], "name": m.get("name", m["id"]),
-                         "efforts": m.get("runtime", {}).get("effort_levels", [])}
-                        for m in models if m.get("id")]
-        return []
+        return claude_models(Path(os.environ.get("CLAUDE_CONFIG_DIR", str(Path.home() / ".claude"))) / "cache/model-catalog")
     argv = resolve_argv(agent)
     if not argv:
         return []

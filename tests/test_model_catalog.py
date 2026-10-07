@@ -44,6 +44,25 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(rows[0]["variants"]["high"], "grok-4.7-high-fast")
         self.assertEqual(rows[1]["variants"]["provider default"], "auto")
 
+    def test_claude_account_catalog_beats_published_document(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "published.json").write_text(json.dumps({"document": {"surfaces": {"cc": {"model_selector_config": [
+                {"models": [{"id": "claude-opus-5", "name": "Opus 5", "runtime": {"effort_levels": ["low"]}}]}]}}}}))
+            effort = {"type": "effort", "effort_options": [{"id": "low"}, {"id": "high"}]}
+            (root / "org-ccd.json").write_text(json.dumps({"fetchedAt": 9, "catalog": {"config": {"id": "ccd", "models": [
+                {"id": "claude-desktop-only", "name": "Desktop"}]}}}))
+            (root / "org-cc.json").write_text(json.dumps({"fetchedAt": 5, "catalog": {"config": {"id": "cc", "models": [
+                {"id": "claude-haiku-5-5", "name": "Haiku 5.5", "thinking": effort},
+                {"id": "claude-haiku-4-5-20251001", "name": "Haiku 4.5", "thinking": {"type": "none"}}]}}}))
+            rows = catalog.claude_models(root)
+            self.assertEqual([row["id"] for row in rows], ["claude-haiku-5-5", "claude-haiku-4-5-20251001"])
+            self.assertEqual(rows[0]["efforts"], ["low", "high"])
+            self.assertEqual(rows[1]["efforts"], [])
+            for name in ("org-cc.json", "org-ccd.json"):
+                (root / name).unlink()
+            self.assertEqual(catalog.claude_models(root)[0]["id"], "claude-opus-5")
+
     def test_current_custom_model_remains_selectable(self):
         agent = {"name": "Cursor"}
         with tempfile.TemporaryDirectory() as folder, patch.object(catalog, "PATH", Path(folder) / "none"), patch.object(catalog, "_live", {}):
