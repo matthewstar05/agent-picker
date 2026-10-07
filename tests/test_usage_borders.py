@@ -44,7 +44,7 @@ class UsageBorderTests(unittest.TestCase):
             view.anim = True
 
     def view(self):
-        view = panel.View(panel.ap.AGENTS)
+        view = panel.View([a for a in panel.ap.AGENTS if a["name"] in panel.ap.FETCHERS])
         self.select_theme(view, "brand")
         return view
 
@@ -130,6 +130,38 @@ class UsageBorderTests(unittest.TestCase):
             panel.USAGE[names[0]] = dict(entry, windows=entry["windows"][:1])
             self.assertEqual(positions(cols, rows), expected, (cols, rows, "one limit"))
             panel.USAGE[names[0]] = entry
+
+    def test_themes_change_provider_borders_but_keep_brand_titles(self):
+        view = self.view()
+        now = time.time()
+        panel.WORKING.update({a["name"]: 1 for a in view.agents})
+
+        def cells(text):
+            color, out = None, []
+            for token in re.findall(r"\x1b\[[0-9;]*m|[^\x1b]", text):
+                if token == panel.RESET:
+                    color = None
+                elif token.startswith("\x1b["):
+                    if token.startswith("\x1b[38;2;"):
+                        color = tuple(map(int, token[7:-1].split(";")))
+                else:
+                    out.append((token, color))
+            return out
+
+        for i, agent in enumerate(view.agents):
+            self.select_theme(view, "brand")
+            baseline = panel.working_card(view, i, 50, 1.5, now)
+            title = cells(baseline[1])[4:4 + len(agent["name"])]
+            compact = cells(panel.compact_row(view, i, 80, 1.5, now))[3:3 + len(agent["name"])]
+            for theme in panel.THEMES[1:]:
+                self.select_theme(view, theme["name"])
+                themed = panel.working_card(view, i, 50, 1.5, now)
+                if theme["stops"] != agent.get("gradient"):
+                    self.assertNotEqual(themed[0], baseline[0], (agent["name"], theme["name"]))
+                self.assertEqual(cells(themed[1])[4:4 + len(agent["name"])], title)
+                row = panel.compact_row(view, i, 80, 1.5, now)
+                self.assertEqual(cells(row)[3:3 + len(agent["name"])], compact)
+                self.assertNotEqual(cells(row)[0][1], cells(panel.compact_row(view, i, 80, 2.5, now))[0][1])
 
 
 if __name__ == "__main__":

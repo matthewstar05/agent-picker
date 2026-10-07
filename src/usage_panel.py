@@ -345,17 +345,15 @@ def _spark(name, n, now):
     return [None if d is None else d / scale for d in deltas]
 
 
-def put_name(line, agent, st, brand, t, bold=True):
+def put_name(line, agent, t, bold=True):
     name = agent["name"]
-    if brand and agent.get("pastel") == "rainbow":
+    if agent.get("pastel") == "rainbow":
         import colorsys
         for k, ch in enumerate(name):
             r, g, b = colorsys.hsv_to_rgb((k / 11 - t * 0.24) % 1.0, 0.2, 1.0)
             line.put(ch, (round(r * 255), round(g * 255), round(b * 255)), bold=bold)
-    elif brand:
-        line.put(name, agent.get("pastel") or TEXT, bold=bold)
     else:
-        line.put(name, mix(st["color"], WHITE, 0.55), bold=bold)
+        line.put(name, agent.get("pastel") or agent["color"], bold=bold)
 
 
 def draw_bar(line, w, bar, st, t, live, stale, now, offset):
@@ -406,18 +404,17 @@ def card(view, i, cw, t, now):
 def _card(view, i, cw, t, now, entry, fetching, working, dots=None):
     agent = view.agents[i]
     name, st = agent["name"], view.style(i)
-    brand = THEMES[view.theme]["stops"] is None
     live = working > 0
     dots = int(t * 3) % 3 if dots is None else dots
     stale = bool(entry) and now - entry["fetched"] > 20 * 60 and not fetching
 
     head = Line().put(" ")
     if live:
-        head.put(SPIN[int(t * 6) % len(SPIN)], agent["color"] if brand else st["color"], bold=True)
+        head.put(SPIN[int(t * 6) % len(SPIN)], agent["color"], bold=True)
     else:
-        head.put("●", agent["color"] if brand else st["color"])
+        head.put("●", agent["color"])
     head.put(" ")
-    put_name(head, agent, st, brand, t)
+    put_name(head, agent, t)
     if live:
         status, scol = (f"{working} working" if cw >= 30 else f"{working}×"), TEXT
     elif fetching:
@@ -489,10 +486,10 @@ def compact_row(view, i, width, t, now):
     t = t if view.anim else 0.4
     line = Line()
     dot = SPIN[int(t * 12) % len(SPIN)] if working else "●"
-    line.put(dot, agent["color"] if brand else st["color"]).put(" ")
+    line.put(dot, agent["color"]).put(" ")
     name_w = min(11, max(4, width // 4))
     start = len(line.cells)
-    put_name(line, agent, st, brand, t)
+    put_name(line, agent, t)
     del line.cells[start + name_w:]
     line.pad(start + name_w)
     if entry:
@@ -516,7 +513,7 @@ def compact_row(view, i, width, t, now):
     content = line.pad(width).paint()
     if border_space:
         if working:
-            ring = ap.border_ring(agent, t, width)
+            ring = ap.border_ring(agent if brand else st, t, width)
             return ring[(1, 0)] + RESET + content + ring[(1, width + 1)] + RESET
         return " " + content + " "
     return content
@@ -553,7 +550,8 @@ def working_card(view, i, width, t, now, lids=True, active=True):
     content = card(view, i, width - 2, t, now)
     agent = view.agents[i]
     tick = int(t * 6) / 6 if view.anim else 0.4
-    ring = ap.border_ring(agent, tick, width - 2, len(content)) if active else None
+    style = agent if THEMES[view.theme]["stops"] is None else view.style(i)
+    ring = ap.border_ring(style, tick, width - 2, len(content)) if active else None
     lines = [(ring[(y + 1, 0)] + RESET if active else " ") + line
              + (ring[(y + 1, width - 1)] + RESET if active else " ")
              for y, line in enumerate(content)]
