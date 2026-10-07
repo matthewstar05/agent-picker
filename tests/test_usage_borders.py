@@ -24,6 +24,10 @@ class UsageBorderTests(unittest.TestCase):
         self.saved = dict(panel.USAGE), dict(panel.WORKING)
         panel.USAGE.clear()
         panel.WORKING.clear()
+        # every profile open beside this pane, so each has a card
+        present = patch.dict(panel.PRESENT, {a["name"]: 1 for a in panel.ap.AGENTS}, clear=True)
+        present.start()
+        self.addCleanup(present.stop)
         now = time.time()
         panel.USAGE.update({a["name"]: {"windows": [{"label": "5h", "pct": 15, "resets": now + 10800},
                                                     {"label": "wk", "pct": 6, "resets": now + 400000}],

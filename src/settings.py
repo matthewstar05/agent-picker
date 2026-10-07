@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 from platform_runtime import WINDOWS
+import provider_defaults
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -40,6 +41,11 @@ def load_agents():
             raise ValueError(f"{agent['name']}: argv must be a nonempty array of strings")
         if Path(argv[0]).stem.lower() == "agent" and not Path(argv[0]).is_absolute():
             raise ValueError("Cursor's generic 'agent' must be an absolute vendor path to prevent recursion")
+        if "defaults" in agent:
+            provider_defaults.apply(agent, agent["defaults"])
+        # Names it appears under in Herdr and in process lists, for the usage screen.
+        names = agent.get("detect") or [Path(argv[0]).stem.lower()]
+        agent["detect"] = [n.lower() for n in names]
     return agents
 
 

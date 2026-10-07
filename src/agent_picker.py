@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""agent: pick a coding agent with the arrow keys and start a new session.
+"""Agent selector: pick a coding agent or edit its local launch defaults.
 
-Each entry launches its CLI on the frontier model with permission prompts
-skipped. Extra arguments are passed through to the chosen CLI.
-Keys: up/down or j/k move, 1-5 jump, Enter launches, q or Esc quits.
+Extra arguments are passed through to the chosen CLI.
+Keys: up/down or j/k move, 1-5 jump, Enter launches, u usage panel, s settings,
+q or Esc quits. The usage command runs this same program.
 Draws on the alternate screen and fits itself to the terminal on every frame.
 Each row shows the agent's plan limits (5-hour, weekly, or monthly) and when they reset.
 """
@@ -24,6 +24,13 @@ import urllib.request
 from datetime import datetime
 from pathlib import Path
 
+if __name__ == "__main__":
+    # The usage screen imports this module by name; run as a script, make that
+    # import find this copy instead of loading a second one.
+    sys.modules.setdefault("agent_picker", sys.modules[__name__])
+
+import preferences
+import provider_defaults
 from platform_runtime import Terminal, launch, resolve_argv, state_dir
 from settings import ROOT, config_path, load_agents, update_checkout
 
@@ -33,6 +40,11 @@ except (OSError, ValueError) as exc:
     sys.exit(f"agent: invalid configuration: {exc}")
 
 STATE = state_dir()
+
+START = preferences.register(preferences.Setting(
+    "start", "General", "Opens on", ["agents", "usage"], "agents",
+    hint="The screen agent and usage open on. u switches between them anytime.",
+    names={"agents": "agent selector", "usage": "usage panel"}))
 
 ESC = "\x1b"
 RESET = f"{ESC}[0m"
@@ -52,8 +64,9 @@ def bg(rgb):
 
 def tint(rgb, amount):
     """Blend a brand color toward a dark background for the selection bar."""
-    base = (28, 28, 32)
-    return tuple(round(b + (c - b) * amount) for c, b in zip(rgb, base))
+    return (round(28 + (rgb[0] - 28) * amount),
+            round(28 + (rgb[1] - 28) * amount),
+            round(32 + (rgb[2] - 32) * amount))
 
 
 def _write_json(path, data):
@@ -287,14 +300,6 @@ def _fetch(name):
                 pass
 
 
-def refresh_usage(available):
-    load_usage()
-    for agent, ok in zip(AGENTS, available):
-        if ok and agent["name"] in FETCHERS:
-            PENDING.add(agent["name"])
-            threading.Thread(target=_fetch, args=(agent["name"],), daemon=True).start()
-
-
 def until(epoch):
     """Compact countdown: 42m, 5h 12m, 6d 4h, 18d."""
     if not epoch:
@@ -325,7 +330,21 @@ SOFT = (125, 125, 135)
 
 
 def mix(a, b, amount):
-    return tuple(round(x + (y - x) * amount) for x, y in zip(a, b))
+    return (round(a[0] + (b[0] - a[0]) * amount),
+            round(a[1] + (b[1] - a[1]) * amount),
+            round(a[2] + (b[2] - a[2]) * amount))
+
+
+def fade(amount):
+    """Ease color changes with zero slope and curvature at each palette stop."""
+    return amount * amount * amount * (amount * (amount * 6 - 15) + 10)
+
+
+def rainbow_rgb(u, saturation=0.62):
+    pos = (u % 1.0) * 6
+    sector = int(pos)
+    hue = (sector + fade(pos - sector)) / 6
+    return tuple(round(c * 255) for c in colorsys.hsv_to_rgb(hue, saturation, 1.0))
 
 
 def grad(agent, u):
@@ -333,13 +352,12 @@ def grad(agent, u):
     stops = agent.get("gradient") or [agent["color"]]
     u %= 1.0
     if stops == "rainbow":
-        r, g, b = colorsys.hsv_to_rgb(u, 0.62, 1.0)
-        return (round(r * 255), round(g * 255), round(b * 255))
+        return rainbow_rgb(u)
     pos = u * len(stops)
     i = int(pos)
     a, b = stops[i % len(stops)], stops[(i + 1) % len(stops)]
     f = pos - i
-    f = f * f * (3 - 2 * f)  # smoothstep between stops
+    f = fade(f)
     return mix(a, b, f)
 
 
@@ -465,8 +483,7 @@ def agent_rows(agent, ok, width, t, selected):
     name = clip(agent["name"], left)
     if selected and agent.get("pastel") == "rainbow":
         for i, ch in enumerate(name):
-            r, g, b = colorsys.hsv_to_rgb((i / 11 - t * 0.24) % 1.0, 0.2, 1.0)  # near-white pastel
-            l1.put(ch, (round(r * 255), round(g * 255), round(b * 255)), bold=True)
+            l1.put(ch, rainbow_rgb(i / 11 - t * 0.24, 0.2), bold=True)
     elif selected:
         l1.put(name, agent.get("pastel", name_col), bold=True)
     else:
@@ -531,16 +548,19 @@ def border_ring(agent, t, bw, height=1, solid=None):
     return cells
 
 
-def render(selected, available, t, cols, rows, sweep=None):
-    """Lines for the current terminal size, each at most cols wide."""
-    color = AGENTS[selected]["color"]
+def render(selected, available, t, cols, rows, sweep=None, agents=None):
+    """Lines for the current terminal size, each at most cols wide.
+
+    agents: the profiles to list (the installed ones); every profile by default."""
+    agents = AGENTS if agents is None else agents
+    color = agents[selected]["color"]
     iw = min(MAX_IW, cols - 2)
     edge = fg(FRAME)
 
-    if iw < 22 or rows < len(AGENTS) + 2:
+    if iw < 22 or rows < len(agents) + 2:
         # Too small for the panel: a bare one-line list, still with the glowing row.
         lines = []
-        for i, agent in enumerate(AGENTS):
+        for i, agent in enumerate(agents):
             if cols < 18:
                 mark = "❯ " if i == selected else "  "
                 tone = fg(grad(agent, -t * 0.15)) if i == selected else FAINT
@@ -557,17 +577,13 @@ def render(selected, available, t, cols, rows, sweep=None):
         return f"{edge}│{RESET}{content}{' ' * max(0, iw - visible)}{edge}│{RESET}"
 
     star = fg(mix((225, 165, 40), (255, 222, 120), wave(0, t, speed=3.0))) + "✦" + RESET  # gold, glinting
-    sub = "new session · permissions skipped"
-    # the subtitle goes after the block wave and before the bars
-    show_sub = iw >= 11 + len(sub) + 6 and layout(bw, True) in LAYOUTS[:2]
-    fill = iw - 10 - (len(sub) + 2 if show_sub else 0)  # "╭─ ✦ agent " + "╮" is 12 wide
-    top = f"{edge}╭─{RESET} {star} {BOLD}agent{RESET} {edge}{'─' * fill}{RESET}"
-    top += (f" {FAINT}{sub}{RESET} " if show_sub else "") + f"{edge}╮{RESET}"
+    title = "agent selector"
+    top = f"{edge}╭─{RESET} {star} {BOLD}{title}{RESET} {edge}{'─' * max(0, iw - len(title) - 5)}╮{RESET}"
 
     # body entries: (kind, line). "lid" lines are dropped first when short on rows,
     # then "second" lines (each agent collapses to its first line).
     body = []
-    for i, agent in enumerate(AGENTS):
+    for i, agent in enumerate(agents):
         rows_i = agent_rows(agent, available[i], bw, t, i == selected)
         if i == selected:
             ring = border_ring(agent, t, bw, height=2)
@@ -583,7 +599,9 @@ def render(selected, available, t, cols, rows, sweep=None):
             for y, line in enumerate(rows_i):
                 body.append(("first" if y == 0 else "second", framed("  " + line.paint(), bw + 2)))
 
-    hints = [" ↑↓ move · ⏎ launch · q quit ", " ↑↓ · ⏎ launch · q quit ", " ⏎ launch · q quit ", " ⏎ launch ", ""]
+    hints = [" ↑↓ move · → defaults · ⏎ launch · u usage · s settings · esc quit ",
+             " → defaults · ⏎ launch · u usage · s settings · esc quit ",
+             " → defaults · ⏎ launch · u · s · esc ", " → defaults · ⏎ launch ", ""]
     hint = next(h for h in hints if len(h) <= iw - 2)
     bottom = f"{edge}╰─{RESET}{FAINT}{hint}{RESET}{edge}{'─' * (iw - 1 - len(hint))}╯{RESET}"
 
@@ -598,10 +616,337 @@ def render(selected, available, t, cols, rows, sweep=None):
     return lines[:rows]
 
 
-def load_last():
+GOLD = {"color": (225, 165, 40), "gradient": [(225, 165, 40), (255, 222, 120), (255, 190, 90)]}
+
+
+def panel(title, body, hints, cols, rows, t, plain):
+    """The selector's frame around any screen: a glinting star title, framed rows,
+    and the key hints set into the bottom border.
+
+    body(bw) returns (kind, content, visible) rows. When rows run short, "gap"
+    rows go first, then "lid" rows, then the rest scroll around "selected".
+    plain is the fallback for panes too small for a frame: (text, active) pairs."""
+    iw = min(MAX_IW, cols - 2)
+    if iw < 26 or rows < 5:
+        lines = [(BOLD if active else FAINT) + clip(text, cols) + RESET for text, active in plain]
+        at = next((i for i, (_, active) in enumerate(plain) if active), 0)
+        first = min(max(0, at - rows // 2), max(0, len(lines) - rows))
+        return lines[first:first + max(0, rows)]
+    edge = fg(FRAME)
+    bw = iw - 4
+
+    def framed(content, visible):
+        return f"{edge}│{RESET}{content}{' ' * max(0, iw - visible)}{edge}│{RESET}"
+
+    star = fg(mix((225, 165, 40), (255, 222, 120), wave(0, t, speed=3.0))) + "✦" + RESET
+    title = clip(title, iw - 6)
+    top = f"{edge}╭─{RESET} {star} {BOLD}{title}{RESET} {edge}{'─' * max(0, iw - len(title) - 5)}╮{RESET}"
+    hint = next((h for h in hints if len(h) <= iw - 2), "")
+    bottom = f"{edge}╰─{RESET}{FAINT}{hint}{RESET}{edge}{'─' * (iw - 1 - len(hint))}╯{RESET}"
+
+    entries = [(kind, framed(content, visible)) for kind, content, visible in body(bw)]
+    lines = [top, framed("", 0)] + [line for _, line in entries] + [framed("", 0), bottom]
+    if len(lines) > rows:
+        lines = [top] + [line for kind, line in entries if kind != "gap"] + [bottom]
+    if len(lines) > rows:
+        kept = [(kind, line) for kind, line in entries if kind not in ("gap", "lid")]
+        at = next((i for i, (kind, _) in enumerate(kept) if kind == "selected"), 0)
+        room = max(1, rows - 2)
+        first = min(max(0, at - room // 2), max(0, len(kept) - room))
+        lines = [top] + [line for _, line in kept[first:first + room]] + [bottom]
+    return lines[:rows]
+
+
+def ringed(agent, lines, t, bw):
+    """Rows inside the agent's glowing ring and lit by its gradient, as panel rows."""
+    ring = border_ring(agent, t, bw, height=len(lines))
+    lid = lambda r: ("lid", " " + "".join(ring[(r, c)] for c in range(bw + 2)) + RESET, bw + 3)
+    out = [lid(0)]
+    for y, line in enumerate(lit(lines, agent, t)):
+        out.append(("selected", " " + ring[(y + 1, 0)] + RESET + line + ring[(y + 1, bw + 1)] + RESET, bw + 3))
+    return out + [lid(len(lines) + 1)]
+
+
+def flat(line, bw, kind="row"):
+    return (kind, "  " + line.pad(bw).paint(), bw + 2)
+
+
+def section(text, bw):
+    return ("gap", "  " + fg(LABEL) + clip(text.upper(), bw) + RESET, 2 + min(len(text), bw))
+
+
+def note(text, bw, color=SOFT, kind="note"):
+    shown = clip(text, bw - 1)
+    return (kind, "   " + fg(color) + shown + RESET, 3 + len(shown))
+
+
+def buttons(agent, labels, choice, t, bw):
+    """A row of buttons; the chosen one sits in the agent's glowing ring."""
+    total = sum(len(label) + 4 for label in labels) + 3 * (len(labels) - 1)
+    if total > bw:
+        text = "   ".join(("❯ " if i == choice else "  ") + label for i, label in enumerate(labels))
+        return [("selected", "  " + BOLD + clip(text, bw) + RESET, 2 + min(len(text), bw))]
+    left = (bw - total) // 2
+    parts = [" " * left, " " * left, " " * left]
+    for i, label in enumerate(labels):
+        inner = len(label) + 2
+        if i == choice:
+            ring = border_ring(agent, t, inner, height=1)
+            face = lit([Line().put(f" {label} ", (255, 255, 255), bold=True)], agent, t)[0]
+            parts[0] += "".join(ring[(0, c)] for c in range(inner + 2)) + RESET
+            parts[1] += ring[(1, 0)] + RESET + face + ring[(1, inner + 1)] + RESET
+            parts[2] += "".join(ring[(2, c)] for c in range(inner + 2)) + RESET
+        else:
+            parts[0] += " " * (inner + 2)
+            parts[1] += f"  {fg(SOFT)}{label}{RESET}  "
+            parts[2] += " " * (inner + 2)
+        if i < len(labels) - 1:
+            parts = [p + "   " for p in parts]
+    visible = 2 + left + total
+    return [("lid", "  " + parts[0], visible), ("selected", "  " + parts[1], visible), ("lid", "  " + parts[2], visible)]
+
+
+def pair(label, value, bw, label_color, value_color, mark="   ", mark_color=None, bold=False):
+    """'   Label ........ value' with the value right-aligned, as a Line bw wide."""
+    line = Line().put(mark, mark_color or label_color).put(clip(label, bw // 2), label_color, bold=bold)
+    shown = clip(value, max(1, bw - len(line.cells) - 3))
+    line.at(max(len(line.cells) + 2, bw - len(shown) - 1), shown, value_color, bold=bold)
+    return line.pad(bw)
+
+
+def render_defaults(menu, cols, rows, t):
+    """A provider's defaults, or its scrollable model list while browsing."""
+    agent = menu.agent
+    name = agent["name"]
+    accent = tuple(agent.get("pastel")) if isinstance(agent.get("pastel"), list) else agent["color"]
+    if menu.browsing:
+        return render_models(menu, cols, rows, t, accent)
+    if menu.original is None:
+        message = "Defaults are managed by this provider."
+        return panel(f"{name} defaults", lambda bw: [note(message, bw)], [" esc back ", ""], cols, rows, t,
+                     [(f"{name} defaults", True), (message, False)])
+    fields = menu.fields()
+    menu.index = min(menu.index, len(fields) - 1)
+    field = fields[menu.index]
+    hint = {"model": "⏎ browse models", "effort": "←→ cycle effort"}.get(field, "←→ toggle")
+
+    def body(bw):
+        out = [("row", "  " + fg(agent["color"]) + "●" + RESET + " " + fg(accent) + BOLD + clip(name, bw - 2) + RESET,
+                4 + min(len(name), bw - 2)), ("gap", "", 0)]
+        for i, key in enumerate(fields):
+            value = menu.shown(key, menu.values[key])
+            moved = menu.values[key] != menu.original[key]
+            if i == menu.index:
+                shown = f"{value}  ⏎" if key == "model" else f"◂ {value} ▸"
+                line = pair(menu.LABELS[key], shown, bw, (245, 245, 245), (255, 255, 255), " ❯ ", (255, 255, 255), True)
+                out += ringed(agent, [line], t, bw)
+            else:
+                line = pair(menu.LABELS[key], value, bw, (205, 205, 212), accent if moved else (190, 190, 198),
+                            " • " if moved else "   ", agent["color"])
+                out.append(flat(line, bw))
+        out.append(("gap", "", 0))
+        if menu.error:
+            out.append(note(menu.error, bw, HOT))
+        elif menu.changed:
+            out.append(note("● changed · esc to review and save", bw, accent))
+        else:
+            out.append(note("✓ saved locally", bw, OK))
+        return out
+
+    plain = [(f"{name} defaults", False)] + [
+        (("❯ " if i == menu.index else "  ") + menu.LABELS[k] + ": " + menu.shown(k, menu.values[k]), i == menu.index)
+        for i, k in enumerate(fields)] + [(menu.error or hint, False)]
+    hints = [f" ↑↓ move · {hint} · esc back ", f" {hint} · esc back ", " esc back ", ""]
+    return panel(f"{name} defaults", body, hints, cols, rows, t, plain)
+
+
+def render_models(menu, cols, rows, t, accent):
+    agent = menu.agent
+    models = menu.models()
+    index = min(menu.model_index, len(models) - 1)
+    current = menu.values["model"]
+
+    def body(bw):
+        room = max(1, rows - 8)
+        first = min(max(0, index - room // 2), max(0, len(models) - room))
+        out = [note(f"{index + 1} of {len(models)}", bw, LABEL, "gap")]
+        for i, row in enumerate(models[first:first + room], first):
+            label = row.get("name", row["id"])
+            tag = "current" if row["id"] == current else ""
+            if i == index:
+                line = pair(label, tag, bw, (245, 245, 245), (255, 255, 255), " ❯ ", (255, 255, 255), True)
+                out += ringed(agent, [line], t, bw)
+            else:
+                mark = " ● " if row["id"] == current else "   "
+                out.append(flat(pair(label, tag, bw, (205, 205, 212), accent, mark, agent["color"]), bw))
+        return out
+
+    plain = [(("❯ " if i == index else "  ") + row.get("name", row["id"]), i == index) for i, row in enumerate(models)]
+    hints = [" ↑↓ move · ⏎ choose · esc back ", " ⏎ choose · esc back ", " esc back ", ""]
+    return panel(f"{agent['name']} models", body, hints, cols, rows, t, plain)
+
+
+def render_quit_confirmation(choice, cols, rows, t=0, agent=None):
+    agent = agent or GOLD
+
+    def body(bw):
+        return [note("Your changes are saved locally.", bw), ("gap", "", 0)] + buttons(agent, ("Stay", "Quit"), choice, t, bw)
+
+    plain = [("Are you sure you want to quit agent selector?", False), ("Your changes are saved locally.", False),
+             (("❯ Stay     Quit" if choice == 0 else "  Stay   ❯ Quit"), True)]
+    hints = [" ←→ choose · ⏎ confirm · esc stay ", " ⏎ confirm · esc stay ", ""]
+    return panel("Are you sure you want to quit?", body, hints, cols, rows, t, plain)
+
+
+def render_back_confirmation(menu, choice, cols, rows, t=0):
+    """Confirm leaving provider settings after a change: the new choice, then the delta."""
+    agent = menu.agent
+    accent = tuple(agent.get("pastel")) if isinstance(agent.get("pastel"), list) else agent["color"]
+    selection, delta = menu.review()
+
+    def body(bw):
+        out = [section("selected", bw)]
+        for label, value in selection:
+            out.append(flat(pair(label, value, bw, (205, 205, 212), accent, bold=True), bw))
+        out += [("gap", "", 0), section("changes", bw)]
+        for label, old, new in delta:
+            line = Line().put("   ").put(clip(label, bw // 2), (205, 205, 212))
+            change = clip(f"{old} → {new}", max(1, bw - len(line.cells) - 3))
+            col = max(len(line.cells) + 2, bw - len(change) - 1)
+            split = change.find(" → ")
+            if split < 0:
+                line.at(col, change, accent, bold=True)
+            else:
+                line.at(col, change[:split], SOFT).at(col + split, " → ", LABEL)
+                line.at(col + split + 3, change[split + 3:], accent, bold=True)
+            out.append(flat(line, bw))
+        return out + [("gap", "", 0)] + buttons(agent, ("Stay", "Save"), choice, t, bw)
+
+    plain = [(f"Are you sure? {agent['name']} defaults", False)]
+    plain += [(f"{label}: {value}", False) for label, value in selection]
+    plain += [(f"{label}: {old} → {new}", False) for label, old, new in delta]
+    plain += [(("❯ Stay     Save" if choice == 0 else "  Stay   ❯ Save"), True)]
+    hints = [" ←→ choose · ⏎ confirm · esc stay ", " ⏎ confirm · esc stay ", ""]
+    return panel(f"Are you sure? Save {agent['name']} defaults", body, hints, cols, rows, t, plain)
+
+
+def render_settings(menu, cols, rows, t, accent):
+    """The settings screen: every registered setting, grouped by section."""
+    items = preferences.SETTINGS
+    index = min(menu.index, len(items) - 1)
+    iw = min(MAX_IW, cols - 2)
+    if iw < 26 or rows < 5:
+        lines = []
+        for i, setting in enumerate(items):
+            mark = "❯ " if i == index else "  "
+            text = f"{mark}{setting.label}: {setting.show(preferences.get(setting.key))}"
+            lines.append(f"{BOLD if i == index else FAINT}{clip(text, cols)}{RESET}")
+        first = min(max(0, index - rows // 2), max(0, len(lines) - rows))
+        return lines[first:first + max(1, rows)]
+
+    edge = fg(FRAME)
+    bw = iw - 4
+
+    def framed(content, visible):
+        return f"{edge}│{RESET}{content}{' ' * max(0, iw - visible)}{edge}│{RESET}"
+
+    star = fg(mix((225, 165, 40), (255, 222, 120), wave(0, t, speed=3.0))) + "✦" + RESET
+    top = f"{edge}╭─{RESET} {star} {BOLD}settings{RESET} {edge}{'─' * (iw - 13)}╮{RESET}"
+
+    body = []   # (kind, line); kinds let short terminals drop the extras first
+    section = None
+    for i, setting in enumerate(items):
+        if setting.section != section:
+            if section is not None:
+                body.append(("gap", framed("", 0)))
+            section = setting.section
+            body.append(("head", framed("  " + fg(LABEL) + clip(section.upper(), bw) + RESET, 2 + min(len(section), bw))))
+        value = setting.show(preferences.get(setting.key))
+        line = Line()
+        if i == index:
+            line.put(" ❯ ", (255, 255, 255)).put(clip(setting.label, bw - 8), (245, 245, 245), bold=True)
+            shown = f"◂ {value} ▸ "
+            line.at(max(len(line.cells) + 2, bw - len(shown)), clip(shown, bw // 2), (255, 255, 255), bold=True)
+            painted = lit([line.pad(bw)], accent, t)[0]
+        else:
+            line.put("   ").put(clip(setting.label, bw - 8), (205, 205, 212))
+            shown = f"{value}   "
+            line.at(max(len(line.cells) + 2, bw - len(shown)), clip(shown, bw // 2), SOFT)
+            painted = line.pad(bw).paint()
+        body.append(("row" if i != index else "selected", framed("  " + painted, bw + 2)))
+    hint = items[index].hint if items else ""
+    if hint:
+        body.append(("gap", framed("", 0)))
+        body.append(("hint", framed("  " + FAINT + clip(hint, bw) + RESET, 2 + min(len(hint), bw))))
+
+    hints = [" ↑↓ move · ←→ change · esc back ", " ←→ change · esc back ", " esc back ", ""]
+    hint_text = next(h for h in hints if len(h) <= iw - 2)
+    bottom = f"{edge}╰─{RESET}{FAINT}{hint_text}{RESET}{edge}{'─' * (iw - 1 - len(hint_text))}╯{RESET}"
+
+    lines = [top, framed("", 0)] + [line for _, line in body] + [framed("", 0), bottom]
+    if len(lines) > rows:
+        lines = [top] + [line for kind, line in body if kind != "gap"] + [bottom]
+    if len(lines) > rows:   # scroll the settings around the selected one
+        kept = [(kind, line) for kind, line in body if kind in ("row", "selected")]
+        at = next(i for i, (kind, _) in enumerate(kept) if kind == "selected")
+        room = max(1, rows - 2)
+        first = min(max(0, at - room // 2), max(0, len(kept) - room))
+        lines = [top] + [line for _, line in kept[first:first + room]] + [bottom]
+    return lines[:rows]
+
+
+class Screen:
+    """Writes frames to the terminal, resending only the rows that changed.
+
+    A row is a string drawn from the first column, or (left edge, content,
+    right edge) so an animated border can be redrawn without its content.
+    Each frame is one synchronized write, so a frame is never seen half drawn."""
+
+    def __init__(self, terminal):
+        self.terminal = terminal
+        self.size = None
+        self.rows = []
+
+    def reset(self):
+        self.size = None
+
+    def show(self, frame, cols, rows):
+        clear = ""
+        if (cols, rows) != self.size:
+            clear, self.size, self.rows = f"{ESC}[2J", (cols, rows), []
+        out = []
+        for y, row in enumerate(frame):
+            before = self.rows[y] if y < len(self.rows) else None
+            if row == before:
+                continue
+            if isinstance(row, tuple):
+                same = isinstance(before, tuple)
+                for part, col in ((0, 1), (1, 2), (2, cols)):
+                    if not same or row[part] != before[part]:
+                        out.append(f"{ESC}[{y + 1};{col}H{row[part]}")
+            else:
+                # Erase first: with autowrap off, a trailing erase would wipe a
+                # row's last cell when that row fills the width.
+                out.append(f"{ESC}[{y + 1};1H{ESC}[2K{row}")
+        self.rows = frame
+        if out or clear:
+            self.terminal.write(f"{ESC}[?2026h{clear}{''.join(out)}{ESC}[?2026l")
+
+
+def centered(lines, cols, rows):
+    width = max((visible_len(line) for line in lines), default=0)
+    left = " " * max(0, (cols - width) // 2)
+    top = max(0, (rows - len(lines)) // 2)
+    frame = [""] * rows
+    for i, line in enumerate(lines[:rows - top]):
+        frame[top + i] = left + line
+    return frame
+
+
+def load_last(agents=None):
     try:
         name = (STATE / "last").read_text().strip()
-        return next(i for i, a in enumerate(AGENTS) if a["name"] == name)
+        return next(i for i, a in enumerate(agents or AGENTS) if a["name"] == name)
     except Exception:
         return 0
 
@@ -615,50 +960,60 @@ def save_last(index):
 
 
 def choose():
-    available = [installed(a) for a in AGENTS]
-    if not any(available):
+    """Run the screens until an agent is picked (its index) or the user quits (None)."""
+    import usage_panel   # registers its settings; imported here so it can import this module
+
+    # Only installed CLIs are listed; the rest of agents.json stays in the catalog
+    # until its CLI shows up on this computer.
+    listed = [a for a in AGENTS if installed(a)]
+    if not listed:
         raise RuntimeError("No supported CLI found. Run agent --picker-doctor and configure a provider.")
-    refresh_usage(available)
-    selected = load_last()
-    if not available[selected]:
-        selected = next((i for i, ok in enumerate(available) if ok), 0)
+    available = [True] * len(listed)
+    providers = [a["name"] for a in listed if a["name"] in FETCHERS]
+    load_usage()
+    usage_panel.start(providers)   # live readers feed both screens
+    usage = usage_panel.View(listed)
+    menu = preferences.Menu()
+    screen = preferences.get(START.key)
+    came_from = screen               # where the settings screen returns to
+    selected = load_last(listed)
+    defaults_menu = None
+    changed_defaults = False
+    quit_choice = 0
     terminal = Terminal()
+    writer = Screen(terminal)
     out = sys.stdout
     start = time.monotonic()
-    last_size = None
-    last_frame = None
 
     def draw(sweep=None):
-        # Full-screen frame on the alternate screen, sized to the terminal on
-        # every frame, so resizing or a narrow pane can never wrap and smear.
-        # Nothing is erased between frames: every cell is overwritten in place,
-        # and the frame is one synchronized write, so high-refresh displays
-        # never catch a half-drawn or blank frame.
-        nonlocal last_size, last_frame
+        # Sized to the terminal on every frame, so resizing or a narrow pane
+        # can never wrap and smear.
         cols, rows = shutil.get_terminal_size((80, 24))
-        clear = ""
-        if (cols, rows) != last_size:
-            clear, last_size, last_frame = f"{ESC}[2J", (cols, rows), None
-        lines = render(selected, available, time.monotonic() - start, cols, rows, sweep)
-        width = max((visible_len(line) for line in lines), default=0)
-        left = max(0, (cols - width) // 2)
-        top = max(0, (rows - len(lines)) // 2)
-        body = "".join(
-            f"{ESC}[{top + i + 1};1H{' ' * left}{line}{' ' * max(0, cols - left - visible_len(line))}"
-            for i, line in enumerate(lines)
-        )
-        if body == last_frame:
-            return
-        last_frame = body
-        frame = f"{ESC}[?2026h{clear}{body}{ESC}[?2026l"
-        terminal.write(frame)
+        t = time.monotonic() - start
+        if screen == "usage":
+            frame = usage_panel.render(usage, cols, rows, t)
+        elif screen == "settings":
+            frame = centered(render_settings(menu, cols, rows, t, usage.frame_style()), cols, rows)
+        elif screen == "defaults":
+            frame = centered(render_defaults(defaults_menu, cols, rows, t), cols, rows)
+        elif screen == "confirm_back":
+            frame = centered(render_back_confirmation(defaults_menu, quit_choice, cols, rows, t), cols, rows)
+        elif screen == "confirm_quit":
+            frame = centered(render_quit_confirmation(quit_choice, cols, rows, t, listed[selected]), cols, rows)
+        else:
+            frame = centered(render(selected, available, t, cols, rows, sweep, listed), cols, rows)
+        writer.show(frame, cols, rows)
+
+    def go(name):
+        nonlocal screen, came_from
+        if name == "settings":
+            came_from = screen
+        screen = name
+        writer.reset()
 
     def move(step):
         nonlocal selected
-        for _ in AGENTS:
-            selected = (selected + step) % len(AGENTS)
-            if available[selected]:
-                return
+        selected = (selected + step) % len(listed)
 
     out.write(f"{ESC}[?1049h{ESC}[?25l{ESC}[?7l")  # alt screen, hide cursor, no autowrap
     out.flush()  # frames go straight to the fd after this
@@ -667,8 +1022,11 @@ def choose():
         draw()
         frame_at = time.monotonic()
         while True:
-            # Frames on a fixed 60 fps clock, so drawing time doesn't slow the rate.
-            frame_at += FRAME_TIME
+            # Frames on a fixed clock, so drawing time doesn't slow the rate:
+            # 60 fps for the picker, less for the screens that sit open.
+            step = (FRAME_TIME if screen == "agents" else
+                    usage_panel.frame_time(usage) if screen == "usage" else 1 / 30)
+            frame_at += step
             wait = frame_at - time.monotonic()
             if wait < 0:
                 frame_at, wait = time.monotonic(), 0
@@ -676,21 +1034,78 @@ def choose():
                 draw()  # next animation frame
                 continue
             key = terminal.read_key()
-            if key in ("up", "k"):
+            if screen == "usage":
+                action = usage_panel.handle(usage, key, providers)
+                if action == "quit":
+                    return None
+                if action:
+                    go(action)
+            elif screen == "settings":
+                if menu.handle(key) == "close":
+                    go(came_from)
+            elif screen == "defaults":
+                if key in ("\x03", "\x04"):
+                    return None
+                if defaults_menu.handle(key) == "save":
+                    if defaults_menu.changed:
+                        quit_choice = 0
+                        go("confirm_back")
+                    else:
+                        go("agents")
+            elif screen == "confirm_back":
+                if key in ("left", "right", "up", "down", "\t"):
+                    quit_choice = 1 - quit_choice
+                elif key in ("\r", "\n", "y", "Y") and (quit_choice == 1 or key in ("y", "Y")):
+                    try:
+                        provider_defaults.save(defaults_menu.agent, defaults_menu.values, config_path())
+                        changed_defaults = True
+                        go("agents")
+                    except (OSError, ValueError) as exc:
+                        defaults_menu.error = f"Could not save: {exc}"
+                        go("defaults")
+                elif key in ("\r", "\n", "esc", "n", "N", "q"):
+                    go("defaults")
+                elif key in ("\x03", "\x04"):
+                    return None
+            elif screen == "confirm_quit":
+                if key in ("left", "right", "up", "down", "\t"):
+                    quit_choice = 1 - quit_choice
+                elif key in ("\r", "\n"):
+                    if quit_choice == 1:
+                        return None
+                    go("agents")
+                elif key in ("y", "Y"):
+                    return None
+                elif key in ("esc", "n", "N", "q"):
+                    go("agents")
+                elif key in ("\x03", "\x04"):
+                    return None
+            elif key == "right":
+                defaults_menu = provider_defaults.Menu(listed[selected])
+                go("defaults")
+            elif key in ("up", "k"):
                 move(-1)
             elif key in ("down", "j", "\t"):
                 move(1)
-            elif key.isdigit() and 1 <= int(key) <= len(AGENTS) and available[int(key) - 1]:
+            elif key.isdigit() and 1 <= int(key) <= len(listed):
                 selected = int(key) - 1
+            elif key in ("u", "U"):
+                go("usage")
+            elif key == "s":
+                go("settings")
             elif key in ("\r", "\n"):
                 launch = time.monotonic()
                 while (elapsed := time.monotonic() - launch) < 0.21:
                     draw(sweep=min(1.0, (elapsed / 0.18) ** 1.6))
                     time.sleep(1 / 120)
                 draw(sweep=1.0)
-                return selected
+                return AGENTS.index(listed[selected])
             elif key in ("q", "esc", "\x03", "\x04"):
-                return None
+                if changed_defaults and key in ("q", "esc"):
+                    quit_choice = 0
+                    go("confirm_quit")
+                else:
+                    return None
             draw()
     finally:
         if hasattr(terminal, "old") or hasattr(terminal, "modes"):
@@ -710,11 +1125,60 @@ def doctor():
     print(f"Checkout: {ROOT}")
     print(f"Local config: {config_path()}")
     print(f"Local state: {STATE}")
+    missing = []
     for agent in AGENTS:
         argv = resolve_argv(agent)
-        print(f"{agent['name']}: {argv[0] if argv else 'not installed'}")
+        if not argv:
+            missing.append(agent["name"])
+            continue
+        print(f"{agent['name']}: {argv[0]}")
         print("  arguments: " + json.dumps(agent["argv"][1:]))
+    if missing:
+        print("Not installed (listed once their CLI is found): " + ", ".join(missing))
     print("Usage meters are best effort; unavailable credentials show '-'.")
+
+
+def catalog():
+    """Every profile in agents.json with its colors, installed or not."""
+    for agent in AGENTS:
+        argv = resolve_argv(agent)
+        swatch = "".join(fg(grad(agent, k / 16)) + "▰" for k in range(16)) + RESET
+        name = fg(agent["color"]) + "●" + RESET + " " + BOLD + agent["name"].ljust(12) + RESET
+        state = f"{FAINT}{argv[0]}{RESET}" if argv else f"{FAINT}not installed · {agent['argv'][0]}{RESET}"
+        print(f"  {name} {swatch}  {state}")
+
+def print_launch_banner(agent):
+    mascot = agent.get("mascot")
+    if not mascot:
+        print(f"  {fg(agent['color'])}●{RESET} {BOLD}{agent['name']}{RESET} {FAINT}{agent['detail']}{RESET}\n", flush=True)
+        return
+
+    cwd = os.getcwd()
+    home = os.path.expanduser("~")
+    cwd_disp = "~" if cwd == home else (f"~/{os.path.relpath(cwd, home)}" if cwd.startswith(home + "/") else cwd)
+
+    info_lines = [
+        f"{BOLD}{agent['name']}{RESET} {FAINT}{agent.get('short', '')}{RESET}",
+        f"{FAINT}{agent.get('detail', '')}{RESET}",
+        f"{FAINT}permissions: bypass{RESET}",
+        f"{FAINT}{cwd_disp}{RESET}"
+    ]
+
+    lines = []
+    num_rows = len(mascot)
+    for y, art_row in enumerate(mascot):
+        colored_art = ""
+        row_len = len(art_row)
+        for x, ch in enumerate(art_row):
+            if ch == " ":
+                colored_art += " "
+            else:
+                u = (x / max(1, row_len) * 0.5 + y / max(1, num_rows) * 0.5)
+                colored_art += f"{fg(grad(agent, u))}{ch}{RESET}"
+        info = info_lines[y] if y < len(info_lines) else ""
+        lines.append(f"  {colored_art}   {info}")
+
+    print("\n" + "\n".join(lines) + "\n", flush=True)
 
 
 def main():
@@ -728,12 +1192,17 @@ def main():
     if args[:1] == ["--picker-doctor"]:
         doctor()
         return 0
+    if args[:1] == ["--picker-catalog"]:
+        catalog()
+        return 0
     if args[:1] == ["--picker-help"]:
         print("agent [CLI arguments]                 open picker; forward arguments")
         print("agent --picker-launch NAME [args]     launch a provider directly")
         print("agent --picker-update                 fast-forward this Git checkout")
         print("agent --picker-doctor                 show paths and launch profiles")
+        print("agent --picker-catalog                every known CLI, its colors, and whether it is installed")
         print("agent --picker-help                   show this help")
+        print("usage                                 the same command; u switches to the usage panel")
         print("Prefix CLI args with -- to escape picker management commands.")
         return 0
     if args[:1] == ["--picker-launch"]:
@@ -759,9 +1228,10 @@ def main():
     if args[:1] == ["--"]:
         args = args[1:]
     save_last(index)
-    if os.environ.get("AGENT_PICKER_NO_PRETRUST") != "1":
+    defaults = provider_defaults.current(agent)
+    if os.environ.get("AGENT_PICKER_NO_PRETRUST") != "1" and (defaults is None or defaults["bypass_permissions"]):
         pretrust(agent)
-    print(f"  {fg(agent['color'])}●{RESET} {BOLD}{agent['name']}{RESET} {FAINT}{agent['detail']}{RESET}\n", flush=True)
+    print_launch_banner(agent)
     return launch(argv + args)
 
 

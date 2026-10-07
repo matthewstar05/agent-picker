@@ -54,12 +54,17 @@ agent "help me understand this repo"  forward this prompt to the chosen CLI
 agent --picker-launch Codex           directly launch Codex
 agent --picker-doctor                 inspect detected providers and local paths
 agent --picker-update                 pull shared updates from GitHub
+agent --picker-catalog                every known CLI, its colors, and whether it is installed
 agent --picker-help                   show picker help
 agent -- --picker-help                pass a management-looking argument to the CLI
-usage                                live usage-limit panel for every provider
-usage --theme vapor                  start the panel in a theme (remembered)
-usage --themes                       list the panel's color themes
+usage                                the same command as agent
 ```
+
+Inside the command: `u` switches between the agent selector and the usage panel, and `s` opens general settings from either one.
+
+In the agent selector, highlight a provider and press `→` to open its defaults. `↑↓` moves between **Model**, **Effort**, and **Bypass Permissions**. Arrow keys do not change the model. Enter opens a scrollable model list; `↑↓` or `←→` move through it and Enter chooses the model. On Effort, `←→` cycles levels; on Bypass Permissions the same keys toggle On/Off. Space or Enter also changes Effort or Bypass Permissions. Esc returns to the selector. If nothing changed, it returns immediately. If something changed, Esc shows the new model and effort, each changed value, and asks you to confirm before saving. If you then quit the selector with Esc or q after saving changes, a confirmation opens with **Stay** selected. The saved defaults remain when you reopen `agent`.
+
+The five original providers support these controls. Cursor effort is part of its model identifier; changing it preserves any fast suffix or existing bracket parameters. Gemini effort is also part of the model id (`gemini-3.8-flash-high`), so those models have no separate Effort control and do not pass `--effort`. Other catalog providers keep their own defaults until their launch controls are supported. Model choices come from bundled provider catalogs, refreshed locally from installed CLIs or their caches in the background. Your current model stays selectable. Cursor effort choices follow the available model variants; Codex and Claude use the effort levels reported in their catalogs. Model access still depends on your account.
 
 Updates are explicit, use `git pull --ff-only`, and refuse a dirty checkout. If the two machines have diverging commits, resolve them with normal Git operations before updating. The command does not commit, stash, reset, push, or update provider CLIs automatically.
 
@@ -73,9 +78,9 @@ Updates are explicit, use `git pull --ff-only`, and refuse a dirty checkout. If 
 | Codex | gpt-6.1-sol | high |
 | Cursor | grok-4.7-high | encoded in model argument |
 | Kiro | claude-opus-5.5 | medium |
-| Antigravity | gemini-3.8-flash-high | high |
+| Antigravity | gemini-3.8-flash-high | encoded in model argument |
 
-The defaults retain the original permission bypass flags and automatic current-folder trust behavior. To use a provider's normal approvals, replace its `argv` in the shared profiles or local config with the desired arguments. Set `AGENT_PICKER_NO_PRETRUST=1` to skip the picker’s folder-trust writes. Only the selected provider's current directory is pre-trusted.
+The defaults retain the original permission bypass flags and automatic current-folder trust behavior. Turn **Bypass Permissions** Off in a provider's defaults to remove its bypass flags and skip new folder-trust writes for that launch. Claude explicitly uses its default permission mode; Codex uses on-request approvals with the workspace-write sandbox. Set `AGENT_PICKER_NO_PRETRUST=1` to skip all picker folder-trust writes. Only the selected provider's current directory is pre-trusted when bypass is On.
 
 Use the config path printed by `--picker-doctor` for machine-specific executable paths or launch arguments. On macOS it is normally `~/.config/agent-picker/config.json`; on Windows it is `%APPDATA%\agent-picker\config.json`.
 
@@ -105,17 +110,44 @@ Usage collection runs in background threads and never refreshes authentication t
 
 Claude's [authentication documentation](https://code.claude.com/docs/en/authentication#credential-management) describes its platform-specific credential files. `CLAUDE_CONFIG_DIR` and `CODEX_HOME` are respected by the usage readers. Cursor and Antigravity usage endpoints and credential formats come from the original Mac implementation and may change. Windows meters for those providers show a dash until a verified reader is added; their launch commands still work when installed. Login, expired credentials, provider-specific model access, and live usage accuracy need verification on each computer.
 
+## Agent catalog
+
+[agents.json](agents.json) is a catalog of agent CLIs: the five original profiles plus OpenCode, Gemini CLI, Qwen Code, GitHub Copilot CLI, Amp, Aider, Goose, Crush, Factory Droid, Cline, Auggie, Kimi CLI, and Continue. The picker lists only the ones installed on this computer, found on PATH or in common install folders that aren't always on it (`~/.opencode/bin`, `~/.bun/bin`, npm-global, cargo, Homebrew). The rest stay in the catalog with their color schemes and appear as soon as their CLI is installed. `agent --picker-catalog` shows every entry with its colors and status.
+
+Catalog entries other than the original five launch their CLI with no arguments, so they use that CLI's own default model and permission prompts. Add model or permission flags in the local config once a CLI is installed and you have checked its flags. To add a CLI, append a profile with `name`, `color`, `pastel`, `gradient`, `short`, `detail`, `argv`, and `detect` (the names it shows up under in Herdr and in process lists). Usage limits are read only for Claude, Codex, Antigravity, Cursor, and Kiro; other CLIs' cards say no usage reader exists yet.
+
 ## Usage panel
 
-`usage` is a full-pane dashboard of the same meters, meant to stay open in a Herdr pane. It reads limits with the picker's readers and shares its cache, so both commands show the same numbers. Cards stack in tall panes and sit side by side in wide, short ones; very small panes fall back to one line per provider.
+The usage panel is a screen of the same command (press `u`), a full-pane dashboard of the meters meant to stay open in a Herdr pane. `agent` and `usage` both open on the picker; set **Opens on** in settings to start on the usage panel instead.
+
+The panel shows only agents running beside it: in the same Herdr tab (agents Herdr recognizes, plus panes whose foreground process is a catalog CLI), in the same tmux window, or anywhere on the computer when neither is in use. With no agent open there, it shows an empty state; cards appear and disappear as agents open and close. Limits are still read for every installed provider, so the picker's meters stay current. Its live readers start with the command, so the picker's meters are live too, and both screens share one cache. Cards stack in tall panes and sit side by side in wide, short ones; very small panes fall back to one line per provider.
 
 Refreshing follows the agents. Every two seconds the panel asks Herdr (`herdr pane list`) which panes are working. A provider with a working agent is read often (Codex every 5 seconds from its local logs, the web endpoints every 45 to 60 seconds). It is read again a few seconds after one of its agents finishes a turn, and only every 5 to 15 minutes while idle. Failed reads back off. Without Herdr it falls back to fixed intervals between those two.
 
-Each bar fills to the percentage used. The empty track is brighter up to where an even pace through the window would be by now, and any filled part beyond that point turns hot. When the current pace would reach the limit before the window resets, the countdown changes from `↻ 2h 31m` to `out 1h 20m`. History for a burn-rate sparkline is still recorded, but drawing it is commented out in `usage_panel.py`.
+Each bar fills to the percentage used, and the empty track is brighter up to where an even pace through the window would be by now. Every row shows its reset countdown. A limit is tinted a muted red only when it is at least 70% used and its reset is still far off: more than 2 hours away for the 5-hour limit, 2 days for weekly, and 5 days for monthly (a monthly limit resetting within 5 days is never flagged). When several instances of one provider are working, its card shows a spinner per instance, a shimmering count, and one light pulse per instance along its bars. History for a burn-rate sparkline is still recorded, but drawing it is commented out in `usage_panel.py`.
 
-Keys: `t` or `→` next theme, `T` or `←` previous theme, `r` refresh now, `a` toggle animation (off redraws once a second), `q` quit. The theme and animation choice are saved in the local state directory.
+Keys: `t` or `→` next theme, `T` or `←` previous theme, `r` refresh now, `a` toggle animation (off redraws once a second), `s` settings, `u` or Esc back to the picker, `q` quit.
 
 Brand uses an animated gray outer border. Each working provider gets the same animated border as its row in the agent selector; choosing another theme changes both the outer border and provider borders to that theme. Provider titles and their dots retain their brand colors in every theme. Short panes drop the top and bottom of provider borders to keep the limits visible. Border space is reserved even while idle, so titles, bars, and card positions stay fixed as providers start or stop working. The layout changes only when the pane size or installed providers change. The theme name appears in the outer border for 2.5 seconds after changing themes, then disappears.
+
+## Settings
+
+Provider defaults are saved as an `agents.<Provider>.defaults` object in the machine-local config, separately from the general settings below. This preserves local executable paths and unrelated arguments without changing `agents.json` or writing your preferences into Git.
+
+Press `s` on any screen. `↑↓` choose a setting, `←→` or Enter change it, Esc returns to the screen you came from. Changes apply immediately and are saved to `preferences.json` in the local state directory.
+
+Settings live in [src/preferences.py](src/preferences.py). To give a new feature a setting, register it where the feature lives and read it with `preferences.get`; the settings screen lists it under its section with no other changes:
+
+```python
+import preferences
+
+SOUND = preferences.register(preferences.Setting(
+    "sound", "General", "Sound", [False, True], False,
+    hint="Play a chime when an agent finishes.", names={False: "off", True: "on"}))
+
+if preferences.get(SOUND.key):
+    ...
+```
 
 ## Iterate from either computer
 
