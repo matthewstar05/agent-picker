@@ -1,0 +1,215 @@
+[
+  {
+    "name": "Claude",
+    "pastel": [
+      255,
+      190,
+      150
+    ],
+    "gradient": [
+      [
+        255,
+        200,
+        40
+      ],
+      [
+        255,
+        140,
+        25
+      ],
+      [
+        255,
+        100,
+        150
+      ],
+      [
+        255,
+        155,
+        45
+      ]
+    ],
+    "glow": 1.5,
+    "model": "opus 5.5",
+    "short": "opus",
+    "color": [
+      217,
+      119,
+      87
+    ],
+    "detail": "opus \u00b7 medium",
+    "argv": [
+      "claude",
+      "--model",
+      "opus",
+      "--effort",
+      "medium",
+      "--dangerously-skip-permissions"
+    ]
+  },
+  {
+    "name": "Codex",
+    "pastel": [
+      150,
+      235,
+      200
+    ],
+    "gradient": [
+      [
+        20,
+        220,
+        140
+      ],
+      [
+        20,
+        190,
+        200
+      ],
+      [
+        60,
+        120,
+        255
+      ]
+    ],
+    "model": "gpt-6.1-sol",
+    "short": "gpt sol",
+    "color": [
+      16,
+      163,
+      127
+    ],
+    "detail": "gpt-6.1-sol \u00b7 high",
+    "argv": [
+      "codex",
+      "-m",
+      "gpt-6.1-sol",
+      "-c",
+      "model_reasoning_effort=high",
+      "--dangerously-bypass-approvals-and-sandbox"
+    ]
+  },
+  {
+    "name": "Cursor",
+    "pastel": [
+      255,
+      160,
+      165
+    ],
+    "gradient": [
+      [
+        235,
+        35,
+        50
+      ],
+      [
+        90,
+        8,
+        16
+      ],
+      [
+        14,
+        8,
+        10
+      ],
+      [
+        150,
+        15,
+        28
+      ]
+    ],
+    "model": "grok-4.7",
+    "short": "grok",
+    "color": [
+      236,
+      236,
+      236
+    ],
+    "detail": "grok-4.7 \u00b7 high",
+    "argv": [
+      "cursor-cli",
+      "--model",
+      "grok-4.7-high",
+      "--yolo",
+      "--trust"
+    ],
+    "executables": [
+      "cursor-agent"
+    ],
+    "platforms": {
+      "windows": {
+        "argv": [
+          "cursor-agent",
+          "--model",
+          "grok-4.7-high",
+          "--yolo",
+          "--trust"
+        ],
+        "executables": [
+          "cursor-cli"
+        ]
+      }
+    }
+  },
+  {
+    "name": "Kiro",
+    "pastel": [
+      210,
+      175,
+      255
+    ],
+    "gradient": [
+      [
+        144,
+        70,
+        255
+      ],
+      [
+        205,
+        80,
+        245
+      ],
+      [
+        255,
+        95,
+        190
+      ]
+    ],
+    "model": "opus-5.5",
+    "short": "opus",
+    "color": [
+      144,
+      70,
+      255
+    ],
+    "detail": "opus-5.5 \u00b7 medium",
+    "argv": [
+      "kiro-cli",
+      "chat",
+      "--model",
+      "claude-opus-5.5",
+      "--effort",
+      "medium",
+      "--trust-all-tools"
+    ]
+  },
+  {
+    "name": "Antigravity",
+    "pastel": "rainbow",
+    "gradient": "rainbow",
+    "model": "gemini-3.8-flash",
+    "short": "gemini flash",
+    "color": [
+      66,
+      133,
+      244
+    ],
+    "detail": "gemini-3.8-flash \u00b7 high",
+    "argv": [
+      "agy",
+      "--model",
+      "gemini-3.8-flash-high",
+      "--effort",
+      "high",
+      "--dangerously-skip-permissions"
+    ]
+  }
+]
