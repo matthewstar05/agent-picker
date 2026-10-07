@@ -37,15 +37,13 @@ if ($vendor -and $vendor.Source -notlike '*\agent-picker\bin\*') {
     if (Test-Path -LiteralPath $configPath) {
         $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
     }
-    $defaults = Get-Content -LiteralPath (Join-Path $repo 'agents.json') -Raw | ConvertFrom-Json
-    $cursor = $defaults | Where-Object { $_.name -eq 'Cursor' }
     if ($config -is [hashtable]) {
-        $config.agents.Cursor = @{ argv = @($vendor.Source) + @($cursor.argv | Select-Object -Skip 1) }
+        $config.agents.Cursor = @{ command = $vendor.Source }
     } elseif (-not $config.agents) {
         $config | Add-Member -NotePropertyName agents -NotePropertyValue ([pscustomobject]@{})
-        $config.agents | Add-Member -NotePropertyName Cursor -NotePropertyValue @{ argv = @($vendor.Source) + @($cursor.argv | Select-Object -Skip 1) }
+        $config.agents | Add-Member -NotePropertyName Cursor -NotePropertyValue @{ command = $vendor.Source }
     } elseif (-not $config.agents.Cursor) {
-        $config.agents | Add-Member -NotePropertyName Cursor -NotePropertyValue @{ argv = @($vendor.Source) + @($cursor.argv | Select-Object -Skip 1) }
+        $config.agents | Add-Member -NotePropertyName Cursor -NotePropertyValue @{ command = $vendor.Source }
     }
     Save-Backup $configPath
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $configPath) | Out-Null

@@ -40,6 +40,16 @@ class PickerTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "recursion"):
                     settings.load_agents()
 
+    def test_local_command_inherits_shared_arguments(self):
+        with tempfile.TemporaryDirectory() as folder:
+            config = Path(folder) / "config.json"
+            config.write_text(json.dumps({"agents": {"Cursor": {"command": "vendor-cursor"}}}))
+            with patch.dict(os.environ, {"AGENT_PICKER_CONFIG": str(config)}):
+                agents = settings.load_agents()
+            original = json.loads((ROOT / "agents.json").read_text())[2]
+            self.assertEqual(agents[2]["argv"], ["vendor-cursor"] + original["argv"][1:])
+            self.assertEqual(agents[2]["executables"], [])
+
     def test_resolution_uses_cursor_fallback_without_generic_agent(self):
         seen = []
         def which(command):

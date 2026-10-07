@@ -29,6 +29,12 @@ def load_agents():
     for agent in agents:
         agent.update(agent.pop("platforms", {}).get(platform, {}))
         agent.update(overrides.get("agents", {}).get(agent["name"], {}))
+        command = agent.pop("command", None)
+        if command is not None:
+            if not isinstance(command, str) or not command:
+                raise ValueError(f"{agent['name']}: command must be a nonempty string")
+            agent["argv"] = [command] + agent["argv"][1:]
+            agent["executables"] = []  # explicit local path must not silently fall back
         argv = agent.get("argv")
         if not isinstance(argv, list) or not argv or not all(isinstance(a, str) and a for a in argv):
             raise ValueError(f"{agent['name']}: argv must be a nonempty array of strings")

@@ -80,13 +80,13 @@ Use the config path printed by `--picker-doctor` for machine-specific executable
 {
   "agents": {
     "Cursor": {
-      "argv": ["C:\\Users\\Example\\.local\\bin\\agent.exe", "--model", "grok-4.7-high", "--yolo", "--trust"]
+      "command": "C:\\Users\\Example\\.local\\bin\\agent.exe"
     }
   }
 }
 ```
 
-An override replaces the entire `argv` array. Do not set a provider command to bare `agent`, which would reopen this picker. Use an absolute vendor path for Cursor when its CLI is named `agent`. `AGENT_PICKER_CONFIG` can select a different local config file, and `AGENT_PICKER_STATE_HOME` can select a different local state directory. Shared edits to `agents.json` apply to both computers unless the corresponding field has a local override.
+Use `command` to override only the executable path while continuing to inherit shared model and flag changes. The Windows installer uses this form for Cursor. An `argv` override replaces the entire argument array and intentionally pins that machine's launch settings. Do not set a provider command to bare `agent`, which would reopen this picker. Use an absolute vendor path for Cursor when its CLI is named `agent`. `AGENT_PICKER_CONFIG` can select a different local config file, and `AGENT_PICKER_STATE_HOME` can select a different local state directory. Shared edits to `agents.json` apply to both computers unless the corresponding field has a local override.
 
 ## Usage meters
 
