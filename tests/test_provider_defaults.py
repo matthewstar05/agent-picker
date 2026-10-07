@@ -15,9 +15,17 @@ sys.path.insert(0, str(ROOT / "src"))
 import agent_picker as picker
 import provider_defaults as defaults
 import settings
+import model_catalog
 
 
 class DefaultsTests(unittest.TestCase):
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.refresh = patch.dict(os.environ, AGENT_PICKER_NO_MODEL_REFRESH="1", AGENT_PICKER_CONFIG=str(Path(folder.name) / "config.json"))
+        self.refresh.start()
+        self.addCleanup(self.refresh.stop)
+
     def agents(self):
         return {a["name"]: a for a in settings.load_agents()}
 
@@ -77,37 +85,27 @@ class DefaultsTests(unittest.TestCase):
             defaults.apply(agent, dict(defaults.current(agent), effort="low"))
             self.assertIn(expected, agent["argv"])
 
-    def test_menu_model_edit_toggle_and_save_keys(self):
-        for save_key in ("esc",):
-            menu = defaults.Menu(self.agents()["Claude"])
-            menu.handle("right")
-            for key in "sonnet":
-                menu.handle(key)
-            menu.handle("\r")
-            menu.handle("down")
-            menu.handle("right")
-            menu.handle("down")
-            menu.handle(" ")
-            self.assertEqual(menu.values["model"], "sonnet")
-            self.assertFalse(menu.values["bypass_permissions"])
-            self.assertTrue(menu.changed)
-            self.assertEqual(menu.handle(save_key), "save")
+    def test_menu_model_selection_toggle_and_save_key(self):
         menu = defaults.Menu(self.agents()["Claude"])
+        original = menu.values["model"]
+        menu.handle("right")
+        self.assertNotEqual(menu.values["model"], original)
+        menu.handle("left")
+        self.assertEqual(menu.values["model"], original)
+        menu.handle("\r")
+        self.assertTrue(menu.browsing)
+        menu.handle("down")
+        chosen = menu.values["model"]
+        menu.handle("\r")
+        self.assertFalse(menu.browsing)
+        self.assertEqual(menu.values["model"], chosen)
         menu.handle("down")
         menu.handle("right")
+        menu.handle("down")
         menu.handle("left")
-        self.assertFalse(menu.changed)
-        menu.handle("up")
-        menu.handle("right")
-        menu.handle("left")
-        menu.handle("x")
-        self.assertEqual(menu.values["model"], "opuxs")
-        menu = defaults.Menu(self.agents()["Claude"])
-        menu.handle("right")
-        menu.handle("\x7f")
-        self.assertIsNone(menu.handle("esc"))
-        self.assertTrue(menu.error)
-        self.assertTrue(menu.editing)
+        self.assertFalse(menu.values["bypass_permissions"])
+        self.assertTrue(menu.changed)
+        self.assertEqual(menu.handle("esc"), "save")
 
     def test_save_failure_does_not_change_launch_profile(self):
         agent = self.agents()["Claude"]
@@ -121,7 +119,7 @@ class DefaultsTests(unittest.TestCase):
 
     def test_keyboard_flow_saves_then_confirms_selector_exit(self):
         import usage_panel
-        keys = iter(["right", "right", *"sonnet", "\r", "down", "left", "down", "left", "esc",
+        keys = iter(["right", "down", "left", "down", "left", "esc",
                      "esc", "esc", "esc", "right", "\r"])
         frames = []
         class Keyboard:
@@ -148,7 +146,7 @@ class DefaultsTests(unittest.TestCase):
             stack.enter_context(patch.object(sys, "stdout", io.StringIO()))
             self.assertIsNone(picker.choose())
             saved = json.loads(path.read_text())["agents"]["Claude"]["defaults"]
-            self.assertEqual(saved, {"model": "sonnet", "effort": "low", "bypass_permissions": False})
+            self.assertEqual(saved, {"model": "opus", "effort": "low", "bypass_permissions": False})
         visible = picker._ANSI.sub("", "".join(frames))
         self.assertGreaterEqual(visible.count("Are you sure"), 2)
         self.assertIn("Your changes are saved locally", visible)

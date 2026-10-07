@@ -65,7 +65,9 @@ Updates are explicit, use `git pull --ff-only`, and refuse a dirty checkout. If 
 
 ## Agent selector defaults
 
-In the agent selector, highlight a provider and press `→` to open its defaults. `↑↓` selects **Model**, **Effort**, or **Bypass Permissions**. On Model, press `→` or Enter, then type a model identifier (typing replaces the existing value). `←→` moves the text cursor; Enter finishes editing. On Effort, `←→` cycles levels; on Bypass Permissions the same keys toggle On/Off. Space or Enter also changes either value. Esc saves locally and returns to the selector. If you then quit the selector with Esc or q after making changes, a confirmation opens with **Stay** selected. The saved defaults remain when you reopen `agent`.
+In the agent selector, highlight a provider and press `→` to open its defaults. `↑↓` selects **Model**, **Effort**, or **Bypass Permissions**. On Model, `←→` cycles available models; Enter opens a scrollable list, where `↑↓` or `←→` selects a model and Enter returns to the fields. On Effort, `←→` cycles levels; on Bypass Permissions the same keys toggle On/Off. Space or Enter also changes either value. Esc saves locally and returns to the selector. If you then quit the selector with Esc or q after making changes, a confirmation opens with **Stay** selected. The saved defaults remain when you reopen `agent`.
+
+Choices come from bundled model catalogs, refreshed from installed CLIs or their local caches in the background. Your current model stays selectable. Cursor, Claude, and Codex effort choices follow their model catalogs.
 
 Changes are saved in the machine-local config as `agents.<Provider>.defaults`, preserving local paths and unrelated arguments. Turning Bypass Permissions Off removes that provider's bypass flags and skips new picker folder-trust writes. Claude uses its default permission mode; Codex uses on-request approvals and the workspace-write sandbox.
 

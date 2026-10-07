@@ -5,9 +5,10 @@ import json
 import os
 import re
 import tempfile
+import model_catalog
 
 
-EFFORTS = ("low", "medium", "high", "xhigh", "max")
+EFFORTS = ("low", "medium", "high", "xhigh", "max", "ultra")
 PROVIDERS = {
     "Claude": ("--model", "--effort", ("--dangerously-skip-permissions",)),
     "Codex": ("-m", None, ("--dangerously-bypass-approvals-and-sandbox",)),
@@ -57,10 +58,11 @@ def current(agent):
             value = argv[i + 1] if arg in ("-c", "--config") and i + 1 < len(argv) else ""
             if value.startswith("model_reasoning_effort="):
                 effort = value.split("=", 1)[1].strip('"\'')
-    if name == "Cursor":
+    if name in ("Cursor", "Antigravity"):
         match = CURSOR_EFFORT.search(model)
         bracket = re.search(r"effort=([^,\]]+)", model)
-        effort = match.group(1) if match else bracket.group(1) if bracket else "provider default"
+        if name == "Cursor" or not effort:
+            effort = match.group(1) if match else bracket.group(1) if bracket else "provider default"
         if match:
             model = model[:match.start()] + model[match.end():]
     return {"model": model, "effort": effort or "provider default",
@@ -81,10 +83,16 @@ def apply(agent, values):
     if not isinstance(values["bypass_permissions"], bool):
         raise ValueError("Bypass Permissions must be on or off")
     name = agent["name"]
+    if name == "Antigravity":
+        model = CURSOR_EFFORT.sub("", model)
     model_flag, effort_flag, bypass_flags = PROVIDERS[name]
     argv = list(agent["argv"])
-    if name == "Cursor" and (model != baseline["model"] or effort != baseline["effort"]):
-        if effort != "provider default":
+    if name in ("Cursor", "Antigravity") and (model != baseline["model"] or effort != baseline["effort"]):
+        row = next((r for r in model_catalog.options(agent, model) if r["id"] == model), {})
+        variant = row.get("variants", {}).get(effort)
+        if variant:
+            model = variant
+        elif effort != "provider default" and name == "Cursor":
             match = CURSOR_EFFORT.search(model)
             if match:
                 model = model[:match.start()] + model[match.end():]
@@ -158,64 +166,68 @@ class Menu:
         self.original = current(agent)
         self.values = dict(self.original) if self.original else {}
         self.index = 0
-        self.editing = False
-        self.replace = False
-        self.cursor = len(self.values.get("model", ""))
+        self.model_rows = model_catalog.options(agent, self.values.get("model", ""))
         self.error = ""
+        self.browsing = False
+        self.model_index = 0
+        model_catalog.request(agent)
 
     @property
     def changed(self):
         return self.original is not None and self.values != self.original
 
+    def models(self):
+        return self.model_rows
+
+    def efforts(self):
+        row = next((r for r in self.models() if r["id"] == self.values["model"]), {})
+        levels = row.get("efforts")
+        choices = tuple(levels) if levels is not None else (EFFORTS if self.agent["name"] == "Codex" else EFFORTS[:-1])
+        if self.agent["name"] != "Cursor" or "provider default" in row.get("variants", {}) or not choices:
+            choices = ("provider default",) + choices
+        return choices
+
+    def select_model(self, row):
+        self.values["model"] = row["id"]
+        choices = self.efforts()
+        if self.values["effort"] not in choices:
+            self.values["effort"] = "high" if "high" in choices else choices[0]
+
     def handle(self, key):
         self.error = ""
         if self.original is None:
             return "save" if key == "esc" else None
-        if self.editing:
-            if key in ("\r", "\n", "esc"):
-                self.values["model"] = self.values["model"].strip()
-                if not self.values["model"]:
-                    self.error = "Enter a model identifier."
-                    return None
-                self.editing = False
-                if self.agent["name"] == "Cursor":
-                    match = CURSOR_EFFORT.search(self.values["model"])
-                    if match:
-                        self.values["effort"] = match.group(1)
-                        self.values["model"] = CURSOR_EFFORT.sub("", self.values["model"])
-                return "save" if key == "esc" else None
-            if key in ("left", "right"):
-                self.replace = False
-                self.cursor = max(0, min(len(self.values["model"]), self.cursor + (-1 if key == "left" else 1)))
-            if key in ("\x7f", "\b"):
-                model = self.values["model"]
-                if self.replace:
-                    self.values["model"] = ""
-                    self.cursor = 0
-                elif self.cursor:
-                    self.values["model"] = model[:self.cursor - 1] + model[self.cursor:]
-                    self.cursor -= 1
-                self.replace = False
-            elif key == "\x15":
-                self.values["model"] = ""
-                self.replace = False
-                self.cursor = 0
-            elif len(key) == 1 and key.isprintable():
-                model = self.values["model"]
-                self.values["model"] = key if self.replace else model[:self.cursor] + key + model[self.cursor:]
-                self.cursor = 1 if self.replace else self.cursor + 1
-                self.replace = False
-        elif key == "esc":
+        if self.browsing:
+            models = self.models()
+            self.model_index = min(self.model_index, len(models) - 1)
+            if key == "esc":
+                self.browsing = False
+                return "save"
+            if key in ("up", "left", "k", "down", "right", "j", "\t"):
+                step = -1 if key in ("up", "left", "k") else 1
+                self.model_index = (self.model_index + step) % len(models)
+                self.select_model(models[self.model_index])
+            elif key in ("\r", "\n", " "):
+                self.select_model(models[self.model_index])
+                self.browsing = False
+            return None
+        if key == "esc":
             return "save"
         elif key in ("up", "k", "down", "j", "\t"):
             self.index = (self.index + (-1 if key in ("up", "k") else 1)) % 3
         elif key in ("left", "right", "\r", "\n", " "):
             field = self.fields[self.index]
             if field == "model":
-                self.editing = self.replace = True
-                self.cursor = len(self.values["model"])
+                models = self.models()
+                index = next((i for i, row in enumerate(models) if row["id"] == self.values["model"]), 0)
+                if key in ("\r", "\n", " "):
+                    self.browsing = True
+                    self.model_index = index
+                else:
+                    self.model_index = (index + (-1 if key == "left" else 1)) % len(models)
+                    self.select_model(models[self.model_index])
             elif field == "effort":
-                choices = ("provider default",) + EFFORTS
+                choices = self.efforts()
                 effort = self.values[field]
                 step = -1 if key == "left" else 1
                 self.values[field] = choices[(choices.index(effort) + step) % len(choices)] if effort in choices else choices[0]

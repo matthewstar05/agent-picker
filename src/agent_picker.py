@@ -608,9 +608,19 @@ def render(selected, available, t, cols, rows, sweep=None):
 
 
 def render_defaults(menu, cols, rows, t):
-    """A provider's defaults, with inline model editing and a clear save path."""
+    """A provider's defaults and scrollable model choices."""
     width = min(MAX_IW, cols - 2)
     name = menu.agent["name"]
+    if menu.browsing:
+        models = menu.models()
+        index = min(menu.model_index, len(models) - 1)
+        room = max(1, rows - 4)
+        first = min(max(0, index - room // 2), max(0, len(models) - room))
+        lines = [(f"{name} models ({index + 1}/{len(models)})", False)]
+        for i, row in enumerate(models[first:first + room], first):
+            lines.append((("❯ " if i == index else "  ") + row.get("name", row["id"]), i == index))
+        lines += [("↑↓ / ←→ choose · enter done", False), ("esc save & back", False)]
+        return [(BOLD + fg(menu.agent["color"]) if active else FAINT) + clip(text, cols) + RESET for text, active in lines[:rows]]
     content = [(f"{name} defaults", True)]
     if menu.original is None:
         content.append(("Defaults are managed by this provider.", False))
@@ -619,13 +629,9 @@ def render_defaults(menu, cols, rows, t):
             value = menu.values[key]
             value = ("On" if value else "Off") if key == "bypass_permissions" else value
             mark = "❯ " if menu.index == i else "  "
-            if menu.editing and key == "model":
-                value = ("[" + value + "]") if menu.replace else value[:menu.cursor] + "▏" + value[menu.cursor:]
             content.append((mark + label + ": " + str(value), menu.index == i))
-        if menu.editing:
-            hint = "Type model · ←→ cursor · enter done · esc save"
-        elif menu.index == 0:
-            hint = "→ / enter edit model · typing replaces it"
+        if menu.index == 0:
+            hint = "←→ choose model · enter browse models"
         elif menu.index == 1:
             hint = "←→ / space cycle effort"
         else:
