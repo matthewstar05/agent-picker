@@ -32,7 +32,7 @@ if __name__ == "__main__":
 
 import preferences
 import provider_defaults
-from platform_runtime import Terminal, launch, resolve_argv, state_dir
+from platform_runtime import WINDOWS, Terminal, launch, resolve_argv, state_dir
 from settings import ROOT, config_path, load_agents, update_checkout
 
 try:
@@ -254,7 +254,7 @@ def usage_codex():
 def usage_cursor():
     token = _keychain("cursor-access-token")
     auth_file = Path(os.environ.get("APPDATA", "")) / "Cursor/auth.json"   # the Windows CLI's login
-    if not token and os.name == "nt" and auth_file.exists():
+    if not token and WINDOWS and auth_file.exists():
         token = json.loads(auth_file.read_text(encoding="utf-8")).get("accessToken")
     if not token:
         return None

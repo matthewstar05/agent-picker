@@ -184,7 +184,7 @@ class PickerTests(unittest.TestCase):
             path.parent.mkdir()
             original = json.dumps({"accessToken": "fake-test-token", "refreshToken": "fake"})
             path.write_text(original)
-            with patch.dict(os.environ, {"APPDATA": folder}), patch.object(picker.os, "name", "nt"), \
+            with patch.dict(os.environ, {"APPDATA": folder}), patch.object(picker, "WINDOWS", True), \
                     patch.object(picker, "_keychain", return_value=None), \
                     patch.object(picker, "_http_json", return_value=usage) as http:
                 windows = picker.usage_cursor()
