@@ -115,6 +115,8 @@ Each bar fills to the percentage used. The empty track is brighter up to where a
 
 Keys: `t` or `→` next theme, `T` or `←` previous theme, `r` refresh now, `a` toggle animation (off redraws once a second), `q` quit. The theme and animation choice are saved in the local state directory.
 
+Brand uses a white outer border. Each working provider gets the same animated border as its row in the agent selector; short panes drop the top and bottom of that border to keep the limits visible. The theme name appears in the outer border for 2.5 seconds after changing themes, then disappears.
+
 ## Iterate from either computer
 
 ```sh

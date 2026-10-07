@@ -511,7 +511,7 @@ def lit(lines, agent, t, sweep=None):
     return out
 
 
-def border_ring(agent, t, bw, height=1):
+def border_ring(agent, t, bw, height=1, solid=None):
     """Box border glyphs in the agent's gradient, lit by a wave that travels
     around the perimeter."""
     w, h = bw + 2, height + 2
@@ -522,6 +522,9 @@ def border_ring(agent, t, bw, height=1):
     ring += [(r, 0, "│") for r in range(h - 2, 0, -1)]
     cells = {}
     for i, (r, c, g) in enumerate(ring):
+        if solid is not None:
+            cells[(r, c)] = fg(solid) + g
+            continue
         hue = grad(agent, i / len(ring) * 2 - t * 0.12)
         dim, bright = mix(hue, (24, 24, 28), 0.5), mix(hue, (255, 255, 255), 0.45)
         cells[(r, c)] = fg(mix(dim, bright, wave(i, t, length=16.0, speed=7.0) ** 2)) + g

@@ -483,6 +483,10 @@ def compact_row(view, i, width, t, now):
     with LOCK:
         entry = USAGE.get(name)
         working = WORKING.get(name, 0)
+    boxed = working > 0 and width >= 4
+    if boxed:
+        width -= 2
+    t = t if view.anim else 0.4
     line = Line()
     dot = SPIN[int(t * 12) % len(SPIN)] if working else "●"
     line.put(dot, agent["color"] if brand else st["color"]).put(" ")
@@ -509,23 +513,29 @@ def compact_row(view, i, width, t, now):
             line.pad(max(len(line.cells), seg_start + share))
     else:
         line.put(" ··", SOFT)
-    return line.pad(width).paint()
+    content = line.pad(width).paint()
+    if boxed:
+        ring = ap.border_ring(agent, t, width)
+        return ring[(1, 0)] + RESET + content + ring[(1, width + 1)] + RESET
+    return content
 
 
 GAP_X = 3
 MIN_CW, MAX_CW = 24, 66
 
 
-def plan(n, width, height):
+def plan(n, width, height, heights=None):
     """Arrange the cards in the fewest columns that fit: tall panes stack them,
     wide short panes put them side by side."""
+    heights = heights or [3] * n
     for ncols in range(1, n + 1):
         cw = min(MAX_CW, (width - GAP_X * (ncols - 1)) // ncols)
         if cw < MIN_CW:
             return None
         nr = math.ceil(n / ncols)
+        body_h = sum(max(heights[r * ncols:(r + 1) * ncols]) for r in range(nr))
         for gap in (2, 1, 0):
-            if nr * 3 + (nr - 1) * gap <= height - (2 if gap == 2 else 0):
+            if body_h + (nr - 1) * gap <= height - (2 if gap == 2 else 0):
                 return ncols, cw, nr, gap
     return None
 
@@ -534,6 +544,20 @@ def overlay(cells, col, text, color, bold=False):
     for k, ch in enumerate(text):
         if 0 <= col + k < len(cells):
             cells[col + k] = f"{ap.fg(color)}{BOLD if bold else ''}{ch}{RESET}"
+
+
+def working_card(view, i, width, t, now, lids=True):
+    """The selector's border around a working provider; drop lids in short panes."""
+    content = card(view, i, width - 2, t, now)
+    agent = view.agents[i]
+    tick = int(t * 6) / 6 if view.anim else 0.4
+    ring = ap.border_ring(agent, tick, width - 2, len(content))
+    lines = [ring[(y + 1, 0)] + RESET + line + ring[(y + 1, width - 1)] + RESET
+             for y, line in enumerate(content)]
+    if lids:
+        lines.insert(0, "".join(ring[(0, c)] for c in range(width)) + RESET)
+        lines.append("".join(ring[(len(content) + 1, c)] for c in range(width)) + RESET)
+    return lines
 
 
 def render(view, cols, rows, t):
@@ -547,7 +571,9 @@ def render(view, cols, rows, t):
     if not framed:
         return [compact_row(view, i, cols, t, now) for i in range(n)][:rows]
 
-    ring = ap.border_ring(view.frame_style(), t if view.anim else 0.4, cols - 2, rows - 2)
+    brand = THEMES[view.theme]["stops"] is None
+    ring = ap.border_ring(view.frame_style(), t if view.anim else 0.4, cols - 2, rows - 2,
+                          solid=WHITE if brand else None)
     top = [ring[(0, c)] for c in range(cols)]
     bottom = [ring[(rows - 1, c)] for c in range(cols)]
 
@@ -557,11 +583,12 @@ def render(view, cols, rows, t):
     overlay(top, 3, "✦", star)
     overlay(top, 4, " usage ", TEXT, bold=True)
     th = THEMES[view.theme]["name"]
-    tag = f" ◂ {th} ▸ " if time.time() < view.toast_until else f" {th} "
-    if cols >= 12 + len(tag) + 3:
-        overlay(top, cols - 2 - len(tag), tag, TEXT if "◂" in tag else SOFT, bold="◂" in tag)
+    tag = f" ◂ {th} ▸ "
+    if now < view.toast_until and cols >= 12 + len(tag) + 3:
+        overlay(top, cols - 2 - len(tag), tag, TEXT, bold=True)
 
     with LOCK:
+        active = [WORKING.get(a["name"], 0) > 0 for a in view.agents]
         working = sum(WORKING.values())
         herdr = HERDR_OK
     status = f" {working} working " if working else " idle " if herdr else " live "
@@ -573,15 +600,19 @@ def render(view, cols, rows, t):
 
     inner_w, inner_h = cols - 4, rows - 2
     body = []
-    arrangement = plan(n, inner_w, inner_h)
+    arrangement = plan(n, inner_w, inner_h, [5 if live else 3 for live in active])
+    lids = arrangement is not None
+    if arrangement is None:
+        arrangement = plan(n, inner_w, inner_h)
     if arrangement:
         ncols, cw, nr, gap = arrangement
         grid_w = ncols * cw + (ncols - 1) * GAP_X
         left = (inner_w - grid_w) // 2
-        cards = [card(view, i, cw, t, now) for i in range(n)]
+        cards = [working_card(view, i, cw, t, now, lids) if active[i]
+                 else card(view, i, cw, t, now) for i in range(n)]
         if ncols == 1:  # stacked: a one-limit card needn't leave a ragged gap
-            cards = [c[:2] if not ap._ANSI.sub("", c[2]).strip() else c
-                     for c in cards]
+            cards = [c[:2] if not active[i] and not ap._ANSI.sub("", c[2]).strip() else c
+                     for i, c in enumerate(cards)]
         for r in range(nr):
             if r:
                 body += [""] * gap
