@@ -52,8 +52,9 @@ def bg(rgb):
 
 def tint(rgb, amount):
     """Blend a brand color toward a dark background for the selection bar."""
-    base = (28, 28, 32)
-    return tuple(round(b + (c - b) * amount) for c, b in zip(rgb, base))
+    return (round(28 + (rgb[0] - 28) * amount),
+            round(28 + (rgb[1] - 28) * amount),
+            round(32 + (rgb[2] - 32) * amount))
 
 
 def _write_json(path, data):
@@ -325,7 +326,21 @@ SOFT = (125, 125, 135)
 
 
 def mix(a, b, amount):
-    return tuple(round(x + (y - x) * amount) for x, y in zip(a, b))
+    return (round(a[0] + (b[0] - a[0]) * amount),
+            round(a[1] + (b[1] - a[1]) * amount),
+            round(a[2] + (b[2] - a[2]) * amount))
+
+
+def fade(amount):
+    """Ease color changes with zero slope and curvature at each palette stop."""
+    return amount * amount * amount * (amount * (amount * 6 - 15) + 10)
+
+
+def rainbow_rgb(u, saturation=0.62):
+    pos = (u % 1.0) * 6
+    sector = int(pos)
+    hue = (sector + fade(pos - sector)) / 6
+    return tuple(round(c * 255) for c in colorsys.hsv_to_rgb(hue, saturation, 1.0))
 
 
 def grad(agent, u):
@@ -333,13 +348,12 @@ def grad(agent, u):
     stops = agent.get("gradient") or [agent["color"]]
     u %= 1.0
     if stops == "rainbow":
-        r, g, b = colorsys.hsv_to_rgb(u, 0.62, 1.0)
-        return (round(r * 255), round(g * 255), round(b * 255))
+        return rainbow_rgb(u)
     pos = u * len(stops)
     i = int(pos)
     a, b = stops[i % len(stops)], stops[(i + 1) % len(stops)]
     f = pos - i
-    f = f * f * (3 - 2 * f)  # smoothstep between stops
+    f = fade(f)
     return mix(a, b, f)
 
 
@@ -465,8 +479,7 @@ def agent_rows(agent, ok, width, t, selected):
     name = clip(agent["name"], left)
     if selected and agent.get("pastel") == "rainbow":
         for i, ch in enumerate(name):
-            r, g, b = colorsys.hsv_to_rgb((i / 11 - t * 0.24) % 1.0, 0.2, 1.0)  # near-white pastel
-            l1.put(ch, (round(r * 255), round(g * 255), round(b * 255)), bold=True)
+            l1.put(ch, rainbow_rgb(i / 11 - t * 0.24, 0.2), bold=True)
     elif selected:
         l1.put(name, agent.get("pastel", name_col), bold=True)
     else:

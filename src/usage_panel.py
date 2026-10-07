@@ -348,10 +348,8 @@ def _spark(name, n, now):
 def put_name(line, agent, t, bold=True):
     name = agent["name"]
     if agent.get("pastel") == "rainbow":
-        import colorsys
         for k, ch in enumerate(name):
-            r, g, b = colorsys.hsv_to_rgb((k / 11 - t * 0.24) % 1.0, 0.2, 1.0)
-            line.put(ch, (round(r * 255), round(g * 255), round(b * 255)), bold=bold)
+            line.put(ch, ap.rainbow_rgb(k / 11 - t * 0.24, 0.2), bold=bold)
     else:
         line.put(name, agent.get("pastel") or agent["color"], bold=bold)
 
@@ -391,9 +389,9 @@ def card(view, i, cw, t, now):
         entry = USAGE.get(name)
         fetching = name in INFLIGHT
         working = WORKING.get(name, 0)
-    # a working card's glow steps at 6 fps: smooth to the eye, and the redraw
-    # skips its lines on the frames in between
-    step = int(t * 6) / 6 if working and view.anim else 0.0
+    # Working cards share the border's continuous 60 fps clock. Idle cards
+    # still reuse their cached contents between countdown updates.
+    step = t if working and view.anim else 0.0
     key = (i, cw, view.theme, view.anim, int(now), entry and entry["fetched"], fetching,
            int(t * 3) % 3 if fetching else 0, working, len(HISTORY.get(name) or ()), step)
     if CARDS.get(i, (None,))[0] != key:
@@ -549,7 +547,7 @@ def working_card(view, i, width, t, now, lids=True, active=True):
     """Reserve the selector's border space, drawing it only while working."""
     content = card(view, i, width - 2, t, now)
     agent = view.agents[i]
-    tick = int(t * 6) / 6 if view.anim else 0.4
+    tick = t if view.anim else 0.4
     style = agent if THEMES[view.theme]["stops"] is None else view.style(i)
     ring = ap.border_ring(style, tick, width - 2, len(content)) if active else None
     lines = [(ring[(y + 1, 0)] + RESET if active else " ") + line
@@ -678,10 +676,16 @@ def run(view, providers):
     sys.stdout.flush()
     try:
         terminal.__enter__()
+        frame_at = time.monotonic()
         while True:
             draw()
-            # ~15 fps while animating; once a second otherwise (for the countdowns)
-            if not terminal.wait(1 / 15 if view.anim else 1.0):
+            # Fixed deadlines keep render time inside the 60 fps frame budget.
+            step = ap.FRAME_TIME if view.anim else 1.0
+            frame_at += step
+            now = time.monotonic()
+            if frame_at < now:
+                frame_at = now
+            if not terminal.wait(max(0, frame_at - now)):
                 continue
             key = terminal.read_key()
             if key in ("t", "right", "l"):
