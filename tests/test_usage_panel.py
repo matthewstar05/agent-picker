@@ -165,6 +165,21 @@ class UsagePanelTests(unittest.TestCase):
         self.assertIn("╭", plain[working - 1])
         self.assertIn("╰", plain[working + 3])
 
+    def test_idle_cards_center_when_the_last_card_is_short(self):
+        names = ["Claude", "Codex", "Antigravity", "Cursor", "Kiro"]
+        panel.PRESENT.clear()
+        panel.PRESENT.update({n: 1 for n in names})
+        panel.WORKING.clear()
+        now = time.time()
+        for n in names:
+            windows = [{"label": "5h", "pct": 20, "resets": now + 9000},
+                       {"label": "wk", "pct": 5, "resets": now + 400000}]
+            panel.USAGE[n] = {"windows": windows[:1] if n == "Kiro" else windows, "fetched": now}
+        view = panel.View([a for a in panel.ap.AGENTS if a["name"] in names])
+        plain = [ANSI.sub("", "".join(l) if isinstance(l, tuple) else l) for l in panel.render(view, 36, 22, 1.0)]
+        shown = [y for y, line in enumerate(plain[1:-1]) if line.strip("│ ")]
+        self.assertEqual(shown[0], 20 - 1 - shown[-1], plain)
+
     def test_cli_without_a_usage_reader_says_so(self):
         opencode = next(a for a in panel.ap.AGENTS if a["name"] == "OpenCode")
         panel.PRESENT.clear()

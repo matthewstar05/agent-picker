@@ -867,6 +867,13 @@ def render(view, cols, rows, t):
                 row_cards = cards[r * ncols:(r + 1) * ncols]
                 for y in range(max(len(c) for c in row_cards)):
                     body.append(join([c[y] if y < len(c) else " " * cw for c in row_cards]))
+            if not lids:
+                # Center what shows, not the slots: a short last card (Kiro's
+                # single limit) would otherwise leave its spare rows at the bottom.
+                while body and not ap._ANSI.sub("", body[-1]).strip():
+                    body.pop()
+                while body and not ap._ANSI.sub("", body[0]).strip():
+                    body.pop(0)
             pad_top = max(0, (inner_h - len(body)) // 2)
     elif n:
         body = [compact_row(view, i, inner_w, t, now) for i in range(n)]
