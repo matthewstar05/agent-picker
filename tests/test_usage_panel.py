@@ -83,6 +83,25 @@ class UsagePanelTests(unittest.TestCase):
             w = {"label": label, "pct": pct, "resets": now + left}
             self.assertEqual(panel.concerning(w, now), expected, (label, pct, left))
 
+    def test_working_card_uses_white_text_for_reset_timers(self):
+        now = time.time()
+        entry = {"windows": [{"label": "5h", "pct": 20, "resets": now + 7200}], "fetched": now}
+        view = self.view()
+        idle_card = panel._card(view, 0, 50, 0, now, entry, False, 0)
+        idle_line = next(line for line in idle_card if "↻" in line)
+        self.assertIn(panel.ap.fg(panel.SOFT), idle_line)
+        self.assertNotIn(panel.ap.fg(panel.TEXT), idle_line)
+
+        work_card = panel._card(view, 0, 50, 0, now, entry, False, 1)
+        work_line = next(line for line in work_card if "↻" in line)
+        self.assertIn(panel.ap.fg(panel.TEXT), work_line)
+        self.assertNotIn(panel.ap.fg(panel.SOFT), work_line)
+
+        entry_concerning = {"windows": [{"label": "5h", "pct": 80, "resets": now + 3 * 3600}], "fetched": now}
+        concern_card = panel._card(view, 0, 50, 0, now, entry_concerning, False, 1)
+        concern_line = next(line for line in concern_card if "↻" in line)
+        self.assertIn(panel.ap.fg(panel.CONCERN), concern_line)
+
     def test_several_instances_animate_without_breaking_layout(self):
         panel.WORKING["Claude"] = 3
         view = self.view()
@@ -157,7 +176,7 @@ class UsagePanelTests(unittest.TestCase):
 
     def test_processes_map_to_profiles_through_launchers(self):
         self.assertEqual(panel.from_argv(["node", "/usr/lib/node_modules/opencode/bin/opencode.js"]), "OpenCode")
-        self.assertEqual(panel.from_argv(["/opt/homebrew/bin/qwen", "--yolo"]), "Qwen Code")
+        self.assertEqual(panel.from_argv(["/opt/homebrew/bin/gemini", "--yolo"]), "Gemini CLI")
         self.assertEqual(panel.from_argv(["kiro-cli-chat"]), "Kiro")
         self.assertIsNone(panel.from_argv(["zsh"]))
         procs = [(1, 0, ["zsh"]), (2, 1, ["claude"]), (3, 2, ["claude", "mcp"]), (4, 1, ["codex"]),
@@ -168,7 +187,7 @@ class UsagePanelTests(unittest.TestCase):
         self.assertEqual(panel.provider_of("claude"), "Claude")
         self.assertEqual(panel.provider_of("codex"), "Codex")
         self.assertEqual(panel.provider_of("agy"), "Antigravity")
-        self.assertEqual(panel.provider_of("qwen"), "Qwen Code")
+        self.assertEqual(panel.provider_of("gemini"), "Gemini CLI")
         self.assertEqual(panel.provider_of("opencode"), "OpenCode")
         self.assertIsNone(panel.provider_of(None))
         self.assertIsNone(panel.provider_of("bash"))

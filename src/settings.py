@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 from platform_runtime import WINDOWS
+import provider_defaults
 
 ROOT = Path(__file__).resolve().parents[1]
 

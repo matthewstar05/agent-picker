@@ -59,14 +59,16 @@ agent --picker-launch Codex           directly launch Codex
 agent --picker-doctor                 inspect detected providers and local paths
 agent --picker-update                 pull shared updates from GitHub
 agent --picker-catalog                every known CLI, its colors, and whether it is installed
-agent --picker-usage                  open on the usage panel
 agent --picker-help                   show picker help
 agent -- --picker-help                pass a management-looking argument to the CLI
 usage                                the same command as agent
-herdr-ai [label]                     open a herdr workbench of every agent in this folder
 ```
 
-Inside the command: `u` switches between the agent selector and the usage panel, and `s` opens settings from either one. Under **Agents** in settings, set an installed CLI to hidden to keep it out of the selector; `--picker-launch` and `herdr-ai` still run it.
+Inside the command: `u` switches between the agent selector and the usage panel, and `s` opens general settings from either one.
+
+In the agent selector, highlight a provider and press `→` to open its defaults. `↑↓` moves between **Model**, **Effort**, and **Bypass Permissions**. Arrow keys do not change the model. Enter opens a scrollable model list; `↑↓` or `←→` move through it and Enter chooses the model. On Effort, `←→` cycles levels; on Bypass Permissions the same keys toggle On/Off. Space or Enter also changes Effort or Bypass Permissions. Esc returns to the selector. If nothing changed, it returns immediately. If something changed, Esc shows the new model and effort, each changed value, and asks you to confirm before saving. If you then quit the selector with Esc or q after saving changes, a confirmation opens with **Stay** selected. The saved defaults remain when you reopen `agent`.
+
+The five original providers support these controls. Cursor effort is part of its model identifier; changing it preserves any fast suffix or existing bracket parameters. Gemini effort is also part of the model id (`gemini-3.8-flash-high`), so those models have no separate Effort control and do not pass `--effort`. Other catalog providers keep their own defaults until their launch controls are supported. Model choices come from bundled provider catalogs, refreshed locally from installed CLIs or their caches in the background. Your current model stays selectable. Cursor effort choices follow the available model variants; Codex and Claude use the effort levels reported in their catalogs. Model access still depends on your account.
 
 Updates are explicit, use `git pull --ff-only`, and refuse a dirty checkout. If the two machines have diverging commits, resolve them with normal Git operations before updating. The command does not commit, stash, reset, push, or update provider CLIs automatically.
 
@@ -86,9 +88,9 @@ Changes are saved in the machine-local config as `agents.<Provider>.defaults`, p
 | Codex | gpt-6.1-sol | high |
 | Cursor | grok-4.7-high | encoded in model argument |
 | Kiro | claude-opus-5.5 | medium |
-| Antigravity | gemini-3.8-flash-high | high |
+| Antigravity | gemini-3.8-flash-high | encoded in model argument |
 
-The defaults retain the original permission bypass flags and automatic current-folder trust behavior. To use normal approvals, turn **Bypass Permissions** Off in that provider's defaults. Set `AGENT_PICKER_NO_PRETRUST=1` to skip the picker’s folder-trust writes. Only the selected provider's current directory is pre-trusted.
+The defaults retain the original permission bypass flags and automatic current-folder trust behavior. Turn **Bypass Permissions** Off in a provider's defaults to remove its bypass flags and skip new folder-trust writes for that launch. Claude explicitly uses its default permission mode; Codex uses on-request approvals with the workspace-write sandbox. Set `AGENT_PICKER_NO_PRETRUST=1` to skip all picker folder-trust writes. Only the selected provider's current directory is pre-trusted when bypass is On.
 
 Use the config path printed by `--picker-doctor` for machine-specific executable paths or launch arguments. On macOS it is normally `~/.config/agent-picker/config.json`; on Windows it is `%APPDATA%\agent-picker\config.json`.
 
@@ -120,7 +122,7 @@ Claude's [authentication documentation](https://code.claude.com/docs/en/authenti
 
 ## Agent catalog
 
-[agents.json](agents.json) is a catalog of agent CLIs: the five original profiles plus OpenCode, Qwen Code, GitHub Copilot CLI, Amp, Aider, Goose, Crush, Factory Droid, Cline, Auggie, Kimi CLI, and Continue. The picker lists only the ones installed on this computer, found on PATH or in common install folders that aren't always on it (`~/.opencode/bin`, `~/.bun/bin`, npm-global, cargo, Homebrew). The rest stay in the catalog with their color schemes and appear as soon as their CLI is installed. `agent --picker-catalog` shows every entry with its colors and status.
+[agents.json](agents.json) is a catalog of agent CLIs: the five original profiles plus OpenCode, Gemini CLI, Qwen Code, GitHub Copilot CLI, Amp, Aider, Goose, Crush, Factory Droid, Cline, Auggie, Kimi CLI, and Continue. The picker lists only the ones installed on this computer, found on PATH or in common install folders that aren't always on it (`~/.opencode/bin`, `~/.bun/bin`, npm-global, cargo, Homebrew). The rest stay in the catalog with their color schemes and appear as soon as their CLI is installed. `agent --picker-catalog` shows every entry with its colors and status.
 
 Catalog entries other than the original five launch their CLI with no arguments, so they use that CLI's own default model and permission prompts. Add model or permission flags in the local config once a CLI is installed and you have checked its flags. To add a CLI, append a profile with `name`, `color`, `pastel`, `gradient`, `short`, `detail`, `argv`, and `detect` (the names it shows up under in Herdr and in process lists). Usage limits are read only for Claude, Codex, Antigravity, Cursor, and Kiro; other CLIs' cards say no usage reader exists yet.
 
@@ -138,19 +140,9 @@ Keys: `t` or `→` next theme, `T` or `←` previous theme, `r` refresh now, `a`
 
 Brand uses an animated gray outer border. Each working provider gets the same animated border as its row in the agent selector; choosing another theme changes both the outer border and provider borders to that theme. Provider titles and their dots retain their brand colors in every theme. Short panes drop the top and bottom of provider borders to keep the limits visible. Border space is reserved even while idle, so titles, bars, and card positions stay fixed as providers start or stop working. The layout changes only when the pane size or installed providers change. The theme name appears in the outer border for 2.5 seconds after changing themes, then disappears.
 
-## herdr-ai workbench
-
-`herdr-ai` opens a [herdr](https://herdr.dev) tab rooted in the current folder: Antigravity, Codex, Cursor, and Claude panes, an agent selector, a usage panel, and a plain terminal. Inside herdr it adds a tab to the current workspace; outside, it creates a workspace and attaches. Each agent pane runs `agent --picker-launch <Name>`, so it uses your saved model, effort, and permission defaults. A provider that is not installed leaves an error in its pane and the rest still open.
-
-```text
-herdr-ai                  label the tab with the folder name
-herdr-ai my-label         choose the label
-HERDR_AI_DRY=1 herdr-ai   build the layout with plain shells
-```
-
-It lives in [src/herdr_ai.py](src/herdr_ai.py) and needs only herdr and Python, so both computers run the same file and pick up changes with `agent --picker-update`. The installers add the `herdr-ai` launcher (`~/.local/bin/herdr-ai` on macOS, `herdr-ai.cmd` on Windows). On Windows, herdr is in beta. If your Python path contains spaces, panes run the installer's `agent-picker.cmd`, which must be on the PATH herdr started with; run `herdr server stop` once after installing if herdr was already running.
-
 ## Settings
+
+Provider defaults are saved as an `agents.<Provider>.defaults` object in the machine-local config, separately from the general settings below. This preserves local executable paths and unrelated arguments without changing `agents.json` or writing your preferences into Git.
 
 Press `s` on any screen. `↑↓` choose a setting, `←→` or Enter change it, Esc returns to the screen you came from. Changes apply immediately and are saved to `preferences.json` in the local state directory.
 

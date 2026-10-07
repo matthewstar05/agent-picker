@@ -68,8 +68,6 @@ if (-not (Test-Path -LiteralPath $herdrAiPath) -or [IO.File]::ReadAllText($herdr
 }
 $escapedPython = $Python.Replace("'", "''")
 $escapedEntry = $entry.Replace("'", "''")
-# herdr panes inherit the herdr server's PATH, which predates this install
-# when herdr was already running, so herdr-ai is also a profile function.
 $escapedHerdrAi = (Join-Path $repo 'src\herdr_ai.py').Replace("'", "''")
 $start = '# >>> agent-picker managed >>>'
 $end = '# <<< agent-picker managed <<<'

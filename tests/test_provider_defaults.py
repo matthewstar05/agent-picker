@@ -57,7 +57,11 @@ class DefaultsTests(unittest.TestCase):
             original = copy.deepcopy(agent)
             values = dict(defaults.current(agent), effort="low", bypass_permissions=False)
             defaults.apply(agent, values)
-            self.assertEqual(defaults.current(agent)["effort"], "low", name)
+            if name == "Antigravity":
+                self.assertEqual(defaults.current(agent)["model"], "gemini-3.8-flash-high")
+                self.assertEqual(defaults.option(agent["argv"], ("--effort",)), "")
+            else:
+                self.assertEqual(defaults.current(agent)["effort"], "low", name)
             self.assertFalse(defaults.current(agent)["bypass_permissions"], name)
             values["bypass_permissions"] = True
             defaults.apply(agent, values)
@@ -89,16 +93,17 @@ class DefaultsTests(unittest.TestCase):
         menu = defaults.Menu(self.agents()["Claude"])
         original = menu.values["model"]
         menu.handle("right")
-        self.assertNotEqual(menu.values["model"], original)
         menu.handle("left")
         self.assertEqual(menu.values["model"], original)
         menu.handle("\r")
         self.assertTrue(menu.browsing)
         menu.handle("down")
-        chosen = menu.values["model"]
+        self.assertEqual(menu.values["model"], original)
+        chosen = menu.models()[menu.model_index]["id"]
         menu.handle("\r")
         self.assertFalse(menu.browsing)
         self.assertEqual(menu.values["model"], chosen)
+        self.assertNotEqual(chosen, original)
         menu.handle("down")
         menu.handle("right")
         menu.handle("down")
@@ -119,7 +124,7 @@ class DefaultsTests(unittest.TestCase):
 
     def test_keyboard_flow_saves_then_confirms_selector_exit(self):
         import usage_panel
-        keys = iter(["right", "down", "left", "down", "left", "esc",
+        keys = iter(["right", "down", "left", "down", "left", "esc", "right", "\r",
                      "esc", "esc", "esc", "right", "\r"])
         frames = []
         class Keyboard:
@@ -141,11 +146,9 @@ class DefaultsTests(unittest.TestCase):
             stack.enter_context(patch.object(picker, "AGENTS", agents))
             stack.enter_context(patch.object(picker, "installed", return_value=True))
             stack.enter_context(patch.object(picker, "load_last", return_value=0))
-            import preferences
-            import usage_panel
-            stack.enter_context(patch.object(usage_panel, "start"))   # no live usage reads
-            stack.enter_context(patch.object(preferences, "_values", {}))   # default screens
-            stack.enter_context(patch.object(preferences, "put"))
+            stack.enter_context(patch.object(picker, "load_usage"))
+            stack.enter_context(patch.object(usage_panel, "start"))
+            stack.enter_context(patch.object(picker.preferences, "get", return_value="agents"))
             stack.enter_context(patch.object(picker, "Terminal", Keyboard))
             stack.enter_context(patch.object(sys, "stdout", io.StringIO()))
             self.assertIsNone(picker.choose())
@@ -153,7 +156,43 @@ class DefaultsTests(unittest.TestCase):
             self.assertEqual(saved, {"model": "opus", "effort": "low", "bypass_permissions": False})
         visible = picker._ANSI.sub("", "".join(frames))
         self.assertGreaterEqual(visible.count("Are you sure"), 2)
+        self.assertRegex(visible, r"Model +opus")
+        self.assertRegex(visible, r"Effort +low")
+        self.assertIn("medium → low", visible)
+        self.assertIn("On → Off", visible)
         self.assertIn("Your changes are saved locally", visible)
+
+    def test_unchanged_defaults_return_without_prompt(self):
+        import usage_panel
+        keys = iter(["right", "esc", "esc"])
+        frames = []
+        class Keyboard:
+            def __enter__(self):
+                self.old = True
+                return self
+            def __exit__(self, *args):
+                pass
+            def wait(self, seconds):
+                return True
+            def read_key(self):
+                return next(keys)
+            def write(self, text):
+                frames.append(text)
+        with tempfile.TemporaryDirectory() as folder, ExitStack() as stack:
+            path = Path(folder) / "config.json"
+            stack.enter_context(patch.dict(os.environ, AGENT_PICKER_CONFIG=str(path)))
+            stack.enter_context(patch.object(picker, "AGENTS", list(self.agents().values())[:5]))
+            stack.enter_context(patch.object(picker, "installed", return_value=True))
+            stack.enter_context(patch.object(picker, "load_last", return_value=0))
+            stack.enter_context(patch.object(picker, "load_usage"))
+            stack.enter_context(patch.object(usage_panel, "start"))
+            stack.enter_context(patch.object(picker.preferences, "get", return_value="agents"))
+            stack.enter_context(patch.object(picker, "Terminal", Keyboard))
+            stack.enter_context(patch.object(sys, "stdout", io.StringIO()))
+            self.assertIsNone(picker.choose())
+            self.assertFalse(path.exists())
+        visible = picker._ANSI.sub("", "".join(frames))
+        self.assertNotIn("Are you sure", visible)
 
     def test_saved_defaults_reach_fake_provider_on_next_invocation(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -205,14 +244,15 @@ class Keyboard(a.Terminal):
         return key
 a.Terminal=Keyboard
 a.installed=lambda _:True
-a.refresh_usage=lambda _:None
+a.load_usage=lambda:None
+u.start=lambda _:None
 a.main()
 '''
             env = dict(os.environ, AGENT_PICKER_CONFIG=str(root / "config.json"), AGENT_PICKER_STATE_HOME=str(root / "state"))
             ready, acknowledged = root / "ready", root / "keys"
             process = subprocess.Popen([sys.executable, "-c", code, str(ROOT / "src"), str(ready), str(acknowledged)], stdin=slave, stdout=slave, stderr=slave, env=env)
             output = b""
-            keys = [b"\x1b[C", b"\x1b[B", b"\x1b[D", b"\x1b[B", b"\x1b[D", b"\x1b", b"\x1b", b"\x1b[C", b"\r"]
+            keys = [b"\x1b[C", b"\x1b[B", b"\x1b[D", b"\x1b[B", b"\x1b[D", b"\x1b", b"\x1b[C", b"\r", b"\x1b", b"\x1b[C", b"\r"]
             start, sent = time.monotonic(), 0
             try:
                 while time.monotonic() - start < 15:

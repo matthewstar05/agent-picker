@@ -620,7 +620,7 @@ def _card(view, i, cw, t, now, entry, fetching, working, dots=None, rows=3):
             pcol = pct_color(w, st, now)
             line.put(f" {pct:3.0f}%", mix(pcol, SOFT, 0.5) if stale else pcol, bold=True)
             if tail_w and tail:
-                line.put("  " + tail, CONCERN if concerning(w, now) else SOFT)
+                line.put("  " + tail, CONCERN if concerning(w, now) else (TEXT if live else SOFT))
             lines.append(line.pad(cw))
     while len(lines) < 3:
         lines.append(Line().pad(cw))

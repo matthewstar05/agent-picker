@@ -60,14 +60,28 @@ class CatalogTests(unittest.TestCase):
         defaults.apply(agent, menu.values)
         self.assertEqual(defaults.option(agent["argv"], ("--model",)), "auto")
 
-    def test_antigravity_effort_uses_matching_model_variant(self):
+    def test_antigravity_gemini_effort_is_the_model(self):
         agent = self.agent("Antigravity")
+        self.assertEqual(defaults.current(agent)["model"], "gemini-3.8-flash-high")
         menu = defaults.Menu(agent)
-        self.assertNotIn("provider default", menu.efforts())
-        values = dict(defaults.current(agent), effort="low")
-        defaults.apply(agent, values)
+        ids = [row["id"] for row in menu.models()]
+        self.assertIn("gemini-3.8-flash-low", ids)
+        self.assertNotIn("effort", menu.fields())
+        menu.handle("left")
+        menu.handle("right")
+        self.assertEqual(menu.values["model"], "gemini-3.8-flash-high")
+        defaults.apply(agent, dict(menu.values, model="gemini-3.8-flash-low"))
         self.assertEqual(defaults.option(agent["argv"], ("--model",)), "gemini-3.8-flash-low")
-        self.assertEqual(defaults.option(agent["argv"], ("--effort",)), "low")
+        self.assertEqual(defaults.option(agent["argv"], ("--effort",)), "")
+
+    def test_cursor_gemini_model_has_no_separate_effort(self):
+        agent = self.agent("Cursor")
+        menu = defaults.Menu(agent)
+        row = next(row for row in menu.models() if row["id"] == "gemini-3.8-flash-high")
+        menu.select_model(row)
+        self.assertNotIn("effort", menu.fields())
+        defaults.apply(agent, menu.values)
+        self.assertEqual(defaults.option(agent["argv"], ("--model",)), "gemini-3.8-flash-high")
 
     def test_catalog_efforts_and_model_browser_fit_small_panes(self):
         agent = self.agent("Codex")

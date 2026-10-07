@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Agent selector: pick a coding agent or edit its local launch defaults.
 
-Each entry launches its CLI with your saved defaults. Extra arguments are passed through to the chosen CLI.
+Extra arguments are passed through to the chosen CLI.
 Keys: up/down or j/k move, 1-5 jump, Enter launches, u usage panel, s settings,
 q or Esc quits. The usage command runs this same program.
 Draws on the alternate screen and fits itself to the terminal on every frame.
@@ -661,63 +661,218 @@ def render(selected, available, t, cols, rows, sweep=None, agents=None):
     return lines[:rows]
 
 
-def render_defaults(menu, cols, rows, t):
-    """A provider's defaults and scrollable model choices."""
-    width = min(MAX_IW, cols - 2)
-    name = menu.agent["name"]
-    if menu.browsing:
-        models = menu.models()
-        index = min(menu.model_index, len(models) - 1)
-        room = max(1, rows - 4)
-        first = min(max(0, index - room // 2), max(0, len(models) - room))
-        lines = [(f"{name} models ({index + 1}/{len(models)})", False)]
-        for i, row in enumerate(models[first:first + room], first):
-            lines.append((("❯ " if i == index else "  ") + row.get("name", row["id"]), i == index))
-        lines += [("↑↓ / ←→ choose · enter done", False), ("esc save & back", False)]
-        return [(BOLD + fg(menu.agent["color"]) if active else FAINT) + clip(text, cols) + RESET for text, active in lines[:rows]]
-    content = [(f"{name} defaults", True)]
-    if menu.original is None:
-        content.append(("Defaults are managed by this provider.", False))
-    else:
-        for i, (key, label) in enumerate(zip(menu.fields, menu.labels)):
-            value = menu.values[key]
-            value = ("On" if value else "Off") if key == "bypass_permissions" else value
-            mark = "❯ " if menu.index == i else "  "
-            content.append((mark + label + ": " + str(value), menu.index == i))
-        if menu.index == 0:
-            hint = "←→ choose model · enter browse models"
-        elif menu.index == 1:
-            hint = "←→ / space cycle effort"
-        else:
-            hint = "←→ / space toggle"
-        content.append(("", False))
-        content.append((menu.error or hint, False))
-        content.append(("Changed" if menu.changed else "Saved locally", False))
-    footer = "↑↓ move · esc save & back"
-    if width < 26 or rows < 7:
-        text = content[:1] + (content[1:4] if rows >= 4 else [content[menu.index + 1]])
-        text += [(menu.error or footer, False)]
-        return [fg(menu.agent["color"]) + clip(line, cols) + RESET for line, _ in text[:rows]]
+GOLD = {"color": (225, 165, 40), "gradient": [(225, 165, 40), (255, 222, 120), (255, 190, 90)]}
+
+
+def panel(title, body, hints, cols, rows, t, plain):
+    """The selector's frame around any screen: a glinting star title, framed rows,
+    and the key hints set into the bottom border.
+
+    body(bw) returns (kind, content, visible) rows. When rows run short, "gap"
+    rows go first, then "lid" rows, then the rest scroll around "selected".
+    plain is the fallback for panes too small for a frame: (text, active) pairs."""
+    iw = min(MAX_IW, cols - 2)
+    if iw < 26 or rows < 5:
+        lines = [(BOLD if active else FAINT) + clip(text, cols) + RESET for text, active in plain]
+        at = next((i for i, (_, active) in enumerate(plain) if active), 0)
+        first = min(max(0, at - rows // 2), max(0, len(lines) - rows))
+        return lines[first:first + max(0, rows)]
     edge = fg(FRAME)
-    inner = width - 2
-    lines = [edge + "╭" + "─" * width + "╮" + RESET]
-    for line, selected in content:
-        shown = clip(line, inner)
-        style = (BOLD + fg(menu.agent["color"])) if selected else FAINT
-        lines.append(edge + "│ " + style + shown + RESET + " " * (inner - len(shown)) + " " + edge + "│" + RESET)
-    shown = clip(footer, inner)
-    lines.append(edge + "│ " + FAINT + shown + RESET + " " * (inner - len(shown)) + " " + edge + "│" + RESET)
-    lines.append(edge + "╰" + "─" * width + "╯" + RESET)
+    bw = iw - 4
+
+    def framed(content, visible):
+        return f"{edge}│{RESET}{content}{' ' * max(0, iw - visible)}{edge}│{RESET}"
+
+    star = fg(mix((225, 165, 40), (255, 222, 120), wave(0, t, speed=3.0))) + "✦" + RESET
+    title = clip(title, iw - 6)
+    top = f"{edge}╭─{RESET} {star} {BOLD}{title}{RESET} {edge}{'─' * max(0, iw - len(title) - 5)}╮{RESET}"
+    hint = next((h for h in hints if len(h) <= iw - 2), "")
+    bottom = f"{edge}╰─{RESET}{FAINT}{hint}{RESET}{edge}{'─' * (iw - 1 - len(hint))}╯{RESET}"
+
+    entries = [(kind, framed(content, visible)) for kind, content, visible in body(bw)]
+    lines = [top, framed("", 0)] + [line for _, line in entries] + [framed("", 0), bottom]
     if len(lines) > rows:
-        lines = lines[:5] + lines[-2:]
+        lines = [top] + [line for kind, line in entries if kind != "gap"] + [bottom]
+    if len(lines) > rows:
+        kept = [(kind, line) for kind, line in entries if kind not in ("gap", "lid")]
+        at = next((i for i, (kind, _) in enumerate(kept) if kind == "selected"), 0)
+        room = max(1, rows - 2)
+        first = min(max(0, at - room // 2), max(0, len(kept) - room))
+        lines = [top] + [line for _, line in kept[first:first + room]] + [bottom]
     return lines[:rows]
 
 
-def render_quit_confirmation(choice, cols, rows):
-    lines = ["Are you sure you want to quit agent selector?", "Your changes are saved locally.", "",
-             ("❯ Stay     Quit" if choice == 0 else "  Stay   ❯ Quit"),
-             "←→ choose · enter confirm · esc stay"]
-    return [FAINT + clip(line, cols) + RESET for line in lines[:rows]]
+def ringed(agent, lines, t, bw):
+    """Rows inside the agent's glowing ring and lit by its gradient, as panel rows."""
+    ring = border_ring(agent, t, bw, height=len(lines))
+    lid = lambda r: ("lid", " " + "".join(ring[(r, c)] for c in range(bw + 2)) + RESET, bw + 3)
+    out = [lid(0)]
+    for y, line in enumerate(lit(lines, agent, t)):
+        out.append(("selected", " " + ring[(y + 1, 0)] + RESET + line + ring[(y + 1, bw + 1)] + RESET, bw + 3))
+    return out + [lid(len(lines) + 1)]
+
+
+def flat(line, bw, kind="row"):
+    return (kind, "  " + line.pad(bw).paint(), bw + 2)
+
+
+def section(text, bw):
+    return ("gap", "  " + fg(LABEL) + clip(text.upper(), bw) + RESET, 2 + min(len(text), bw))
+
+
+def note(text, bw, color=SOFT, kind="note"):
+    shown = clip(text, bw - 1)
+    return (kind, "   " + fg(color) + shown + RESET, 3 + len(shown))
+
+
+def buttons(agent, labels, choice, t, bw):
+    """A row of buttons; the chosen one sits in the agent's glowing ring."""
+    total = sum(len(label) + 4 for label in labels) + 3 * (len(labels) - 1)
+    if total > bw:
+        text = "   ".join(("❯ " if i == choice else "  ") + label for i, label in enumerate(labels))
+        return [("selected", "  " + BOLD + clip(text, bw) + RESET, 2 + min(len(text), bw))]
+    left = (bw - total) // 2
+    parts = [" " * left, " " * left, " " * left]
+    for i, label in enumerate(labels):
+        inner = len(label) + 2
+        if i == choice:
+            ring = border_ring(agent, t, inner, height=1)
+            face = lit([Line().put(f" {label} ", (255, 255, 255), bold=True)], agent, t)[0]
+            parts[0] += "".join(ring[(0, c)] for c in range(inner + 2)) + RESET
+            parts[1] += ring[(1, 0)] + RESET + face + ring[(1, inner + 1)] + RESET
+            parts[2] += "".join(ring[(2, c)] for c in range(inner + 2)) + RESET
+        else:
+            parts[0] += " " * (inner + 2)
+            parts[1] += f"  {fg(SOFT)}{label}{RESET}  "
+            parts[2] += " " * (inner + 2)
+        if i < len(labels) - 1:
+            parts = [p + "   " for p in parts]
+    visible = 2 + left + total
+    return [("lid", "  " + parts[0], visible), ("selected", "  " + parts[1], visible), ("lid", "  " + parts[2], visible)]
+
+
+def pair(label, value, bw, label_color, value_color, mark="   ", mark_color=None, bold=False):
+    """'   Label ........ value' with the value right-aligned, as a Line bw wide."""
+    line = Line().put(mark, mark_color or label_color).put(clip(label, bw // 2), label_color, bold=bold)
+    shown = clip(value, max(1, bw - len(line.cells) - 3))
+    line.at(max(len(line.cells) + 2, bw - len(shown) - 1), shown, value_color, bold=bold)
+    return line.pad(bw)
+
+
+def render_defaults(menu, cols, rows, t):
+    """A provider's defaults, or its scrollable model list while browsing."""
+    agent = menu.agent
+    name = agent["name"]
+    accent = tuple(agent.get("pastel")) if isinstance(agent.get("pastel"), list) else agent["color"]
+    if menu.browsing:
+        return render_models(menu, cols, rows, t, accent)
+    if menu.original is None:
+        message = "Defaults are managed by this provider."
+        return panel(f"{name} defaults", lambda bw: [note(message, bw)], [" esc back ", ""], cols, rows, t,
+                     [(f"{name} defaults", True), (message, False)])
+    fields = menu.fields()
+    menu.index = min(menu.index, len(fields) - 1)
+    field = fields[menu.index]
+    hint = {"model": "⏎ browse models", "effort": "←→ cycle effort"}.get(field, "←→ toggle")
+
+    def body(bw):
+        out = [("row", "  " + fg(agent["color"]) + "●" + RESET + " " + fg(accent) + BOLD + clip(name, bw - 2) + RESET,
+                4 + min(len(name), bw - 2)), ("gap", "", 0)]
+        for i, key in enumerate(fields):
+            value = menu.shown(key, menu.values[key])
+            moved = menu.values[key] != menu.original[key]
+            if i == menu.index:
+                shown = f"{value}  ⏎" if key == "model" else f"◂ {value} ▸"
+                line = pair(menu.LABELS[key], shown, bw, (245, 245, 245), (255, 255, 255), " ❯ ", (255, 255, 255), True)
+                out += ringed(agent, [line], t, bw)
+            else:
+                line = pair(menu.LABELS[key], value, bw, (205, 205, 212), accent if moved else (190, 190, 198),
+                            " • " if moved else "   ", agent["color"])
+                out.append(flat(line, bw))
+        out.append(("gap", "", 0))
+        if menu.error:
+            out.append(note(menu.error, bw, HOT))
+        elif menu.changed:
+            out.append(note("● changed · esc to review and save", bw, accent))
+        else:
+            out.append(note("✓ saved locally", bw, OK))
+        return out
+
+    plain = [(f"{name} defaults", False)] + [
+        (("❯ " if i == menu.index else "  ") + menu.LABELS[k] + ": " + menu.shown(k, menu.values[k]), i == menu.index)
+        for i, k in enumerate(fields)] + [(menu.error or hint, False)]
+    hints = [f" ↑↓ move · {hint} · esc back ", f" {hint} · esc back ", " esc back ", ""]
+    return panel(f"{name} defaults", body, hints, cols, rows, t, plain)
+
+
+def render_models(menu, cols, rows, t, accent):
+    agent = menu.agent
+    models = menu.models()
+    index = min(menu.model_index, len(models) - 1)
+    current = menu.values["model"]
+
+    def body(bw):
+        room = max(1, rows - 8)
+        first = min(max(0, index - room // 2), max(0, len(models) - room))
+        out = [note(f"{index + 1} of {len(models)}", bw, LABEL, "gap")]
+        for i, row in enumerate(models[first:first + room], first):
+            label = row.get("name", row["id"])
+            tag = "current" if row["id"] == current else ""
+            if i == index:
+                line = pair(label, tag, bw, (245, 245, 245), (255, 255, 255), " ❯ ", (255, 255, 255), True)
+                out += ringed(agent, [line], t, bw)
+            else:
+                mark = " ● " if row["id"] == current else "   "
+                out.append(flat(pair(label, tag, bw, (205, 205, 212), accent, mark, agent["color"]), bw))
+        return out
+
+    plain = [(("❯ " if i == index else "  ") + row.get("name", row["id"]), i == index) for i, row in enumerate(models)]
+    hints = [" ↑↓ move · ⏎ choose · esc back ", " ⏎ choose · esc back ", " esc back ", ""]
+    return panel(f"{agent['name']} models", body, hints, cols, rows, t, plain)
+
+
+def render_quit_confirmation(choice, cols, rows, t=0, agent=None):
+    agent = agent or GOLD
+
+    def body(bw):
+        return [note("Your changes are saved locally.", bw), ("gap", "", 0)] + buttons(agent, ("Stay", "Quit"), choice, t, bw)
+
+    plain = [("Are you sure you want to quit agent selector?", False), ("Your changes are saved locally.", False),
+             (("❯ Stay     Quit" if choice == 0 else "  Stay   ❯ Quit"), True)]
+    hints = [" ←→ choose · ⏎ confirm · esc stay ", " ⏎ confirm · esc stay ", ""]
+    return panel("Are you sure you want to quit?", body, hints, cols, rows, t, plain)
+
+
+def render_back_confirmation(menu, choice, cols, rows, t=0):
+    """Confirm leaving provider settings after a change: the new choice, then the delta."""
+    agent = menu.agent
+    accent = tuple(agent.get("pastel")) if isinstance(agent.get("pastel"), list) else agent["color"]
+    selection, delta = menu.review()
+
+    def body(bw):
+        out = [section("selected", bw)]
+        for label, value in selection:
+            out.append(flat(pair(label, value, bw, (205, 205, 212), accent, bold=True), bw))
+        out += [("gap", "", 0), section("changes", bw)]
+        for label, old, new in delta:
+            line = Line().put("   ").put(clip(label, bw // 2), (205, 205, 212))
+            change = clip(f"{old} → {new}", max(1, bw - len(line.cells) - 3))
+            col = max(len(line.cells) + 2, bw - len(change) - 1)
+            split = change.find(" → ")
+            if split < 0:
+                line.at(col, change, accent, bold=True)
+            else:
+                line.at(col, change[:split], SOFT).at(col + split, " → ", LABEL)
+                line.at(col + split + 3, change[split + 3:], accent, bold=True)
+            out.append(flat(line, bw))
+        return out + [("gap", "", 0)] + buttons(agent, ("Stay", "Save"), choice, t, bw)
+
+    plain = [(f"Are you sure? {agent['name']} defaults", False)]
+    plain += [(f"{label}: {value}", False) for label, value in selection]
+    plain += [(f"{label}: {old} → {new}", False) for label, old, new in delta]
+    plain += [(("❯ Stay     Save" if choice == 0 else "  Stay   ❯ Save"), True)]
+    hints = [" ←→ choose · ⏎ confirm · esc stay ", " ⏎ confirm · esc stay ", ""]
+    return panel(f"Are you sure? Save {agent['name']} defaults", body, hints, cols, rows, t, plain)
 
 
 def render_settings(menu, cols, rows, t, accent):
@@ -815,7 +970,9 @@ class Screen:
                     if not same or row[part] != before[part]:
                         out.append(f"{ESC}[{y + 1};{col}H{row[part]}")
             else:
-                out.append(f"{ESC}[{y + 1};1H{row}{ESC}[K")
+                # Erase first: with autowrap off, a trailing erase would wipe a
+                # row's last cell when that row fills the width.
+                out.append(f"{ESC}[{y + 1};1H{ESC}[2K{row}")
         self.rows = frame
         if out or clear:
             self.terminal.write(f"{ESC}[?2026h{clear}{''.join(out)}{ESC}[?2026l")
@@ -886,8 +1043,10 @@ def choose(screen=None):
             frame = centered(render_settings(menu, cols, rows, t, usage.frame_style()), cols, rows)
         elif screen == "defaults":
             frame = centered(render_defaults(defaults_menu, cols, rows, t), cols, rows)
+        elif screen == "confirm_back":
+            frame = centered(render_back_confirmation(defaults_menu, quit_choice, cols, rows, t), cols, rows)
         elif screen == "confirm_quit":
-            frame = centered(render_quit_confirmation(quit_choice, cols, rows), cols, rows)
+            frame = centered(render_quit_confirmation(quit_choice, cols, rows, t, listed[selected]), cols, rows)
         else:
             frame = centered(render(selected, available, t, cols, rows, sweep, listed), cols, rows)
         writer.show(frame, cols, rows)
@@ -944,13 +1103,26 @@ def choose(screen=None):
                 if key in ("\x03", "\x04"):
                     return None
                 if defaults_menu.handle(key) == "save":
+                    if defaults_menu.changed:
+                        quit_choice = 0
+                        go("confirm_back")
+                    else:
+                        go("agents")
+            elif screen == "confirm_back":
+                if key in ("left", "right", "up", "down", "\t"):
+                    quit_choice = 1 - quit_choice
+                elif key in ("\r", "\n", "y", "Y") and (quit_choice == 1 or key in ("y", "Y")):
                     try:
-                        if defaults_menu.changed:
-                            provider_defaults.save(defaults_menu.agent, defaults_menu.values, config_path())
-                            changed_defaults = True
+                        provider_defaults.save(defaults_menu.agent, defaults_menu.values, config_path())
+                        changed_defaults = True
                         go("agents")
                     except (OSError, ValueError) as exc:
                         defaults_menu.error = f"Could not save: {exc}"
+                        go("defaults")
+                elif key in ("\r", "\n", "esc", "n", "N", "q"):
+                    go("defaults")
+                elif key in ("\x03", "\x04"):
+                    return None
             elif screen == "confirm_quit":
                 if key in ("left", "right", "up", "down", "\t"):
                     quit_choice = 1 - quit_choice
@@ -1032,7 +1204,6 @@ def catalog():
         state = f"{FAINT}{argv[0]}{RESET}" if argv else f"{FAINT}not installed · {agent['argv'][0]}{RESET}"
         print(f"  {name} {swatch}  {state}")
 
-
 def print_launch_banner(agent):
     mascot = agent.get("mascot")
     if not mascot:
@@ -1087,7 +1258,6 @@ def main():
         print("agent --picker-update                 fast-forward this Git checkout")
         print("agent --picker-doctor                 show paths and launch profiles")
         print("agent --picker-catalog                every known CLI, its colors, and whether it is installed")
-        print("agent --picker-usage [args]           open on the usage panel")
         print("agent --picker-help                   show this help")
         print("usage                                 the same command; u switches to the usage panel")
         print("Prefix CLI args with -- to escape picker management commands.")

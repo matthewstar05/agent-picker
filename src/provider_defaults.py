@@ -17,6 +17,7 @@ PROVIDERS = {
     "Kiro": ("--model", "--effort", ("--trust-all-tools", "-a")),
 }
 CURSOR_EFFORT = re.compile(r"-(low|medium|high|xhigh|max|minimal|none)(?=-fast$|$)")
+GEMINI_ENCODED = re.compile(r"^gemini-.+-(?:minimal|none|low|medium|high|xhigh|max|ultra)(?:-fast)?$")
 
 
 def option(argv, flags, default=""):
@@ -59,12 +60,15 @@ def current(agent):
             if value.startswith("model_reasoning_effort="):
                 effort = value.split("=", 1)[1].strip('"\'')
     if name in ("Cursor", "Antigravity"):
-        match = CURSOR_EFFORT.search(model)
-        bracket = re.search(r"effort=([^,\]]+)", model)
-        if name == "Cursor" or not effort:
-            effort = match.group(1) if match else bracket.group(1) if bracket else "provider default"
-        if match:
-            model = model[:match.start()] + model[match.end():]
+        if GEMINI_ENCODED.match(model):
+            effort = "provider default"
+        else:
+            match = CURSOR_EFFORT.search(model)
+            bracket = re.search(r"effort=([^,\]]+)", model)
+            if name == "Cursor" or not effort:
+                effort = match.group(1) if match else bracket.group(1) if bracket else "provider default"
+            if match:
+                model = model[:match.start()] + model[match.end():]
     return {"model": model, "effort": effort or "provider default",
             "bypass_permissions": any(a in bypass_flags for a in argv[1:])}
 
@@ -83,18 +87,18 @@ def apply(agent, values):
     if not isinstance(values["bypass_permissions"], bool):
         raise ValueError("Bypass Permissions must be on or off")
     name = agent["name"]
-    if name == "Antigravity":
+    if name == "Antigravity" and not str(model).startswith("gemini"):
         model = CURSOR_EFFORT.sub("", model)
     model_flag, effort_flag, bypass_flags = PROVIDERS[name]
     argv = list(agent["argv"])
     if name in ("Cursor", "Antigravity") and (model != baseline["model"] or effort != baseline["effort"]):
-        row = next((r for r in model_catalog.options(agent, model) if r["id"] == model), {})
+        row = next((r for r in model_catalog.load_rows(agent) if r["id"] == model), {})
         variant = row.get("variants", {}).get(effort)
-        if not variant and effort == "provider default":
+        if not variant and effort == "provider default" and not str(model).startswith("gemini"):
             variant = row.get("variants", {}).get("high")
         if variant:
             model = variant
-        elif effort != "provider default" and name == "Cursor":
+        elif effort != "provider default" and name == "Cursor" and not str(model).startswith("gemini"):
             match = CURSOR_EFFORT.search(model)
             if match:
                 model = model[:match.start()] + model[match.end():]
@@ -109,7 +113,11 @@ def apply(agent, values):
         argv = replace_option(argv, (model_flag,), model, model_flag)
     elif model != baseline["model"]:
         argv = replace_option(argv, (model_flag, "--model"), model, model_flag)
-    if effort != baseline["effort"] and name == "Codex":
+    if GEMINI_ENCODED.match(model):
+        if effort_flag:
+            argv = replace_option(argv, (effort_flag,), "", effort_flag)
+        effort = "provider default"
+    elif effort != baseline["effort"] and name == "Codex":
         out, i = [argv[0]], 1
         while i < len(argv):
             if argv[i] in ("-c", "--config") and i + 1 < len(argv) and argv[i + 1].startswith("model_reasoning_effort="):
@@ -133,11 +141,13 @@ def apply(agent, values):
             argv.append(bypass_flags[0])
             if name == "Cursor":
                 argv.append("--trust")
+    values["model"] = model
+    values["effort"] = effort
     agent["argv"] = argv
     agent["defaults"] = values
-    agent["model"] = values["model"]
-    agent["short"] = values["model"]
-    agent["detail"] = values["model"] + " · " + effort
+    agent["model"] = model
+    agent["short"] = model
+    agent["detail"] = model if str(model).startswith("gemini") else model + " · " + effort
     return agent
 
 
@@ -160,8 +170,7 @@ def save(agent, values, path):
 
 
 class Menu:
-    fields = ("model", "effort", "bypass_permissions")
-    labels = ("Model", "Effort", "Bypass Permissions")
+    LABELS = {"model": "Model", "effort": "Effort", "bypass_permissions": "Bypass Permissions"}
 
     def __init__(self, agent):
         self.agent = agent
@@ -178,6 +187,25 @@ class Menu:
     def changed(self):
         return self.original is not None and self.values != self.original
 
+    @staticmethod
+    def shown(key, value):
+        return ("On" if value else "Off") if key == "bypass_permissions" else str(value)
+
+    def review(self):
+        """(label, new) for the model and effort to keep, then (label, old, new) for each change."""
+        keys = ["model"]
+        if "effort" in self.fields() or self.original.get("effort") != self.values.get("effort"):
+            keys.append("effort")
+        selection = [(self.LABELS[k], self.shown(k, self.values[k])) for k in keys]
+        delta = [(self.LABELS[k], self.shown(k, self.original[k]), self.shown(k, self.values[k]))
+                 for k in ("model", "effort", "bypass_permissions") if self.original[k] != self.values[k]]
+        return selection, delta
+
+    def fields(self):
+        if str(self.values.get("model", "")).startswith("gemini"):
+            return ("model", "bypass_permissions")
+        return ("model", "effort", "bypass_permissions")
+
     def models(self):
         return self.model_rows
 
@@ -192,9 +220,13 @@ class Menu:
 
     def select_model(self, row):
         self.values["model"] = row["id"]
-        choices = self.efforts()
-        if self.values["effort"] not in choices:
-            self.values["effort"] = "high" if "high" in choices else choices[0]
+        if str(row["id"]).startswith("gemini"):
+            self.values["effort"] = "provider default"
+        else:
+            choices = self.efforts()
+            if self.values["effort"] not in choices:
+                self.values["effort"] = "high" if "high" in choices else choices[0]
+        self.index = min(self.index, len(self.fields()) - 1)
 
     def handle(self, key):
         self.error = ""
@@ -209,26 +241,22 @@ class Menu:
             if key in ("up", "left", "k", "down", "right", "j", "\t"):
                 step = -1 if key in ("up", "left", "k") else 1
                 self.model_index = (self.model_index + step) % len(models)
-                self.select_model(models[self.model_index])
             elif key in ("\r", "\n", " "):
                 self.select_model(models[self.model_index])
                 self.browsing = False
             return None
+        self.index = min(self.index, len(self.fields()) - 1)
         if key == "esc":
             return "save"
         elif key in ("up", "k", "down", "j", "\t"):
-            self.index = (self.index + (-1 if key in ("up", "k") else 1)) % 3
+            self.index = (self.index + (-1 if key in ("up", "k") else 1)) % len(self.fields())
         elif key in ("left", "right", "\r", "\n", " "):
-            field = self.fields[self.index]
+            field = self.fields()[self.index]
             if field == "model":
-                models = self.models()
-                index = next((i for i, row in enumerate(models) if row["id"] == self.values["model"]), 0)
                 if key in ("\r", "\n", " "):
+                    models = self.models()
                     self.browsing = True
-                    self.model_index = index
-                else:
-                    self.model_index = (index + (-1 if key == "left" else 1)) % len(models)
-                    self.select_model(models[self.model_index])
+                    self.model_index = next((i for i, row in enumerate(models) if row["id"] == self.values["model"]), 0)
             elif field == "effort":
                 choices = self.efforts()
                 effort = self.values[field]

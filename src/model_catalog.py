@@ -96,14 +96,48 @@ def fetch(agent):
     return rows
 
 
-def options(agent, current):
+def load_rows(agent):
     name = agent["name"]
     stored = read(PATH)
     cached = stored.get(name, {}) if stored.get("schema_version") == SCHEMA_VERSION else {}
     rows = _live.get(name) or cached.get("models") or read(ROOT / "models.json").get(name, [])
-    rows = [dict(row) for row in rows if isinstance(row, dict) and isinstance(row.get("id"), str)]
+    return [dict(row) for row in rows if isinstance(row, dict) and isinstance(row.get("id"), str)]
+
+
+_EFFORT_TITLE = {"minimal": "Minimal", "none": "None", "low": "Low", "medium": "Medium",
+                 "high": "High", "xhigh": "Extra High", "max": "Max", "ultra": "Ultra"}
+
+
+def expand_gemini(rows):
+    """List each Gemini effort as its own model. The id already carries the level."""
+    expanded = []
+    for row in rows:
+        variants = row.get("variants") or {}
+        levels = [level for level in (row.get("efforts") or []) if isinstance(variants.get(level), str)]
+        if not str(row.get("id", "")).startswith("gemini") or not levels:
+            expanded.append(row)
+            continue
+        base = re.sub(r"\s*\((?:Extra High|High|Medium|Low|Max|Ultra|Minimal|None)\)$", "",
+                      row.get("name") or row["id"]).strip()
+        seen = set()
+        for level in levels:
+            model_id = variants[level]
+            if model_id in seen:
+                continue
+            seen.add(model_id)
+            expanded.append({"id": model_id, "name": f"{base} ({_EFFORT_TITLE.get(level, level)})",
+                             "efforts": [], "variants": {}})
+        default = variants.get("provider default")
+        if isinstance(default, str) and default not in seen:
+            expanded.append({"id": default, "name": base, "efforts": [], "variants": {}})
+    return expanded
+
+
+def options(agent, current):
+    rows = expand_gemini(load_rows(agent))
     if current and not any(row["id"] == current for row in rows):
-        rows.insert(0, {"id": current, "name": current + " (current)", "efforts": None})
+        rows.insert(0, {"id": current, "name": current + " (current)",
+                        "efforts": [] if str(current).startswith("gemini") else None})
     return rows
 
 

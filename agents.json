@@ -135,20 +135,18 @@
       ]
     ],
     "bar_span": 1.0,
-    "model": "gemini-3.8-flash",
+    "model": "gemini-3.8-flash-high",
     "short": "gemini flash",
     "color": [
       66,
       133,
       244
     ],
-    "detail": "gemini-3.8-flash \u00b7 high",
+    "detail": "gemini-3.8-flash-high",
     "argv": [
       "agy",
       "--model",
       "gemini-3.8-flash-high",
-      "--effort",
-      "high",
       "--dangerously-skip-permissions"
     ],
     "detect": [
@@ -160,51 +158,51 @@
     "name": "Cursor",
     "pastel": [
       255,
-      160,
-      165
+      255,
+      255
     ],
     "gradient": [
       [
-        235,
-        35,
-        50
+        255,
+        255,
+        255
       ],
       [
-        90,
-        8,
-        16
+        215,
+        220,
+        230
       ],
       [
-        14,
-        8,
-        10
+        165,
+        172,
+        185
       ],
       [
-        150,
-        15,
-        28
+        115,
+        122,
+        135
       ]
     ],
     "bar_gradient": [
       [
-        240,
-        60,
-        75
-      ],
-      [
-        190,
-        35,
-        50
-      ],
-      [
         255,
-        120,
-        130
+        255,
+        255
       ],
       [
-        215,
-        45,
-        60
+        225,
+        230,
+        238
+      ],
+      [
+        180,
+        188,
+        200
+      ],
+      [
+        130,
+        138,
+        150
       ]
     ],
     "model": "grok-4.7",
@@ -334,6 +332,46 @@
     ],
     "detect": [
       "opencode"
+    ]
+  },
+  {
+    "name": "Gemini CLI",
+    "pastel": [
+      185,
+      205,
+      255
+    ],
+    "gradient": [
+      [
+        71,
+        150,
+        227
+      ],
+      [
+        145,
+        119,
+        199
+      ],
+      [
+        202,
+        102,
+        115
+      ]
+    ],
+    "model": "gemini",
+    "short": "gemini",
+    "color": [
+      71,
+      150,
+      227
+    ],
+    "detail": "default model and permissions",
+    "argv": [
+      "gemini"
+    ],
+    "detect": [
+      "gemini",
+      "gemini-cli"
     ]
   },
   {
