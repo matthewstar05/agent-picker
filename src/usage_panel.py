@@ -348,10 +348,8 @@ def _spark(name, n, now):
 def put_name(line, agent, st, brand, t, bold=True):
     name = agent["name"]
     if brand and agent.get("pastel") == "rainbow":
-        import colorsys
         for k, ch in enumerate(name):
-            r, g, b = colorsys.hsv_to_rgb((k / 11 - t * 0.24) % 1.0, 0.2, 1.0)
-            line.put(ch, (round(r * 255), round(g * 255), round(b * 255)), bold=bold)
+            line.put(ch, ap.rainbow_rgb(k / 11 - t * 0.24, 0.2), bold=bold)
     elif brand:
         line.put(name, agent.get("pastel") or TEXT, bold=bold)
     else:
@@ -393,9 +391,9 @@ def card(view, i, cw, t, now):
         entry = USAGE.get(name)
         fetching = name in INFLIGHT
         working = WORKING.get(name, 0)
-    # a working card's glow steps at 6 fps: smooth to the eye, and the redraw
-    # skips its lines on the frames in between
-    step = int(t * 6) / 6 if working and view.anim else 0.0
+    # Working cards share the border's continuous 60 fps clock. Idle cards
+    # still reuse their cached contents between countdown updates.
+    step = t if working and view.anim else 0.0
     key = (i, cw, view.theme, view.anim, int(now), entry and entry["fetched"], fetching,
            int(t * 3) % 3 if fetching else 0, working, len(HISTORY.get(name) or ()), step)
     if CARDS.get(i, (None,))[0] != key:
