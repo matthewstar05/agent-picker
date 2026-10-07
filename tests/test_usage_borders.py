@@ -48,16 +48,27 @@ class UsageBorderTests(unittest.TestCase):
         self.select_theme(view, "brand")
         return view
 
-    def test_brand_outer_border_is_white_and_theme_name_is_temporary(self):
+    def test_brand_outer_border_is_gray_animated_and_theme_name_is_temporary(self):
         view = self.view()
         self.select_theme(view, "brand")
         lines = panel.render(view, 80, 30, 1.5)
-        white = panel.ap.fg(panel.WHITE)
-        for left, _, right in lines[1:-1]:
-            self.assertEqual(left, white + "│" + panel.RESET)
-            self.assertEqual(right, white + "│" + panel.RESET)
-        for glyph in re.findall(r"(\x1b\[[0-9;]*m[╭╮─])", lines[0]):
-            self.assertTrue(glyph.startswith(white), glyph)
+        ring = panel.ap.border_ring(panel.BRAND_FRAME, 1.5, 78, 28)
+        for y, (left, _, right) in enumerate(lines[1:-1], 1):
+            self.assertEqual(left, ring[(y, 0)] + panel.RESET)
+            self.assertEqual(right, ring[(y, 79)] + panel.RESET)
+            for red, green, blue in re.findall(r"\x1b\[38;2;(\d+);(\d+);(\d+)m", left + right):
+                self.assertEqual(red, green)
+                self.assertLessEqual(abs(int(blue) - int(red)), 8)
+        later = panel.render(view, 80, 30, 2.5)
+        self.assertNotEqual([line[0] for line in lines[1:-1]], [line[0] for line in later[1:-1]])
+        if hasattr(panel, "preferences"):
+            panel.preferences.put(panel.ANIMATE.key, False)
+        else:
+            view.anim = False
+        still = panel.render(view, 80, 30, 1.5)
+        later = panel.render(view, 80, 30, 2.5)
+        self.assertEqual([line[0] for line in still[1:-1]], [line[0] for line in later[1:-1]])
+        self.select_theme(view, "brand")
         self.assertNotIn("brand", ANSI.sub("", lines[0]))
         with patch.object(panel.time, "time", return_value=100):
             self.select_theme(view, "aurora")
@@ -65,7 +76,7 @@ class UsageBorderTests(unittest.TestCase):
             self.assertIn("aurora", ANSI.sub("", panel.render(view, 80, 30, 1.5)[0]))
         with patch.object(panel.time, "time", return_value=103):
             self.assertNotIn("aurora", ANSI.sub("", panel.render(view, 80, 30, 1.5)[0]))
-        self.assertNotEqual(panel.render(view, 80, 30, 1.5)[1][0], white + "│" + panel.RESET)
+        self.assertNotEqual(panel.render(view, 80, 30, 1.5)[1][0], lines[1][0])
 
     def test_working_cards_use_selector_border_and_unbox_when_idle(self):
         view = self.view()
@@ -94,6 +105,31 @@ class UsageBorderTests(unittest.TestCase):
             if cols >= 40:
                 self.assertTrue(all(any(a["name"][:4] in line for line in plain) for a in view.agents))
             self.assertTrue(any("│" in line for line in plain))
+
+    def test_provider_positions_stay_fixed_across_activity_and_data_changes(self):
+        view = self.view()
+        names = [a["name"] for a in view.agents]
+
+        def positions(cols, rows):
+            lines = panel.render(view, cols, rows, 1.5)
+            plain = [ANSI.sub("", "".join(line) if isinstance(line, tuple) else line)
+                     for line in lines]
+            return {name: next((y, line.index(name[:4])) for y, line in enumerate(plain)
+                               if name[:4] in line) for name in names}
+
+        states = [{}, *({name: 1} for name in names), {name: 2 for name in names}, {}]
+        for cols, rows in ((80, 28), (120, 30), (60, 24), (200, 8), (40, 12), (30, 7), (18, 5), (8, 5)):
+            panel.WORKING.clear()
+            expected = positions(cols, rows)
+            for state in states:
+                panel.WORKING.clear()
+                panel.WORKING.update(state)
+                self.assertEqual(positions(cols, rows), expected, (cols, rows, state))
+            entry = panel.USAGE.pop(names[0])
+            self.assertEqual(positions(cols, rows), expected, (cols, rows, "no data"))
+            panel.USAGE[names[0]] = dict(entry, windows=entry["windows"][:1])
+            self.assertEqual(positions(cols, rows), expected, (cols, rows, "one limit"))
+            panel.USAGE[names[0]] = entry
 
 
 if __name__ == "__main__":
