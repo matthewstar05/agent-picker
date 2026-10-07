@@ -128,6 +128,24 @@ class UsagePanelTests(unittest.TestCase):
         bottom = next(y for y in range(claude, len(plain)) if "╰" in plain[y][:4])
         self.assertLess(bottom, next(y for y, line in enumerate(plain) if "Codex" in line))
 
+    def test_tight_pane_spaces_cards_evenly_around_a_working_border(self):
+        names = ["Claude", "Codex", "Antigravity", "Cursor", "Kiro"]
+        panel.PRESENT.clear()
+        panel.PRESENT.update({n: 1 for n in names})
+        panel.WORKING.clear()
+        panel.WORKING["Antigravity"] = 1
+        now = time.time()
+        for n in names:
+            panel.USAGE[n] = {"windows": [{"label": "5h", "pct": 20, "resets": now + 9000},
+                                          {"label": "wk", "pct": 5, "resets": now + 400000}], "fetched": now}
+        view = panel.View([a for a in panel.ap.AGENTS if a["name"] in names])
+        plain = [ANSI.sub("", "".join(l) if isinstance(l, tuple) else l) for l in panel.render(view, 44, 25, 1.0)]
+        rows = [next(y for y, line in enumerate(plain) if n in line) for n in names]
+        self.assertEqual(len({b - a for a, b in zip(rows, rows[1:])}), 1, rows)
+        working = rows[2]
+        self.assertIn("╭", plain[working - 1])
+        self.assertIn("╰", plain[working + 3])
+
     def test_cli_without_a_usage_reader_says_so(self):
         opencode = next(a for a in panel.ap.AGENTS if a["name"] == "OpenCode")
         panel.PRESENT.clear()

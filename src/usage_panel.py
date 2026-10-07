@@ -723,6 +723,51 @@ def working_card(view, i, width, t, now, lids=True, active=True, height=None):
     return lines
 
 
+def fitted_rows(view, ncols, cw, nr, active, height, t, now):
+    """Cards for panes too short for every card to reserve a border: each row
+    of cards is three lines, the gaps between rows (and above and below them)
+    are as even as possible, and a working card's border sits in the gap rows
+    right around it. Returns each line as one segment per column."""
+    live = [any(active[r * ncols:(r + 1) * ncols]) for r in range(nr)]
+    # gap k sits above row k (the last one is below every row); a border needs
+    # one row on each side of its card
+    need = [(k > 0 and live[k - 1]) + (k < nr and live[k]) for k in range(nr + 1)]
+    free = height - 3 * nr
+    even = free // (nr + 1)
+    if even >= max(need):
+        gaps = [even] * (nr + 1)
+        left = free - even * (nr + 1)
+    else:
+        gaps = list(need)
+        left = free - sum(need)
+        for k in range(nr + 1):
+            gaps[k] += left // (nr + 1)
+        left -= left // (nr + 1) * (nr + 1)
+    # leftover rows go to the top and bottom first, alternating, then inward
+    order = sorted(range(nr + 1), key=lambda k: min(k, nr - k))
+    for k in order[:max(0, left)]:
+        gaps[k] += 1
+    lines = [[" " * cw for _ in range(ncols)] for _ in range(height)]
+    y = 0
+    for r in range(nr):
+        y += gaps[r]
+        for c in range(ncols):
+            i = r * ncols + c
+            if i >= len(view.agents):
+                continue
+            if active[i]:
+                box = working_card(view, i, cw, t, now, True, True, height=5)
+                for k, line in enumerate(box):
+                    if 0 <= y - 1 + k < height:
+                        lines[y - 1 + k][c] = line
+            else:
+                for k, line in enumerate(working_card(view, i, cw, t, now, False, False, height=3)):
+                    if y + k < height:
+                        lines[y + k][c] = line
+        y += 3
+    return lines
+
+
 def empty_state(width, height):
     """Shown until an agent is open beside this pane."""
     title = f"no agents in {SCOPE}"
@@ -803,24 +848,25 @@ def render(view, cols, rows, t):
         grid_w = ncols * cw + (ncols - 1) * gap_x
         left = (inner_w - grid_w) // 2
         gap = 0 if lids else min(gap, 1)
-        need = [max(fitted[r * ncols:(r + 1) * ncols]) if mode == "fitted" else 0 for r in range(nr)]
-        spare = inner_h - (nr - 1) * gap - sum(need)
-        # Every row of cards gets the same extra height; rows that don't divide
-        # evenly go above and below the cards rather than into one card.
-        slots = [need[r] + spare // nr for r in range(nr)]
-        cards = [working_card(view, i, cw, t, now, lids and (mode == "uniform" or active[i]), active[i],
-                              height=slots[i // ncols])
-                 for i in range(n)]
-        for r in range(nr):
-            if r:
-                body += [""] * gap
-            row_cards = cards[r * ncols:(r + 1) * ncols]
-            for y in range(max(len(c) for c in row_cards)):
-                segs = [c[y] if y < len(c) else " " * cw for c in row_cards]
-                text = (" " * gap_x).join(segs)
-                body.append(" " * left + text + " " * (inner_w - left - len(row_cards) * cw
-                                                        - (len(row_cards) - 1) * gap_x))
-        pad_top = max(0, (inner_h - len(body)) // 2)
+        def join(segs):
+            text = (" " * gap_x).join(segs)
+            return " " * left + text + " " * (inner_w - left - len(text))
+
+        if mode == "fitted":
+            body, pad_top = fitted_rows(view, ncols, cw, nr, active, inner_h, t, now), 0
+            body = [join(segs) for segs in body]
+        else:
+            # Every row of cards gets the same height; rows that don't divide
+            # evenly go above and below the cards rather than into one card.
+            slot = (inner_h - (nr - 1) * gap) // nr
+            cards = [working_card(view, i, cw, t, now, lids, active[i], height=slot) for i in range(n)]
+            for r in range(nr):
+                if r:
+                    body += [""] * gap
+                row_cards = cards[r * ncols:(r + 1) * ncols]
+                for y in range(max(len(c) for c in row_cards)):
+                    body.append(join([c[y] if y < len(c) else " " * cw for c in row_cards]))
+            pad_top = max(0, (inner_h - len(body)) // 2)
     elif n:
         body = [compact_row(view, i, inner_w, t, now) for i in range(n)]
         pad_top = max(0, (inner_h - len(body)) // 2)
