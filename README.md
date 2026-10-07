@@ -54,18 +54,17 @@ agent "help me understand this repo"  forward this prompt to the chosen CLI
 agent --picker-launch Codex           directly launch Codex
 agent --picker-doctor                 inspect detected providers and local paths
 agent --picker-update                 pull shared updates from GitHub
+agent --picker-catalog                every known CLI, its colors, and whether it is installed
 agent --picker-help                   show picker help
 agent -- --picker-help                pass a management-looking argument to the CLI
-usage                                live usage-limit panel for every provider
-usage --theme vapor                  start the panel in a theme (remembered)
-usage --themes                       list the panel's color themes
+usage                                the same command as agent
 ```
+
+Inside the command: `u` switches between the agent selector and the usage panel, and `s` opens settings from either one.
 
 Updates are explicit, use `git pull --ff-only`, and refuse a dirty checkout. If the two machines have diverging commits, resolve them with normal Git operations before updating. The command does not commit, stash, reset, push, or update provider CLIs automatically.
 
 ## Agent selector defaults
-
-In the agent selector, highlight a provider and press `→` to open its defaults. `↑↓` selects **Model**, **Effort**, or **Bypass Permissions**. On Model, `←→` cycles available models; Enter opens a scrollable list, where `↑↓` or `←→` selects a model and Enter returns to the fields. On Effort, `←→` cycles levels; on Bypass Permissions the same keys toggle On/Off. Space or Enter also changes either value. Esc saves locally and returns to the selector. If you then quit the selector with Esc or q after making changes, a confirmation opens with **Stay** selected. The saved defaults remain when you reopen `agent`.
 
 Choices come from bundled model catalogs, refreshed from installed CLIs or their local caches in the background. Your current model stays selectable. Cursor, Claude, and Codex effort choices follow their model catalogs.
 
@@ -113,17 +112,42 @@ Usage collection runs in background threads and never refreshes authentication t
 
 Claude's [authentication documentation](https://code.claude.com/docs/en/authentication#credential-management) describes its platform-specific credential files. `CLAUDE_CONFIG_DIR` and `CODEX_HOME` are respected by the usage readers. Cursor and Antigravity usage endpoints and credential formats come from the original Mac implementation and may change. Windows meters for those providers show a dash until a verified reader is added; their launch commands still work when installed. Login, expired credentials, provider-specific model access, and live usage accuracy need verification on each computer.
 
+## Agent catalog
+
+[agents.json](agents.json) is a catalog of agent CLIs: the five original profiles plus OpenCode, Gemini CLI, Qwen Code, GitHub Copilot CLI, Amp, Aider, Goose, Crush, Factory Droid, Cline, Auggie, Kimi CLI, and Continue. The picker lists only the ones installed on this computer, found on PATH or in common install folders that aren't always on it (`~/.opencode/bin`, `~/.bun/bin`, npm-global, cargo, Homebrew). The rest stay in the catalog with their color schemes and appear as soon as their CLI is installed. `agent --picker-catalog` shows every entry with its colors and status.
+
+Catalog entries other than the original five launch their CLI with no arguments, so they use that CLI's own default model and permission prompts. Add model or permission flags in the local config once a CLI is installed and you have checked its flags. To add a CLI, append a profile with `name`, `color`, `pastel`, `gradient`, `short`, `detail`, `argv`, and `detect` (the names it shows up under in Herdr and in process lists). Usage limits are read only for Claude, Codex, Antigravity, Cursor, and Kiro; other CLIs' cards say no usage reader exists yet.
+
 ## Usage panel
 
-`usage` is a full-pane dashboard of the same meters, meant to stay open in a Herdr pane. It reads limits with the picker's readers and shares its cache, so both commands show the same numbers. Cards stack in tall panes and sit side by side in wide, short ones; very small panes fall back to one line per provider.
+The usage panel is a screen of the same command (press `u`), a full-pane dashboard of the meters meant to stay open in a Herdr pane. `agent` and `usage` both open on the picker; set **Opens on** in settings to start on the usage panel instead.
+
+The panel shows only agents running beside it: in the same Herdr tab (agents Herdr recognizes, plus panes whose foreground process is a catalog CLI), in the same tmux window, or anywhere on the computer when neither is in use. With no agent open there, it shows an empty state; cards appear and disappear as agents open and close. Limits are still read for every installed provider, so the picker's meters stay current. Its live readers start with the command, so the picker's meters are live too, and both screens share one cache. Cards stack in tall panes and sit side by side in wide, short ones; very small panes fall back to one line per provider.
 
 Refreshing follows the agents. Every two seconds the panel asks Herdr (`herdr pane list`) which panes are working. A provider with a working agent is read often (Codex every 5 seconds from its local logs, the web endpoints every 45 to 60 seconds). It is read again a few seconds after one of its agents finishes a turn, and only every 5 to 15 minutes while idle. Failed reads back off. Without Herdr it falls back to fixed intervals between those two.
 
-Each bar fills to the percentage used. The empty track is brighter up to where an even pace through the window would be by now, and any filled part beyond that point turns hot. When the current pace would reach the limit before the window resets, the countdown changes from `↻ 2h 31m` to `out 1h 20m`. History for a burn-rate sparkline is still recorded, but drawing it is commented out in `usage_panel.py`.
+Each bar fills to the percentage used, and the empty track is brighter up to where an even pace through the window would be by now. Every row shows its reset countdown. A limit is tinted a muted red only when it is at least 70% used and its reset is still far off: more than 2 hours away for the 5-hour limit, 2 days for weekly, and 5 days for monthly (a monthly limit resetting within 5 days is never flagged). When several instances of one provider are working, its card shows a spinner per instance, a shimmering count, and one light pulse per instance along its bars. History for a burn-rate sparkline is still recorded, but drawing it is commented out in `usage_panel.py`.
 
-Keys: `t` or `→` next theme, `T` or `←` previous theme, `r` refresh now, `a` toggle animation (off redraws once a second), `q` quit. The theme and animation choice are saved in the local state directory.
+Keys: `t` or `→` next theme, `T` or `←` previous theme, `r` refresh now, `a` toggle animation (off redraws once a second), `s` settings, `u` or Esc back to the picker, `q` quit.
 
 Brand uses an animated gray outer border. Each working provider gets the same animated border as its row in the agent selector; choosing another theme changes both the outer border and provider borders to that theme. Provider titles and their dots retain their brand colors in every theme. Short panes drop the top and bottom of provider borders to keep the limits visible. Border space is reserved even while idle, so titles, bars, and card positions stay fixed as providers start or stop working. The layout changes only when the pane size or installed providers change. The theme name appears in the outer border for 2.5 seconds after changing themes, then disappears.
+
+## Settings
+
+Press `s` on any screen. `↑↓` choose a setting, `←→` or Enter change it, Esc returns to the screen you came from. Changes apply immediately and are saved to `preferences.json` in the local state directory.
+
+Settings live in [src/preferences.py](src/preferences.py). To give a new feature a setting, register it where the feature lives and read it with `preferences.get`; the settings screen lists it under its section with no other changes:
+
+```python
+import preferences
+
+SOUND = preferences.register(preferences.Setting(
+    "sound", "General", "Sound", [False, True], False,
+    hint="Play a chime when an agent finishes.", names={False: "off", True: "on"}))
+
+if preferences.get(SOUND.key):
+    ...
+```
 
 ## Iterate from either computer
 

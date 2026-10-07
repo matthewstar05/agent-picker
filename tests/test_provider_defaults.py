@@ -141,7 +141,11 @@ class DefaultsTests(unittest.TestCase):
             stack.enter_context(patch.object(picker, "AGENTS", agents))
             stack.enter_context(patch.object(picker, "installed", return_value=True))
             stack.enter_context(patch.object(picker, "load_last", return_value=0))
-            stack.enter_context(patch.object(picker, "refresh_usage"))
+            import preferences
+            import usage_panel
+            stack.enter_context(patch.object(usage_panel, "start"))   # no live usage reads
+            stack.enter_context(patch.object(preferences, "_values", {}))   # default screens
+            stack.enter_context(patch.object(preferences, "put"))
             stack.enter_context(patch.object(picker, "Terminal", Keyboard))
             stack.enter_context(patch.object(sys, "stdout", io.StringIO()))
             self.assertIsNone(picker.choose())
@@ -243,7 +247,7 @@ a.main()
                 lines = picker.render_defaults(menu, cols, rows, 0)
                 self.assertLessEqual(len(lines), rows)
                 self.assertTrue(all(picker.visible_len(line) <= cols for line in lines), (cols, rows))
-        text = "\n".join(picker._ANSI.sub("", line) for line in picker.render(0, [True] * 5, 0, 80, 24, ))
+        text = "\n".join(picker._ANSI.sub("", line) for line in picker.render(0, [True] * 5, 0, 80, 24, agents=picker.AGENTS[:5]))
         self.assertIn("agent selector", text)
         self.assertNotIn("new session", text)
         self.assertNotIn("permissions skipped", text)

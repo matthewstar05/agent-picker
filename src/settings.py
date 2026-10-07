@@ -43,6 +43,9 @@ def load_agents():
             raise ValueError("Cursor's generic 'agent' must be an absolute vendor path to prevent recursion")
         if "defaults" in agent:
             provider_defaults.apply(agent, agent["defaults"])
+        # Names it appears under in Herdr and in process lists, for the usage screen.
+        names = agent.get("detect") or [Path(argv[0]).stem.lower()]
+        agent["detect"] = [n.lower() for n in names]
     return agents
 
 

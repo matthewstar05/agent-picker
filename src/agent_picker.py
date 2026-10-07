@@ -2,7 +2,8 @@
 """Agent selector: pick a coding agent or edit its local launch defaults.
 
 Each entry launches its CLI with your saved defaults. Extra arguments are passed through to the chosen CLI.
-Keys: up/down or j/k move, 1-5 jump, Enter launches, q or Esc quits.
+Keys: up/down or j/k move, 1-5 jump, Enter launches, u usage panel, s settings,
+q or Esc quits. The usage command runs this same program.
 Draws on the alternate screen and fits itself to the terminal on every frame.
 Each row shows the agent's plan limits (5-hour, weekly, or monthly) and when they reset.
 """
@@ -24,6 +25,13 @@ import urllib.request
 from datetime import datetime
 from pathlib import Path
 
+if __name__ == "__main__":
+    # The usage screen imports this module by name; run as a script, make that
+    # import find this copy instead of loading a second one.
+    sys.modules.setdefault("agent_picker", sys.modules[__name__])
+
+import preferences
+import provider_defaults
 from platform_runtime import Terminal, launch, resolve_argv, state_dir
 from settings import ROOT, config_path, load_agents, update_checkout
 
@@ -33,6 +41,11 @@ except (OSError, ValueError) as exc:
     sys.exit(f"agent: invalid configuration: {exc}")
 
 STATE = state_dir()
+
+START = preferences.register(preferences.Setting(
+    "start", "General", "Opens on", ["agents", "usage"], "agents",
+    hint="The screen agent and usage open on. u switches between them anytime.",
+    names={"agents": "agent selector", "usage": "usage panel"}))
 
 ESC = "\x1b"
 RESET = f"{ESC}[0m"
@@ -288,14 +301,6 @@ def _fetch(name):
                 pass
 
 
-def refresh_usage(available):
-    load_usage()
-    for agent, ok in zip(AGENTS, available):
-        if ok and agent["name"] in FETCHERS:
-            PENDING.add(agent["name"])
-            threading.Thread(target=_fetch, args=(agent["name"],), daemon=True).start()
-
-
 def until(epoch):
     """Compact countdown: 42m, 5h 12m, 6d 4h, 18d."""
     if not epoch:
@@ -544,16 +549,19 @@ def border_ring(agent, t, bw, height=1, solid=None):
     return cells
 
 
-def render(selected, available, t, cols, rows, sweep=None):
-    """Lines for the current terminal size, each at most cols wide."""
-    color = AGENTS[selected]["color"]
+def render(selected, available, t, cols, rows, sweep=None, agents=None):
+    """Lines for the current terminal size, each at most cols wide.
+
+    agents: the profiles to list (the installed ones); every profile by default."""
+    agents = AGENTS if agents is None else agents
+    color = agents[selected]["color"]
     iw = min(MAX_IW, cols - 2)
     edge = fg(FRAME)
 
-    if iw < 22 or rows < len(AGENTS) + 2:
+    if iw < 22 or rows < len(agents) + 2:
         # Too small for the panel: a bare one-line list, still with the glowing row.
         lines = []
-        for i, agent in enumerate(AGENTS):
+        for i, agent in enumerate(agents):
             if cols < 18:
                 mark = "❯ " if i == selected else "  "
                 tone = fg(grad(agent, -t * 0.15)) if i == selected else FAINT
@@ -576,7 +584,7 @@ def render(selected, available, t, cols, rows, sweep=None):
     # body entries: (kind, line). "lid" lines are dropped first when short on rows,
     # then "second" lines (each agent collapses to its first line).
     body = []
-    for i, agent in enumerate(AGENTS):
+    for i, agent in enumerate(agents):
         rows_i = agent_rows(agent, available[i], bw, t, i == selected)
         if i == selected:
             ring = border_ring(agent, t, bw, height=2)
@@ -592,7 +600,9 @@ def render(selected, available, t, cols, rows, sweep=None):
             for y, line in enumerate(rows_i):
                 body.append(("first" if y == 0 else "second", framed("  " + line.paint(), bw + 2)))
 
-    hints = [" ↑↓ move · → defaults · ⏎ launch · esc quit ", " → defaults · ⏎ launch · esc quit ", " → defaults · ⏎ launch ", " ⏎ launch ", ""]
+    hints = [" ↑↓ move · → defaults · ⏎ launch · u usage · s settings · esc quit ",
+             " → defaults · ⏎ launch · u usage · s settings · esc quit ",
+             " → defaults · ⏎ launch · u · s · esc ", " → defaults · ⏎ launch ", ""]
     hint = next(h for h in hints if len(h) <= iw - 2)
     bottom = f"{edge}╰─{RESET}{FAINT}{hint}{RESET}{edge}{'─' * (iw - 1 - len(hint))}╯{RESET}"
 
@@ -666,10 +676,121 @@ def render_quit_confirmation(choice, cols, rows):
     return [FAINT + clip(line, cols) + RESET for line in lines[:rows]]
 
 
-def load_last():
+def render_settings(menu, cols, rows, t, accent):
+    """The settings screen: every registered setting, grouped by section."""
+    items = preferences.SETTINGS
+    index = min(menu.index, len(items) - 1)
+    iw = min(MAX_IW, cols - 2)
+    if iw < 26 or rows < 5:
+        lines = []
+        for i, setting in enumerate(items):
+            mark = "❯ " if i == index else "  "
+            text = f"{mark}{setting.label}: {setting.show(preferences.get(setting.key))}"
+            lines.append(f"{BOLD if i == index else FAINT}{clip(text, cols)}{RESET}")
+        first = min(max(0, index - rows // 2), max(0, len(lines) - rows))
+        return lines[first:first + max(1, rows)]
+
+    edge = fg(FRAME)
+    bw = iw - 4
+
+    def framed(content, visible):
+        return f"{edge}│{RESET}{content}{' ' * max(0, iw - visible)}{edge}│{RESET}"
+
+    star = fg(mix((225, 165, 40), (255, 222, 120), wave(0, t, speed=3.0))) + "✦" + RESET
+    top = f"{edge}╭─{RESET} {star} {BOLD}settings{RESET} {edge}{'─' * (iw - 13)}╮{RESET}"
+
+    body = []   # (kind, line); kinds let short terminals drop the extras first
+    section = None
+    for i, setting in enumerate(items):
+        if setting.section != section:
+            if section is not None:
+                body.append(("gap", framed("", 0)))
+            section = setting.section
+            body.append(("head", framed("  " + fg(LABEL) + clip(section.upper(), bw) + RESET, 2 + min(len(section), bw))))
+        value = setting.show(preferences.get(setting.key))
+        line = Line()
+        if i == index:
+            line.put(" ❯ ", (255, 255, 255)).put(clip(setting.label, bw - 8), (245, 245, 245), bold=True)
+            shown = f"◂ {value} ▸ "
+            line.at(max(len(line.cells) + 2, bw - len(shown)), clip(shown, bw // 2), (255, 255, 255), bold=True)
+            painted = lit([line.pad(bw)], accent, t)[0]
+        else:
+            line.put("   ").put(clip(setting.label, bw - 8), (205, 205, 212))
+            shown = f"{value}   "
+            line.at(max(len(line.cells) + 2, bw - len(shown)), clip(shown, bw // 2), SOFT)
+            painted = line.pad(bw).paint()
+        body.append(("row" if i != index else "selected", framed("  " + painted, bw + 2)))
+    hint = items[index].hint if items else ""
+    if hint:
+        body.append(("gap", framed("", 0)))
+        body.append(("hint", framed("  " + FAINT + clip(hint, bw) + RESET, 2 + min(len(hint), bw))))
+
+    hints = [" ↑↓ move · ←→ change · esc back ", " ←→ change · esc back ", " esc back ", ""]
+    hint_text = next(h for h in hints if len(h) <= iw - 2)
+    bottom = f"{edge}╰─{RESET}{FAINT}{hint_text}{RESET}{edge}{'─' * (iw - 1 - len(hint_text))}╯{RESET}"
+
+    lines = [top, framed("", 0)] + [line for _, line in body] + [framed("", 0), bottom]
+    if len(lines) > rows:
+        lines = [top] + [line for kind, line in body if kind != "gap"] + [bottom]
+    if len(lines) > rows:   # scroll the settings around the selected one
+        kept = [(kind, line) for kind, line in body if kind in ("row", "selected")]
+        at = next(i for i, (kind, _) in enumerate(kept) if kind == "selected")
+        room = max(1, rows - 2)
+        first = min(max(0, at - room // 2), max(0, len(kept) - room))
+        lines = [top] + [line for _, line in kept[first:first + room]] + [bottom]
+    return lines[:rows]
+
+
+class Screen:
+    """Writes frames to the terminal, resending only the rows that changed.
+
+    A row is a string drawn from the first column, or (left edge, content,
+    right edge) so an animated border can be redrawn without its content.
+    Each frame is one synchronized write, so a frame is never seen half drawn."""
+
+    def __init__(self, terminal):
+        self.terminal = terminal
+        self.size = None
+        self.rows = []
+
+    def reset(self):
+        self.size = None
+
+    def show(self, frame, cols, rows):
+        clear = ""
+        if (cols, rows) != self.size:
+            clear, self.size, self.rows = f"{ESC}[2J", (cols, rows), []
+        out = []
+        for y, row in enumerate(frame):
+            before = self.rows[y] if y < len(self.rows) else None
+            if row == before:
+                continue
+            if isinstance(row, tuple):
+                same = isinstance(before, tuple)
+                for part, col in ((0, 1), (1, 2), (2, cols)):
+                    if not same or row[part] != before[part]:
+                        out.append(f"{ESC}[{y + 1};{col}H{row[part]}")
+            else:
+                out.append(f"{ESC}[{y + 1};1H{row}{ESC}[K")
+        self.rows = frame
+        if out or clear:
+            self.terminal.write(f"{ESC}[?2026h{clear}{''.join(out)}{ESC}[?2026l")
+
+
+def centered(lines, cols, rows):
+    width = max((visible_len(line) for line in lines), default=0)
+    left = " " * max(0, (cols - width) // 2)
+    top = max(0, (rows - len(lines)) // 2)
+    frame = [""] * rows
+    for i, line in enumerate(lines[:rows - top]):
+        frame[top + i] = left + line
+    return frame
+
+
+def load_last(agents=None):
     try:
         name = (STATE / "last").read_text().strip()
-        return next(i for i, a in enumerate(AGENTS) if a["name"] == name)
+        return next(i for i, a in enumerate(agents or AGENTS) if a["name"] == name)
     except Exception:
         return 0
 
@@ -683,64 +804,58 @@ def save_last(index):
 
 
 def choose():
-    available = [installed(a) for a in AGENTS]
-    if not any(available):
+    """Run the screens until an agent is picked (its index) or the user quits (None)."""
+    import usage_panel   # registers its settings; imported here so it can import this module
+
+    # Only installed CLIs are listed; the rest of agents.json stays in the catalog
+    # until its CLI shows up on this computer.
+    listed = [a for a in AGENTS if installed(a)]
+    if not listed:
         raise RuntimeError("No supported CLI found. Run agent --picker-doctor and configure a provider.")
-    refresh_usage(available)
-    selected = load_last()
-    if not available[selected]:
-        selected = next((i for i, ok in enumerate(available) if ok), 0)
-    terminal = Terminal()
-    out = sys.stdout
-    start = time.monotonic()
-    last_size = None
-    last_frame = None
-    screen = "agents"
+    available = [True] * len(listed)
+    providers = [a["name"] for a in listed if a["name"] in FETCHERS]
+    load_usage()
+    usage_panel.start(providers)   # live readers feed both screens
+    usage = usage_panel.View(listed)
+    menu = preferences.Menu()
+    screen = preferences.get(START.key)
+    came_from = screen               # where the settings screen returns to
+    selected = load_last(listed)
     defaults_menu = None
     changed_defaults = False
     quit_choice = 0
+    terminal = Terminal()
+    writer = Screen(terminal)
+    out = sys.stdout
+    start = time.monotonic()
 
     def draw(sweep=None):
-        # Full-screen frame on the alternate screen, sized to the terminal on
-        # every frame, so resizing or a narrow pane can never wrap and smear.
-        # Nothing is erased between frames: every cell is overwritten in place,
-        # and the frame is one synchronized write, so high-refresh displays
-        # never catch a half-drawn or blank frame.
-        nonlocal last_size, last_frame
+        # Sized to the terminal on every frame, so resizing or a narrow pane
+        # can never wrap and smear.
         cols, rows = shutil.get_terminal_size((80, 24))
-        clear = ""
-        if (cols, rows) != last_size:
-            clear, last_size, last_frame = f"{ESC}[2J", (cols, rows), None
-        if screen == "defaults":
-            lines = render_defaults(defaults_menu, cols, rows, time.monotonic() - start)
+        t = time.monotonic() - start
+        if screen == "usage":
+            frame = usage_panel.render(usage, cols, rows, t)
+        elif screen == "settings":
+            frame = centered(render_settings(menu, cols, rows, t, usage.frame_style()), cols, rows)
+        elif screen == "defaults":
+            frame = centered(render_defaults(defaults_menu, cols, rows, t), cols, rows)
         elif screen == "confirm_quit":
-            lines = render_quit_confirmation(quit_choice, cols, rows)
+            frame = centered(render_quit_confirmation(quit_choice, cols, rows), cols, rows)
         else:
-            lines = render(selected, available, time.monotonic() - start, cols, rows, sweep)
-        width = max((visible_len(line) for line in lines), default=0)
-        left = max(0, (cols - width) // 2)
-        top = max(0, (rows - len(lines)) // 2)
-        body = "".join(
-            f"{ESC}[{top + i + 1};1H{' ' * left}{line}{' ' * max(0, cols - left - visible_len(line))}"
-            for i, line in enumerate(lines)
-        )
-        if body == last_frame:
-            return
-        last_frame = body
-        frame = f"{ESC}[?2026h{clear}{body}{ESC}[?2026l"
-        terminal.write(frame)
+            frame = centered(render(selected, available, t, cols, rows, sweep, listed), cols, rows)
+        writer.show(frame, cols, rows)
 
     def go(name):
-        nonlocal screen, last_size
+        nonlocal screen, came_from
+        if name == "settings":
+            came_from = screen
         screen = name
-        last_size = None
+        writer.reset()
 
     def move(step):
         nonlocal selected
-        for _ in AGENTS:
-            selected = (selected + step) % len(AGENTS)
-            if available[selected]:
-                return
+        selected = (selected + step) % len(listed)
 
     out.write(f"{ESC}[?1049h{ESC}[?25l{ESC}[?7l")  # alt screen, hide cursor, no autowrap
     out.flush()  # frames go straight to the fd after this
@@ -749,8 +864,11 @@ def choose():
         draw()
         frame_at = time.monotonic()
         while True:
-            # Frames on a fixed 60 fps clock, so drawing time doesn't slow the rate.
-            frame_at += FRAME_TIME
+            # Frames on a fixed clock, so drawing time doesn't slow the rate:
+            # 60 fps for the picker, less for the screens that sit open.
+            step = (FRAME_TIME if screen == "agents" else
+                    usage_panel.frame_time(usage) if screen == "usage" else 1 / 30)
+            frame_at += step
             wait = frame_at - time.monotonic()
             if wait < 0:
                 frame_at, wait = time.monotonic(), 0
@@ -758,7 +876,16 @@ def choose():
                 draw()  # next animation frame
                 continue
             key = terminal.read_key()
-            if screen == "defaults":
+            if screen == "usage":
+                action = usage_panel.handle(usage, key, providers)
+                if action == "quit":
+                    return None
+                if action:
+                    go(action)
+            elif screen == "settings":
+                if menu.handle(key) == "close":
+                    go(came_from)
+            elif screen == "defaults":
                 if key in ("\x03", "\x04"):
                     return None
                 if defaults_menu.handle(key) == "save":
@@ -783,21 +910,25 @@ def choose():
                 elif key in ("\x03", "\x04"):
                     return None
             elif key == "right":
-                defaults_menu = provider_defaults.Menu(AGENTS[selected])
+                defaults_menu = provider_defaults.Menu(listed[selected])
                 go("defaults")
             elif key in ("up", "k"):
                 move(-1)
             elif key in ("down", "j", "\t"):
                 move(1)
-            elif key.isdigit() and 1 <= int(key) <= len(AGENTS) and available[int(key) - 1]:
+            elif key.isdigit() and 1 <= int(key) <= len(listed):
                 selected = int(key) - 1
+            elif key in ("u", "U"):
+                go("usage")
+            elif key == "s":
+                go("settings")
             elif key in ("\r", "\n"):
                 launch = time.monotonic()
                 while (elapsed := time.monotonic() - launch) < 0.21:
                     draw(sweep=min(1.0, (elapsed / 0.18) ** 1.6))
                     time.sleep(1 / 120)
                 draw(sweep=1.0)
-                return selected
+                return AGENTS.index(listed[selected])
             elif key in ("q", "esc", "\x03", "\x04"):
                 if changed_defaults and key in ("q", "esc"):
                     quit_choice = 0
@@ -823,11 +954,27 @@ def doctor():
     print(f"Checkout: {ROOT}")
     print(f"Local config: {config_path()}")
     print(f"Local state: {STATE}")
+    missing = []
     for agent in AGENTS:
         argv = resolve_argv(agent)
-        print(f"{agent['name']}: {argv[0] if argv else 'not installed'}")
+        if not argv:
+            missing.append(agent["name"])
+            continue
+        print(f"{agent['name']}: {argv[0]}")
         print("  arguments: " + json.dumps(agent["argv"][1:]))
+    if missing:
+        print("Not installed (listed once their CLI is found): " + ", ".join(missing))
     print("Usage meters are best effort; unavailable credentials show '-'.")
+
+
+def catalog():
+    """Every profile in agents.json with its colors, installed or not."""
+    for agent in AGENTS:
+        argv = resolve_argv(agent)
+        swatch = "".join(fg(grad(agent, k / 16)) + "▰" for k in range(16)) + RESET
+        name = fg(agent["color"]) + "●" + RESET + " " + BOLD + agent["name"].ljust(12) + RESET
+        state = f"{FAINT}{argv[0]}{RESET}" if argv else f"{FAINT}not installed · {agent['argv'][0]}{RESET}"
+        print(f"  {name} {swatch}  {state}")
 
 
 def main():
@@ -841,12 +988,17 @@ def main():
     if args[:1] == ["--picker-doctor"]:
         doctor()
         return 0
+    if args[:1] == ["--picker-catalog"]:
+        catalog()
+        return 0
     if args[:1] == ["--picker-help"]:
         print("agent [CLI arguments]                 open picker; forward arguments")
         print("agent --picker-launch NAME [args]     launch a provider directly")
         print("agent --picker-update                 fast-forward this Git checkout")
         print("agent --picker-doctor                 show paths and launch profiles")
+        print("agent --picker-catalog                every known CLI, its colors, and whether it is installed")
         print("agent --picker-help                   show this help")
+        print("usage                                 the same command; u switches to the usage panel")
         print("Prefix CLI args with -- to escape picker management commands.")
         return 0
     if args[:1] == ["--picker-launch"]:

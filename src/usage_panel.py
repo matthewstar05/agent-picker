@@ -1,34 +1,32 @@
-#!/usr/bin/env python3
-"""usage: a live dashboard of every coding agent's plan limits, made to sit in a
-Herdr pane all day.
+"""The usage screen: every coding agent's plan limits, live, made to sit in a
+Herdr pane all day. Opened from the agent picker with u; the same command runs
+as both agent and usage.
 
-Limits are read with agent-picker's fetchers, so both commands always agree and
-share one cache. Refreshing follows what the agents are doing: Herdr is asked
-every couple of seconds which panes are working, a provider with a working agent
-is re-read often, and a provider is re-read a few seconds after one of its agents
-finishes a turn (that is when the numbers move). Idle providers are read rarely,
-so the usage endpoints are never hammered.
+Limits are read with the picker's readers into the picker's own cache, so both
+screens always agree. Refreshing follows what the agents are doing: Herdr is
+asked every couple of seconds which panes are working, a provider with a working
+agent is re-read often, and a provider is re-read a few seconds after one of its
+agents finishes a turn (that is when the numbers move). Idle providers are read
+rarely, so the usage endpoints are never hammered.
 
 Each bar is lit up to what's been used. The track behind it is brighter up to
 where an even pace through the window would be by now, and any part of the bar
-past that point turns hot. "out 1h 20m" replaces the reset countdown when the
-current pace would hit the limit before it resets.
+past that point is drawn as is. A limit turns a muted red only when it is 70%
+used with its reset still far off (see concerning()).
 
-Keys: t / → next theme, T / ← previous, r refresh now, a toggle animation, q quit.
-Flags: --theme NAME (also saved), --themes (list them).
+Keys: t / → next theme, T / ← previous, r refresh now, a toggle animation,
+s settings, u or Esc back to the agents, q quit.
 """
 
 import json
 import math
 import os
-import shutil
 import subprocess
-import sys
 import threading
 import time
 
 import agent_picker as ap
-from platform_runtime import Terminal
+import preferences
 
 Line, mix, wave, clip, until = ap.Line, ap.mix, ap.wave, ap.clip, ap.until
 ESC, RESET, BOLD, FAINT = ap.ESC, ap.RESET, ap.BOLD, ap.FAINT
@@ -58,35 +56,41 @@ BRAND_FRAME = {"color": (190, 190, 198)}
 WHITE, TEXT = (255, 255, 255), (232, 232, 238)
 LABEL, SOFT, TRACK = ap.LABEL, ap.SOFT, ap.TRACK
 AHEAD = (104, 104, 114)       # track up to where an even pace would be by now
-WARN, HOT = ap.WARN, ap.HOT
+WARN = ap.WARN
+CONCERN = (196, 118, 122)     # muted pastel red: a limit worth a glance, nothing louder
 SPIN = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-
-
-def load_pref(name, default):
-    try:
-        return (STATE / name).read_text().strip()
-    except Exception:
-        return default
-
-
-def save_pref(name, value):
-    try:
-        STATE.mkdir(parents=True, exist_ok=True)
-        (STATE / name).write_text(str(value))
-    except Exception:
-        pass
 
 
 def theme_index(name):
     return next((i for i, th in enumerate(THEMES) if th["name"] == name), 0)
 
 
+def _legacy(name, default):
+    """A choice saved by the standalone usage command, kept as the default."""
+    try:
+        return (STATE / name).read_text().strip()
+    except Exception:
+        return default
+
+
+THEME = preferences.register(preferences.Setting(
+    "usage.theme", "Usage panel", "Theme", [th["name"] for th in THEMES], _legacy("theme", "brand"),
+    hint="Colors for the usage panel. t and T switch it there too."))
+ANIMATE = preferences.register(preferences.Setting(
+    "usage.animate", "Usage panel", "Animation", [True, False], _legacy("animate", "1") == "1",
+    hint="Off redraws once a second and uses almost no CPU. a toggles it there too.",
+    names={True: "on", False: "off"}))
+
+
 # ---- live data --------------------------------------------------------------
 
-LOCK = threading.Lock()
-USAGE = {}           # provider -> {"windows": [...], "fetched": epoch}, shared with agent-picker
-INFLIGHT = set()     # providers being read right now
-WORKING = {}         # provider -> number of its Herdr panes that are working
+LOCK = ap.USAGE_LOCK  # the picker's own cache, so both screens show the same numbers
+USAGE = ap.USAGE     # provider -> {"windows": [...], "fetched": epoch}
+INFLIGHT = ap.PENDING  # providers being read right now
+PRESENT = {}         # provider -> its panes beside this pane: the cards drawn
+WORKING = {}         # provider -> those panes that are working (drawn as working)
+BUSY = {}            # provider -> its panes working anywhere (paces the reads)
+SCOPE = "this tab"   # where PRESENT looks: this Herdr tab, this tmux window, or this computer
 HERDR_OK = False     # whether Herdr answered the last poll
 FORCED = {}          # provider -> epoch it should be re-read at, regardless of its interval
 LAST_TRY = {}        # provider -> epoch of the last read
@@ -110,40 +114,145 @@ WINDOW_LEN = {"5h": 5 * 3600, "wk": 7 * 86400}   # anything else is a month
 
 
 def provider_of(agent):
+    """The profile a Herdr agent id or a process name belongs to (by its "detect" names)."""
     a = (agent or "").lower()
-    for key, name in (("claude", "Claude"), ("codex", "Codex"), ("cursor", "Cursor"),
-                      ("kiro", "Kiro"), ("agy", "Antigravity"), ("antigravity", "Antigravity"),
-                      ("gemini", "Antigravity")):
-        if key in a:
+    for ext in (".exe", ".cmd", ".js", ".mjs", ".ps1"):
+        if a.endswith(ext):
+            a = a[:-len(ext)]
+    if not a:
+        return None
+    for profile in ap.AGENTS:
+        for key in profile["detect"]:
+            if a == key or a.startswith(key + "-"):
+                return profile["name"]
+    return None
+
+
+def from_argv(argv):
+    """The profile a command line runs, looking past node/bun/python launchers."""
+    for token in argv[:3]:
+        name = provider_of(os.path.basename(token))
+        if name:
             return name
     return None
 
 
-def watch_herdr(stop):
-    """Poll Herdr for working panes; a pane leaving "working" queues a re-read."""
-    global HERDR_OK
+def processes():
+    """[(pid, ppid, argv)] for this user's processes; empty where ps doesn't exist."""
+    out = subprocess.run(["ps", "-xo", "pid=,ppid=,args="], capture_output=True, text=True, timeout=5)
+    rows = []
+    for line in out.stdout.splitlines():
+        parts = line.split(None, 2)
+        if len(parts) == 3 and parts[0].isdigit() and parts[1].isdigit():
+            rows.append((int(parts[0]), int(parts[1]), parts[2].split()))
+    return rows
+
+
+def agents_under(roots, procs):
+    """Profiles running at or below the given pids, one per agent (not per subprocess)."""
+    children = {}
+    for pid, ppid, argv in procs:
+        children.setdefault(ppid, []).append((pid, argv))
+    found = {}
+    stack = [(r, None) for r in roots]
+    by_pid = {pid: argv for pid, _, argv in procs}
+    while stack:
+        pid, parent_agent = stack.pop()
+        name = from_argv(by_pid.get(pid, []))
+        if name and name != parent_agent:
+            found[name] = found.get(name, 0) + 1
+        for child, _ in children.get(pid, []):
+            stack.append((child, name or parent_agent))
+    return found
+
+
+_pane_cache = {}  # Herdr pane id -> (read at, profile from its foreground process)
+
+
+def pane_agent(pane_id):
+    """For panes Herdr doesn't recognize (OpenCode, Aider, ...): read the foreground process."""
+    read_at, name = _pane_cache.get(pane_id, (0, None))
+    if time.time() - read_at < 6:
+        return name
+    try:
+        out = subprocess.run([HERDR, "pane", "process-info", "--pane", pane_id],
+                             capture_output=True, text=True, timeout=5)
+        info = json.loads(out.stdout)["result"]["process_info"]
+        name = next((n for n in (from_argv(p.get("argv") or [p.get("name", "")])
+                                 for p in info.get("foreground_processes", [])) if n), None)
+    except Exception:
+        name = None
+    _pane_cache[pane_id] = (time.time(), name)
+    return name
+
+
+def herdr_sessions(me):
+    """(agents in this pane's tab, working pane ids per profile anywhere)."""
+    out = subprocess.run([HERDR, "pane", "list"], capture_output=True, text=True, timeout=5)
+    panes = json.loads(out.stdout)["result"]["panes"]
+    tab = next((p.get("tab_id") for p in panes if p.get("pane_id") == me), os.environ.get("HERDR_TAB_ID"))
+    here, working = {}, {}
+    for pane in panes:
+        in_tab = pane.get("tab_id") == tab and pane.get("pane_id") != me
+        name = provider_of(pane.get("agent"))
+        if not name and in_tab:
+            name = pane_agent(pane["pane_id"])
+        if not name:
+            continue
+        busy = pane.get("agent_status") == "working"
+        if busy:
+            working.setdefault(name, set()).add(pane["pane_id"])
+        if in_tab:
+            slot = here.setdefault(name, {"panes": 0, "working": 0})
+            slot["panes"] += 1
+            slot["working"] += busy
+    return here, working
+
+
+def tmux_sessions():
+    """Agents in this tmux window (tmux can't say which are working)."""
+    out = subprocess.run(["tmux", "list-panes", "-F", "#{pane_pid}"], capture_output=True, text=True, timeout=5)
+    roots = [int(p) for p in out.stdout.split() if p.isdigit()]
+    return {name: {"panes": n, "working": 0} for name, n in agents_under(roots, processes()).items()}
+
+
+def local_sessions():
+    """Without a multiplexer: agents running anywhere on this computer."""
+    procs = processes()
+    roots = [pid for pid, ppid, _ in procs if ppid not in {p for p, _, _ in procs}]
+    return {name: {"panes": n, "working": 0} for name, n in agents_under(roots, procs).items()}
+
+
+def watch_sessions(stop):
+    """Every two seconds: which agents run beside this pane (drawn) and which are
+    working anywhere (read more often). A pane leaving "working" queues a re-read."""
+    global HERDR_OK, SCOPE
     seen = {}  # provider -> set of working pane ids
+    me = os.environ.get("HERDR_PANE_ID")
     while not stop.is_set():
+        now_working, herdr = {}, False
         try:
-            out = subprocess.run([HERDR, "pane", "list"], capture_output=True, text=True, timeout=5)
-            panes = json.loads(out.stdout)["result"]["panes"]
-            now_working = {}
-            for pane in panes:
-                name = provider_of(pane.get("agent"))
-                if name and pane.get("agent_status") == "working":
-                    now_working.setdefault(name, set()).add(pane["pane_id"])
-            with LOCK:
-                for name, before in seen.items():
-                    if before - now_working.get(name, set()):  # a turn just ended
-                        FORCED[name] = min(FORCED.get(name, math.inf), time.time() + SETTLE)
-                WORKING.clear()
-                WORKING.update({k: len(v) for k, v in now_working.items()})
-                HERDR_OK = True
-            seen = now_working
+            if me:
+                here, now_working = herdr_sessions(me)
+                scope, herdr = "this tab", True
+            elif os.environ.get("TMUX"):
+                here, scope = tmux_sessions(), "this window"
+            else:
+                here, scope = local_sessions(), "this computer"
         except Exception:
-            with LOCK:
-                HERDR_OK = False
-                WORKING.clear()
+            here, scope = {}, SCOPE
+        with LOCK:
+            for name, before in seen.items():
+                if before - now_working.get(name, set()):  # a turn just ended
+                    FORCED[name] = min(FORCED.get(name, math.inf), time.time() + SETTLE)
+            BUSY.clear()
+            BUSY.update({k: len(v) for k, v in now_working.items()})
+            PRESENT.clear()
+            PRESENT.update({k: v["panes"] for k, v in here.items()})
+            WORKING.clear()
+            WORKING.update({k: v["working"] for k, v in here.items() if v["working"]})
+            HERDR_OK, SCOPE = herdr, scope
+        seen = now_working
         stop.wait(2)
 
 
@@ -211,7 +320,7 @@ def fetch(name):
 
 def interval(name):
     working, unknown, idle = INTERVALS[name]
-    base = working if WORKING.get(name) else idle if HERDR_OK else unknown
+    base = working if BUSY.get(name) else idle if HERDR_OK else unknown
     return min(900, base * 2 ** min(FAILS.get(name, 0), 4))
 
 
@@ -254,10 +363,21 @@ def force_all(providers):
 
 class View:
     def __init__(self, agents):
-        self.agents = agents
-        self.theme = theme_index(load_pref("theme", "brand"))
-        self.anim = load_pref("animate", "1") == "1"
+        self.installed = agents   # every listed profile, in picker order
         self.toast_until = 0
+        self.agents = self.present()  # the ones beside this pane; refreshed each frame
+
+    def present(self):
+        with LOCK:
+            return [a for a in self.installed if a["name"] in PRESENT]
+
+    @property
+    def theme(self):
+        return theme_index(preferences.get(THEME.key))
+
+    @property
+    def anim(self):
+        return preferences.get(ANIMATE.key)
 
     def style(self, i):
         """The gradient a card is drawn in under the current theme."""
@@ -294,6 +414,22 @@ def pace(w, now):
         if now + left < resets:
             out = now + left
     return frac, out
+
+
+# A limit is flagged once it is 70% used while its reset is still further away
+# than this; a monthly limit that resets within five days is never flagged.
+CONCERN_PCT = 70
+CONCERN_LEFT = {"5h": 2 * 3600, "wk": 2 * 86400}   # anything else is monthly: 5 days
+
+
+def concerning(w, now):
+    if w["pct"] < CONCERN_PCT or not w.get("resets"):
+        return False
+    return w["resets"] - now > CONCERN_LEFT.get(w["label"], 5 * 86400)
+
+
+def pct_color(w, st, now):
+    return CONCERN if concerning(w, now) else mix(st["color"], WHITE, 0.6)
 
 
 def ago(epoch):
@@ -354,8 +490,10 @@ def put_name(line, agent, t, bold=True):
         line.put(name, agent.get("pastel") or agent["color"], bold=bold)
 
 
-def draw_bar(line, w, bar, st, t, live, stale, now, offset):
+def draw_bar(line, w, bar, st, t, live, stale, now, offset, pulses=1):
+    """pulses: how many bright waves run along the bar, one per working instance."""
     pct = min(100.0, w["pct"])
+    concern = concerning(w, now)
     frac, _ = pace(w, now)
     filled = round(pct / 100 * bar)
     if pct >= 0.5 and filled == 0:
@@ -363,11 +501,12 @@ def draw_bar(line, w, bar, st, t, live, stale, now, offset):
     ahead = round(frac * bar) if frac is not None else 0
     for x in range(bar):
         if x < filled:
-            c = ap.grad(st, x / max(1, bar) * 0.5 + offset - t * 0.08)
-            if x >= ahead and frac is not None:
-                c = mix(c, HOT, 0.6)  # past an even pace
+            c = ap.grad(st, x / max(1, bar) * st.get("bar_span", 0.5) + offset - t * 0.08)
+            if concern:
+                c = mix(c, CONCERN, 0.45)
             if live:
-                c = mix(c, WHITE, 0.5 * wave(x, t, 12.0, 7.0) ** 6)
+                glint = max(wave(x + k * 12.0 / pulses, t, 12.0, 7.0) for k in range(pulses)) ** 6
+                c = mix(c, WHITE, 0.5 * glint)
             if stale:
                 c = mix(c, SOFT, 0.55)
             line.put("▰", c)
@@ -378,8 +517,9 @@ def draw_bar(line, w, bar, st, t, live, stale, now, offset):
 CARDS = {}  # still cards, keyed by everything they show; moving ones are drawn every frame
 
 
-def card(view, i, cw, t, now):
-    """Three lines: the agent and its status, then a bar per limit.
+def card(view, i, cw, t, now, rows=3):
+    """The agent and its status, then a bar per limit, centered in `rows` lines
+    (three at the least; a working card's glow fills all of them).
 
     Only a card with a working agent moves. The rest only change once a second
     (their countdowns), so they are drawn once and reused, and the redraw skips
@@ -392,14 +532,14 @@ def card(view, i, cw, t, now):
     # Working cards share the border's continuous 60 fps clock. Idle cards
     # still reuse their cached contents between countdown updates.
     step = t if working and view.anim else 0.0
-    key = (i, cw, view.theme, view.anim, int(now), entry and entry["fetched"], fetching,
+    key = (i, name, cw, rows, view.theme, view.anim, int(now), entry and entry["fetched"], fetching,
            int(t * 3) % 3 if fetching else 0, working, len(HISTORY.get(name) or ()), step)
     if CARDS.get(i, (None,))[0] != key:
-        CARDS[i] = (key, _card(view, i, cw, step, now, entry, fetching, working, dots=key[7]))
+        CARDS[i] = (key, _card(view, i, cw, step, now, entry, fetching, working, dots=key[9], rows=rows))
     return CARDS[i][1]
 
 
-def _card(view, i, cw, t, now, entry, fetching, working, dots=None):
+def _card(view, i, cw, t, now, entry, fetching, working, dots=None, rows=3):
     agent = view.agents[i]
     name, st = agent["name"], view.style(i)
     live = working > 0
@@ -413,8 +553,13 @@ def _card(view, i, cw, t, now, entry, fetching, working, dots=None):
         head.put("●", agent["color"])
     head.put(" ")
     put_name(head, agent, t)
+    shimmer = None
     if live:
         status, scol = (f"{working} working" if cw >= 30 else f"{working}×"), TEXT
+        if working > 1:
+            shimmer = len(status)
+            if cw >= 34:   # one spinner per instance, out of step with each other
+                status = "".join(SPIN[(int(t * 10) + k * 3) % len(SPIN)] for k in range(min(working, 4))) + " " + status
     elif fetching:
         status, scol = "syncing" + "·" * (1 + dots), SOFT
     elif entry:
@@ -434,11 +579,29 @@ def _card(view, i, cw, t, now, entry, fetching, working, dots=None):
     #             glyph = "·" if r is None else ap.BLOCKS[int(r * 7.99)]
     #             color = TRACK if r is None or r == 0 else ap.grad(st, k / 12 * 0.5 + i * 0.13 - t * 0.05)
     #             head.at(end + k, glyph, color)
-    head.at(right, status, scol)
+    if shimmer:
+        # several instances: the agent's gradient flows through the text with a
+        # bright glint sweeping across it, and the count pulses
+        lead = len(status) - shimmer
+        for k, ch in enumerate(status):
+            hue = ap.grad(st, k / len(status) * 0.7 - t * 0.45)
+            glow = wave(k, t, 9.0, 8.0) ** 4
+            if k < lead:
+                color = mix(hue, WHITE, 0.25)
+            elif ch.isdigit():
+                color = mix(hue, WHITE, 0.55 + 0.45 * wave(0, t, speed=6.0))
+            else:
+                color = mix(mix(hue, WHITE, 0.35), WHITE, 0.6 * glow)
+            head.at(right + k, ch, color, bold=ch.isdigit())
+    else:
+        head.at(right, status, scol)
     lines = [head.pad(cw)]
 
     if not entry:
-        msg = ("reading limits" + "·" * (1 + dots)) if fetching else f"no data · is {name} signed in?"
+        if name not in ap.FETCHERS:
+            msg = "no usage reader for this CLI yet"
+        else:
+            msg = ("reading limits" + "·" * (1 + dots)) if fetching else f"no data · is {name} signed in?"
         lines.append(Line().put("   ").put(clip(msg, cw - 4), SOFT).pad(cw))
     else:
         for k, w in enumerate(entry["windows"][:2]):
@@ -446,25 +609,25 @@ def _card(view, i, cw, t, now, entry, fetching, working, dots=None):
             if w.get("resets") and w["resets"] < now:
                 w["pct"] = 0  # rolled over since this was read
             pct = w["pct"]
-            _, out = pace(w, now)
             line = Line().put("   ").put(w["label"].ljust(2), LABEL).put(" ")
-            reset = f"↻ {until(w.get('resets'))}" if w.get("resets") else ""
-            tail = f"out {until(out)}" if out else reset
-            # Every row of a card gets the same bar, so the percentages line up;
-            # a warning only changes the text after it.
+            tail = f"↻ {until(w.get('resets'))}" if w.get("resets") else ""
             tail_w = 12 if cw - 6 - 5 - 12 >= 6 else 0
             bar = min(40, cw - 6 - 5 - tail_w - 1)
             if bar >= 3:
-                draw_bar(line, w, bar, st, t if view.anim else 0, live and view.anim, stale, now, i * 0.13)
-            pcol = HOT if pct >= 90 else WARN if pct >= 70 else mix(st["color"], WHITE, 0.6)
+                draw_bar(line, w, bar, st, t if view.anim else 0, live and view.anim, stale, now, i * 0.13,
+                         pulses=max(1, min(working, 4)))
+            pcol = pct_color(w, st, now)
             line.put(f" {pct:3.0f}%", mix(pcol, SOFT, 0.5) if stale else pcol, bold=True)
             if tail_w and tail:
-                line.put("  " + tail, HOT if out else SOFT)
-                if out and reset and cw - len(line.cells) >= 3 + len(reset) + 1:
-                    line.put(" · ", TRACK).put(reset, SOFT)  # room to keep the reset too
+                line.put("  " + tail, CONCERN if concerning(w, now) else SOFT)
             lines.append(line.pad(cw))
     while len(lines) < 3:
         lines.append(Line().pad(cw))
+    if rows >= 7:
+        lines.insert(1, Line().pad(cw))   # room to breathe between the name and its bars
+    top = max(0, (rows - len(lines)) // 2)
+    lines = [Line().pad(cw) for _ in range(top)] + lines
+    lines += [Line().pad(cw) for _ in range(rows - len(lines))]
     if live and view.anim:
         return ap.lit(lines, st, t)
     return [line.paint() for line in lines]
@@ -502,9 +665,7 @@ def compact_row(view, i, width, t, now):
             bar = min(16, share - 9)
             if bar >= 2:
                 draw_bar(line, w, bar, st, t if view.anim else 0, False, False, now, i * 0.13)
-            pct = w["pct"]
-            pcol = HOT if pct >= 90 else WARN if pct >= 70 else mix(st["color"], WHITE, 0.6)
-            line.put(f"{pct:4.0f}%", pcol, bold=True)
+            line.put(f"{w['pct']:4.0f}%", pct_color(w, st, now), bold=True)
             line.pad(max(len(line.cells), seg_start + share))
     else:
         line.put(" ··", SOFT)
@@ -543,12 +704,14 @@ def overlay(cells, col, text, color, bold=False):
             cells[col + k] = f"{ap.fg(color)}{BOLD if bold else ''}{ch}{RESET}"
 
 
-def working_card(view, i, width, t, now, lids=True, active=True):
-    """Reserve the selector's border space, drawing it only while working."""
-    content = card(view, i, width - 2, t, now)
+def working_card(view, i, width, t, now, lids=True, active=True, height=None):
+    """Reserve the selector's border space, drawing it only while working.
+    height: total lines including lids; the card grows to fill it."""
+    inner = 3 if height is None else max(3, height - (2 if lids else 0))
+    content = card(view, i, width - 2, t, now, rows=inner)
     agent = view.agents[i]
-    tick = t if view.anim else 0.4
     style = agent if THEMES[view.theme]["stops"] is None else view.style(i)
+    tick = t if view.anim else 0.4
     ring = ap.border_ring(style, tick, width - 2, len(content)) if active else None
     lines = [(ring[(y + 1, 0)] + RESET if active else " ") + line
              + (ring[(y + 1, width - 1)] + RESET if active else " ")
@@ -560,14 +723,31 @@ def working_card(view, i, width, t, now, lids=True, active=True):
     return lines
 
 
+def empty_state(width, height):
+    """Shown until an agent is open beside this pane."""
+    title = f"no agents in {SCOPE}"
+    lines = [(title, TEXT, True), ("", None, False)]
+    hint = "open one with agent and its limits show up here"
+    if height >= 4:
+        lines.append((hint, SOFT, False))
+    out = []
+    for text, color, bold in lines:
+        text = clip(text, width)
+        left = (width - len(text)) // 2
+        out.append(" " * left + (ap.fg(color) + (BOLD if bold else "") + text + RESET if text else "")
+                   + " " * (width - left - len(text)))
+    return out
+
+
 def render(view, cols, rows, t):
     """The frame's rows. A framed body row is (left edge, content, right edge), so
     the redraw can rewrite the animated border without resending the content."""
     now = time.time()
+    view.agents = view.present()   # one consistent list for the whole frame
     n = len(view.agents)
-    if not n:
-        return [clip("usage: no agent CLIs installed", cols)]
-    framed = cols >= 26 and rows >= n + 2
+    framed = cols >= 26 and rows >= max(n, 4) + 2
+    if not n and not framed:
+        return [clip(f"no agents in {SCOPE}", cols)]
     if not framed:
         return [compact_row(view, i, cols, t, now) for i in range(n)][:rows]
 
@@ -590,35 +770,62 @@ def render(view, cols, rows, t):
         working = sum(WORKING.values())
         herdr = HERDR_OK
     status = f" {working} working " if working else " idle " if herdr else " live "
-    hints = next((h for h in (" t theme · r refresh · a anim · q quit ", " t theme · r refresh · q ",
-                              " t theme · q ", "") if len(h) + max(13, len(status)) + 6 <= cols), "")
+    hints = next((h for h in (" t theme · r refresh · s settings · u agents · q quit ",
+                              " t theme · s settings · u agents · q ", " t theme · s · u · q ", "")
+                  if len(h) + max(13, len(status)) + 6 <= cols), "")
     overlay(bottom, 2, status, TEXT if working else SOFT)
     if hints:
         overlay(bottom, cols - 2 - len(hints), hints, SOFT)
 
     inner_w, inner_h = cols - 4, rows - 2
     body = []
+    # Three ways to lay the cards out, best first:
+    #  uniform  every card reserves border space, so nothing moves when an
+    #           agent starts or stops working;
+    #  fitted   only working cards get a border (5 rows, idle cards 3), for
+    #           panes a little too short for uniform;
+    #  bare     no lids at all, for very short panes.
+    fitted = [5 if live else 3 for live in active]
     arrangement = plan(n, inner_w, inner_h, [5] * n)
-    lids = arrangement is not None
+    mode = "uniform"
+    if arrangement is None and any(active):
+        arrangement, mode = plan(n, inner_w, inner_h, fitted), "fitted"
     if arrangement is None:
-        arrangement = plan(n, inner_w, inner_h)
+        arrangement, mode = plan(n, inner_w, inner_h), "bare"
+    lids = mode != "bare"
     if arrangement:
         ncols, cw, nr, gap = arrangement
-        grid_w = ncols * cw + (ncols - 1) * GAP_X
+        # Cards tile the whole panel: bordered cards take every column and their
+        # share of the height, so neighbouring working cards' borders touch.
+        gap_x = 0 if lids else GAP_X
+        if lids:
+            cw = inner_w // ncols
+        grid_w = ncols * cw + (ncols - 1) * gap_x
         left = (inner_w - grid_w) // 2
-        cards = [working_card(view, i, cw, t, now, lids, active[i]) for i in range(n)]
+        gap = 0 if lids else min(gap, 1)
+        need = [max(fitted[r * ncols:(r + 1) * ncols]) if mode == "fitted" else 0 for r in range(nr)]
+        spare = inner_h - (nr - 1) * gap - sum(need)
+        # Every row of cards gets the same extra height; rows that don't divide
+        # evenly go above and below the cards rather than into one card.
+        slots = [need[r] + spare // nr for r in range(nr)]
+        cards = [working_card(view, i, cw, t, now, lids and (mode == "uniform" or active[i]), active[i],
+                              height=slots[i // ncols])
+                 for i in range(n)]
         for r in range(nr):
             if r:
                 body += [""] * gap
             row_cards = cards[r * ncols:(r + 1) * ncols]
             for y in range(max(len(c) for c in row_cards)):
                 segs = [c[y] if y < len(c) else " " * cw for c in row_cards]
-                text = (" " * GAP_X).join(segs)
+                text = (" " * gap_x).join(segs)
                 body.append(" " * left + text + " " * (inner_w - left - len(row_cards) * cw
-                                                        - (len(row_cards) - 1) * GAP_X))
+                                                        - (len(row_cards) - 1) * gap_x))
+        pad_top = max(0, (inner_h - len(body)) // 2)
+    elif n:
+        body = [compact_row(view, i, inner_w, t, now) for i in range(n)]
         pad_top = max(0, (inner_h - len(body)) // 2)
     else:
-        body = [compact_row(view, i, inner_w, t, now) for i in range(n)]
+        body = empty_state(inner_w, inner_h)
         pad_top = max(0, (inner_h - len(body)) // 2)
     blank = " " * inner_w
     body = [blank] * pad_top + body
@@ -634,120 +841,46 @@ def render(view, cols, rows, t):
     return lines
 
 
-# ---- terminal ---------------------------------------------------------------
+# ---- screen -----------------------------------------------------------------
 
-def run(view, providers):
-    terminal = Terminal()
-    start = time.monotonic()
-    last_size, last_rows = None, []
-
-    def draw():
-        nonlocal last_size, last_rows
-        cols, rows = shutil.get_terminal_size((80, 24))
-        clear = ""
-        if (cols, rows) != last_size:
-            clear, last_size, last_rows = f"{ESC}[2J", (cols, rows), []
-        lines = render(view, cols, rows, time.monotonic() - start)
-        out = []
-        for y, row in enumerate(lines):
-            before = last_rows[y] if y < len(last_rows) else None
-            if row == before:
-                continue
-            if isinstance(row, tuple):
-                same = isinstance(before, tuple)
-                if not same or row[0] != before[0]:
-                    out.append(f"{ESC}[{y + 1};1H{row[0]}")
-                if not same or row[1] != before[1]:
-                    out.append(f"{ESC}[{y + 1};2H{row[1]}")
-                if not same or row[2] != before[2]:
-                    out.append(f"{ESC}[{y + 1};{cols}H{row[2]}")
-            else:
-                out.append(f"{ESC}[{y + 1};1H{row}{ESC}[K")
-        last_rows = lines
-        if out or clear:
-            terminal.write(f"{ESC}[?2026h{clear}{''.join(out)}{ESC}[?2026l")
-
-    def set_theme(i):
-        view.theme = i % len(THEMES)
-        view.toast_until = time.time() + 2.5
-        save_pref("theme", THEMES[view.theme]["name"])
-
-    sys.stdout.write(f"{ESC}[?1049h{ESC}[?25l{ESC}[?7l")  # alt screen, hide cursor, no autowrap
-    sys.stdout.flush()
-    try:
-        terminal.__enter__()
-        frame_at = time.monotonic()
-        while True:
-            draw()
-            # Fixed deadlines keep render time inside the 60 fps frame budget.
-            step = ap.FRAME_TIME if view.anim else 1.0
-            frame_at += step
-            now = time.monotonic()
-            if frame_at < now:
-                frame_at = now
-            if not terminal.wait(max(0, frame_at - now)):
-                continue
-            key = terminal.read_key()
-            if key in ("t", "right", "l"):
-                set_theme(view.theme + 1)
-            elif key in ("T", "left", "h"):
-                set_theme(view.theme - 1)
-            elif key == "r":
-                force_all(providers)
-            elif key == "a":
-                view.anim = not view.anim
-                save_pref("animate", "1" if view.anim else "0")
-            elif key in ("q", "esc", "\x03", "\x04"):
-                return
-    finally:
-        if hasattr(terminal, "old") or hasattr(terminal, "modes"):
-            terminal.__exit__()
-        sys.stdout.write(f"{ESC}[?7h{ESC}[?25h{ESC}[?1049l")
-        sys.stdout.flush()
+_stop = None
 
 
-def list_themes():
-    current = load_pref("theme", "brand")
-    for th in THEMES:
-        style = BRAND_FRAME if th["stops"] is None else {"gradient": th["stops"]}
-        swatch = "".join(f"{ap.fg(ap.grad(style, k / 16))}▰" for k in range(16))
-        mark = "❯" if th["name"] == current else " "
-        print(f" {mark} {swatch}{RESET}  {th['name']}")
-
-
-def main():
-    if os.name == "nt":
-        sys.stdout.reconfigure(encoding="utf-8")
-    args = sys.argv[1:]
-    if "--themes" in args or "--list" in args:
-        list_themes()
+def start(providers):
+    """Start the live readers once; they keep the cache fresh for both screens."""
+    global _stop
+    if _stop:
         return
-    if "--theme" in args:
-        try:
-            name = args[args.index("--theme") + 1]
-        except IndexError:
-            sys.exit("usage: --theme needs a name (see --themes)")
-        if name not in [th["name"] for th in THEMES]:
-            sys.exit(f"usage: no theme named {name!r} (see --themes)")
-        save_pref("theme", name)
-    if not (sys.stdin.isatty() and sys.stdout.isatty()):
-        sys.exit("usage: needs an interactive terminal")
-
-    agents = [a for a in ap.AGENTS if ap.installed(a) and a["name"] in ap.FETCHERS]
-    providers = [a["name"] for a in agents]
-    ap.load_usage()
-    USAGE.update(ap.USAGE)
+    _stop = threading.Event()
+    merge_cache()
     load_history()
-    stop = threading.Event()
-    threading.Thread(target=watch_herdr, args=(stop,), daemon=True).start()
-    threading.Thread(target=schedule, args=(providers, stop), daemon=True).start()
-    try:
-        run(View(agents), providers)
-    except KeyboardInterrupt:
-        pass
-    finally:
-        stop.set()
+    now = time.time()
+    with LOCK:
+        for name in providers:
+            entry = USAGE.get(name)
+            if entry and now - entry["fetched"] < 60:
+                LAST_TRY[name] = entry["fetched"]  # just read; no need to read it again yet
+    threading.Thread(target=watch_sessions, args=(_stop,), daemon=True).start()
+    threading.Thread(target=schedule, args=(providers, _stop), daemon=True).start()
 
 
-if __name__ == "__main__":
-    main()
+def frame_time(view):
+    return ap.FRAME_TIME if view.anim else 1.0   # once a second keeps the countdowns current
+
+
+def handle(view, key, providers):
+    """Apply a key on the usage screen. Returns "agents", "settings", "quit", or None."""
+    if key in ("t", "right", "l", "T", "left", "h"):
+        preferences.cycle(THEME.key, -1 if key in ("T", "left", "h") else 1)
+        view.toast_until = time.time() + 2.5
+    elif key == "r":
+        force_all(providers)
+    elif key == "a":
+        preferences.cycle(ANIMATE.key)
+    elif key == "s":
+        return "settings"
+    elif key in ("u", "U", "esc", "\x7f", "\b"):
+        return "agents"
+    elif key in ("q", "\x03", "\x04"):
+        return "quit"
+    return None

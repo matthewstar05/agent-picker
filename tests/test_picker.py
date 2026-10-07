@@ -21,7 +21,8 @@ class PickerTests(unittest.TestCase):
         self.assertEqual(agents["Codex"]["argv"][1:], ["-m", "gpt-6.1-sol", "-c", "model_reasoning_effort=high", "--dangerously-bypass-approvals-and-sandbox"])
         self.assertIn("--dangerously-skip-permissions", agents["Claude"]["argv"])
         self.assertIn("--trust-all-tools", agents["Kiro"]["argv"])
-        self.assertEqual(len(agents), 5)
+        self.assertEqual(list(agents)[:5], ["Claude", "Codex", "Antigravity", "Cursor", "Kiro"])
+        self.assertIn("OpenCode", agents)
 
     def test_local_platform_override(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -54,7 +55,7 @@ class PickerTests(unittest.TestCase):
 
     def test_resolution_uses_cursor_fallback_without_generic_agent(self):
         seen = []
-        def which(command):
+        def which(command, path=None):
             seen.append(command)
             return "/vendor/cursor-agent" if command == "cursor-agent" else None
         with patch.object(runtime.shutil, "which", which):
@@ -67,10 +68,25 @@ class PickerTests(unittest.TestCase):
             for cols in (1, 8, 17, 22, 24, 40, 60, 80, 120):
                 for rows in (1, 5, 7, 10, 14, 24, 40):
                     for selected in range(5):
-                        lines = picker.render(selected, [True] * 5, 0.3, cols, rows)
+                        lines = picker.render(selected, [True] * 5, 0.3, cols, rows, agents=picker.AGENTS[:5])
                         self.assertLessEqual(len(lines), rows)
                         for line in lines:
                             self.assertLessEqual(picker.visible_len(line), cols, (cols, rows, selected))
+
+    def test_catalog_profiles_are_complete(self):
+        for agent in settings.load_agents():
+            for key in ("name", "color", "pastel", "gradient", "short", "detail", "argv", "detect"):
+                self.assertIn(key, agent, agent["name"])
+            self.assertTrue(agent["detect"])
+
+    def test_picker_lists_only_installed_agents(self):
+        listed = [a for a in picker.AGENTS if a["name"] in ("Codex", "Kiro")]
+        lines = picker.render(0, [True, True], 0.3, 80, 24, agents=listed)
+        text = "".join(picker._ANSI.sub("", line) for line in lines)
+        self.assertIn("Codex", text)
+        self.assertIn("Kiro", text)
+        self.assertNotIn("Claude", text)
+        self.assertNotIn("OpenCode", text)
 
     def test_missing_providers_report_clear_error(self):
         with patch.object(picker, "installed", return_value=False):
@@ -208,7 +224,7 @@ class PickerTests(unittest.TestCase):
         master, slave = pty.openpty()
         old = termios.tcgetattr(slave)
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
-        code = "import sys;sys.path.insert(0,sys.argv[1]);import agent_picker as a;a.installed=lambda x:True;a.refresh_usage=lambda x:None;a.main()"
+        code = "import sys;sys.path.insert(0,sys.argv[1]);import agent_picker as a;a.installed=lambda x:True;a.FETCHERS.clear();a.main()"
         process = subprocess.Popen([sys.executable, "-c", code, str(ROOT / "src")], stdin=slave, stdout=slave, stderr=slave)
         data = b""
         start = time.monotonic()

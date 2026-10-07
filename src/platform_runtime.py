@@ -48,6 +48,19 @@ class Terminal:
             import tty
             self.old = termios.tcgetattr(self.fd)
             tty.setcbreak(self.fd)
+            # Ctrl+\ (SIGQUIT), a closed pane (SIGHUP), or kill (SIGTERM) would
+            # otherwise abort Python mid-frame: macOS shows "Python quit
+            # unexpectedly" and the terminal is left in cbreak mode. Leave the
+            # way q does instead, so the caller's cleanup restores everything.
+            import signal
+
+            def leave(signum, frame):
+                raise KeyboardInterrupt
+
+            self.signals = {}
+            for name in ("SIGQUIT", "SIGHUP", "SIGTERM"):
+                number = getattr(signal, name)
+                self.signals[number] = signal.signal(number, leave)
         return self
 
     def _restore_windows(self):
@@ -58,7 +71,10 @@ class Terminal:
         if WINDOWS:
             self._restore_windows()
         else:
+            import signal
             import termios
+            for number, handler in getattr(self, "signals", {}).items():
+                signal.signal(number, handler)
             termios.tcsetattr(self.fd, termios.TCSADRAIN, self.old)
 
     def wait(self, seconds):
@@ -110,14 +126,27 @@ class Terminal:
                 data = data[os.write(sys.stdout.fileno(), data):]
 
 
+# Where agent CLI installers put their binaries when that folder isn't always
+# on PATH (a pane started before the install, or a shell without the rc line).
+SEARCH_DIRS = ([
+    "~/AppData/Roaming/npm", "~/.bun/bin", "~/.cargo/bin", "~/go/bin", "~/.local/bin",
+] if WINDOWS else [
+    "~/.local/bin", "~/.opencode/bin", "~/.bun/bin", "~/.npm-global/bin", "~/.npm/bin",
+    "~/.cargo/bin", "~/go/bin", "~/.amp/bin", "~/.factory/bin", "~/.deno/bin",
+    "/opt/homebrew/bin", "/usr/local/bin",
+])
+
+
 def resolve_argv(agent):
     argv = list(agent["argv"])
     # Never search for generic "agent": that would relaunch this picker.
     candidates = [argv[0]] + agent.get("executables", [])
-    for command in candidates:
-        found = shutil.which(command)
-        if found:
-            return [found] + argv[1:]
+    extra = os.pathsep.join(str(Path(d).expanduser()) for d in SEARCH_DIRS)
+    for path in (None, extra):
+        for command in candidates:
+            found = shutil.which(command, path=path)
+            if found:
+                return [found] + argv[1:]
     return None
 
 
