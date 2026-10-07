@@ -1,5 +1,6 @@
 """Shared launch profiles plus machine-local overrides."""
 
+import provider_defaults
 import json
 import os
 from pathlib import Path
@@ -40,6 +41,8 @@ def load_agents():
             raise ValueError(f"{agent['name']}: argv must be a nonempty array of strings")
         if Path(argv[0]).stem.lower() == "agent" and not Path(argv[0]).is_absolute():
             raise ValueError("Cursor's generic 'agent' must be an absolute vendor path to prevent recursion")
+        if "defaults" in agent:
+            provider_defaults.apply(agent, agent["defaults"])
     return agents
 
 

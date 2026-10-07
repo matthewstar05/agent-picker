@@ -63,6 +63,12 @@ usage --themes                       list the panel's color themes
 
 Updates are explicit, use `git pull --ff-only`, and refuse a dirty checkout. If the two machines have diverging commits, resolve them with normal Git operations before updating. The command does not commit, stash, reset, push, or update provider CLIs automatically.
 
+## Agent selector defaults
+
+In the agent selector, highlight a provider and press `→` to open its defaults. `↑↓` selects **Model**, **Effort**, or **Bypass Permissions**. On Model, press `→` or Enter, then type a model identifier (typing replaces the existing value). `←→` moves the text cursor; Enter finishes editing. On Effort, `←→` cycles levels; on Bypass Permissions the same keys toggle On/Off. Space or Enter also changes either value. Esc saves locally and returns to the selector. If you then quit the selector with Esc or q after making changes, a confirmation opens with **Stay** selected. The saved defaults remain when you reopen `agent`.
+
+Changes are saved in the machine-local config as `agents.<Provider>.defaults`, preserving local paths and unrelated arguments. Turning Bypass Permissions Off removes that provider's bypass flags and skips new picker folder-trust writes. Claude uses its default permission mode; Codex uses on-request approvals and the workspace-write sandbox.
+
 ## Shared defaults and local overrides
 
 [agents.json](agents.json) contains the original launch settings, colors, and display labels. These model identifiers and flags were copied from the working Mac command; they are configurable preferences, not a promise that every provider version or account supports them.
@@ -75,7 +81,7 @@ Updates are explicit, use `git pull --ff-only`, and refuse a dirty checkout. If 
 | Kiro | claude-opus-5.5 | medium |
 | Antigravity | gemini-3.8-flash-high | high |
 
-The defaults retain the original permission bypass flags and automatic current-folder trust behavior. To use a provider's normal approvals, replace its `argv` in the shared profiles or local config with the desired arguments. Set `AGENT_PICKER_NO_PRETRUST=1` to skip the picker’s folder-trust writes. Only the selected provider's current directory is pre-trusted.
+The defaults retain the original permission bypass flags and automatic current-folder trust behavior. To use normal approvals, turn **Bypass Permissions** Off in that provider's defaults. Set `AGENT_PICKER_NO_PRETRUST=1` to skip the picker’s folder-trust writes. Only the selected provider's current directory is pre-trusted.
 
 Use the config path printed by `--picker-doctor` for machine-specific executable paths or launch arguments. On macOS it is normally `~/.config/agent-picker/config.json`; on Windows it is `%APPDATA%\agent-picker\config.json`.
 

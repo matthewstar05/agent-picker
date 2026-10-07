@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""agent: pick a coding agent with the arrow keys and start a new session.
+"""Agent selector: pick a coding agent or edit its local launch defaults.
 
-Each entry launches its CLI on the frontier model with permission prompts
-skipped. Extra arguments are passed through to the chosen CLI.
+Each entry launches its CLI with your saved defaults. Extra arguments are passed through to the chosen CLI.
 Keys: up/down or j/k move, 1-5 jump, Enter launches, q or Esc quits.
 Draws on the alternate screen and fits itself to the terminal on every frame.
 Each row shows the agent's plan limits (5-hour, weekly, or monthly) and when they reset.
 """
 
+import provider_defaults
 import base64
 import colorsys
 import json
@@ -570,12 +570,8 @@ def render(selected, available, t, cols, rows, sweep=None):
         return f"{edge}│{RESET}{content}{' ' * max(0, iw - visible)}{edge}│{RESET}"
 
     star = fg(mix((225, 165, 40), (255, 222, 120), wave(0, t, speed=3.0))) + "✦" + RESET  # gold, glinting
-    sub = "new session · permissions skipped"
-    # the subtitle goes after the block wave and before the bars
-    show_sub = iw >= 11 + len(sub) + 6 and layout(bw, True) in LAYOUTS[:2]
-    fill = iw - 10 - (len(sub) + 2 if show_sub else 0)  # "╭─ ✦ agent " + "╮" is 12 wide
-    top = f"{edge}╭─{RESET} {star} {BOLD}agent{RESET} {edge}{'─' * fill}{RESET}"
-    top += (f" {FAINT}{sub}{RESET} " if show_sub else "") + f"{edge}╮{RESET}"
+    title = "agent selector"
+    top = f"{edge}╭─{RESET} {star} {BOLD}{title}{RESET} {edge}{'─' * max(0, iw - len(title) - 5)}╮{RESET}"
 
     # body entries: (kind, line). "lid" lines are dropped first when short on rows,
     # then "second" lines (each agent collapses to its first line).
@@ -596,7 +592,7 @@ def render(selected, available, t, cols, rows, sweep=None):
             for y, line in enumerate(rows_i):
                 body.append(("first" if y == 0 else "second", framed("  " + line.paint(), bw + 2)))
 
-    hints = [" ↑↓ move · ⏎ launch · q quit ", " ↑↓ · ⏎ launch · q quit ", " ⏎ launch · q quit ", " ⏎ launch ", ""]
+    hints = [" ↑↓ move · → defaults · ⏎ launch · esc quit ", " → defaults · ⏎ launch · esc quit ", " → defaults · ⏎ launch ", " ⏎ launch ", ""]
     hint = next(h for h in hints if len(h) <= iw - 2)
     bottom = f"{edge}╰─{RESET}{FAINT}{hint}{RESET}{edge}{'─' * (iw - 1 - len(hint))}╯{RESET}"
 
@@ -609,6 +605,59 @@ def render(selected, available, t, cols, rows, sweep=None):
     if len(lines) > rows:
         lines = [top] + [line for kind, line in body if kind in ("first", "bare")] + [bottom]
     return lines[:rows]
+
+
+def render_defaults(menu, cols, rows, t):
+    """A provider's defaults, with inline model editing and a clear save path."""
+    width = min(MAX_IW, cols - 2)
+    name = menu.agent["name"]
+    content = [(f"{name} defaults", True)]
+    if menu.original is None:
+        content.append(("Defaults are managed by this provider.", False))
+    else:
+        for i, (key, label) in enumerate(zip(menu.fields, menu.labels)):
+            value = menu.values[key]
+            value = ("On" if value else "Off") if key == "bypass_permissions" else value
+            mark = "❯ " if menu.index == i else "  "
+            if menu.editing and key == "model":
+                value = ("[" + value + "]") if menu.replace else value[:menu.cursor] + "▏" + value[menu.cursor:]
+            content.append((mark + label + ": " + str(value), menu.index == i))
+        if menu.editing:
+            hint = "Type model · ←→ cursor · enter done · esc save"
+        elif menu.index == 0:
+            hint = "→ / enter edit model · typing replaces it"
+        elif menu.index == 1:
+            hint = "←→ / space cycle effort"
+        else:
+            hint = "←→ / space toggle"
+        content.append(("", False))
+        content.append((menu.error or hint, False))
+        content.append(("Changed" if menu.changed else "Saved locally", False))
+    footer = "↑↓ move · esc save & back"
+    if width < 26 or rows < 7:
+        text = content[:1] + (content[1:4] if rows >= 4 else [content[menu.index + 1]])
+        text += [(menu.error or footer, False)]
+        return [fg(menu.agent["color"]) + clip(line, cols) + RESET for line, _ in text[:rows]]
+    edge = fg(FRAME)
+    inner = width - 2
+    lines = [edge + "╭" + "─" * width + "╮" + RESET]
+    for line, selected in content:
+        shown = clip(line, inner)
+        style = (BOLD + fg(menu.agent["color"])) if selected else FAINT
+        lines.append(edge + "│ " + style + shown + RESET + " " * (inner - len(shown)) + " " + edge + "│" + RESET)
+    shown = clip(footer, inner)
+    lines.append(edge + "│ " + FAINT + shown + RESET + " " * (inner - len(shown)) + " " + edge + "│" + RESET)
+    lines.append(edge + "╰" + "─" * width + "╯" + RESET)
+    if len(lines) > rows:
+        lines = lines[:5] + lines[-2:]
+    return lines[:rows]
+
+
+def render_quit_confirmation(choice, cols, rows):
+    lines = ["Are you sure you want to quit agent selector?", "Your changes are saved locally.", "",
+             ("❯ Stay     Quit" if choice == 0 else "  Stay   ❯ Quit"),
+             "←→ choose · enter confirm · esc stay"]
+    return [FAINT + clip(line, cols) + RESET for line in lines[:rows]]
 
 
 def load_last():
@@ -640,6 +689,10 @@ def choose():
     start = time.monotonic()
     last_size = None
     last_frame = None
+    screen = "agents"
+    defaults_menu = None
+    changed_defaults = False
+    quit_choice = 0
 
     def draw(sweep=None):
         # Full-screen frame on the alternate screen, sized to the terminal on
@@ -652,7 +705,12 @@ def choose():
         clear = ""
         if (cols, rows) != last_size:
             clear, last_size, last_frame = f"{ESC}[2J", (cols, rows), None
-        lines = render(selected, available, time.monotonic() - start, cols, rows, sweep)
+        if screen == "defaults":
+            lines = render_defaults(defaults_menu, cols, rows, time.monotonic() - start)
+        elif screen == "confirm_quit":
+            lines = render_quit_confirmation(quit_choice, cols, rows)
+        else:
+            lines = render(selected, available, time.monotonic() - start, cols, rows, sweep)
         width = max((visible_len(line) for line in lines), default=0)
         left = max(0, (cols - width) // 2)
         top = max(0, (rows - len(lines)) // 2)
@@ -665,6 +723,11 @@ def choose():
         last_frame = body
         frame = f"{ESC}[?2026h{clear}{body}{ESC}[?2026l"
         terminal.write(frame)
+
+    def go(name):
+        nonlocal screen, last_size
+        screen = name
+        last_size = None
 
     def move(step):
         nonlocal selected
@@ -689,7 +752,34 @@ def choose():
                 draw()  # next animation frame
                 continue
             key = terminal.read_key()
-            if key in ("up", "k"):
+            if screen == "defaults":
+                if key in ("\x03", "\x04"):
+                    return None
+                if defaults_menu.handle(key) == "save":
+                    try:
+                        if defaults_menu.changed:
+                            provider_defaults.save(defaults_menu.agent, defaults_menu.values, config_path())
+                            changed_defaults = True
+                        go("agents")
+                    except (OSError, ValueError) as exc:
+                        defaults_menu.error = f"Could not save: {exc}"
+            elif screen == "confirm_quit":
+                if key in ("left", "right", "up", "down", "\t"):
+                    quit_choice = 1 - quit_choice
+                elif key in ("\r", "\n"):
+                    if quit_choice == 1:
+                        return None
+                    go("agents")
+                elif key in ("y", "Y"):
+                    return None
+                elif key in ("esc", "n", "N", "q"):
+                    go("agents")
+                elif key in ("\x03", "\x04"):
+                    return None
+            elif key == "right":
+                defaults_menu = provider_defaults.Menu(AGENTS[selected])
+                go("defaults")
+            elif key in ("up", "k"):
                 move(-1)
             elif key in ("down", "j", "\t"):
                 move(1)
@@ -703,7 +793,11 @@ def choose():
                 draw(sweep=1.0)
                 return selected
             elif key in ("q", "esc", "\x03", "\x04"):
-                return None
+                if changed_defaults and key in ("q", "esc"):
+                    quit_choice = 0
+                    go("confirm_quit")
+                else:
+                    return None
             draw()
     finally:
         if hasattr(terminal, "old") or hasattr(terminal, "modes"):
@@ -772,7 +866,8 @@ def main():
     if args[:1] == ["--"]:
         args = args[1:]
     save_last(index)
-    if os.environ.get("AGENT_PICKER_NO_PRETRUST") != "1":
+    defaults = provider_defaults.current(agent)
+    if os.environ.get("AGENT_PICKER_NO_PRETRUST") != "1" and (defaults is None or defaults["bypass_permissions"]):
         pretrust(agent)
     print(f"  {fg(agent['color'])}●{RESET} {BOLD}{agent['name']}{RESET} {FAINT}{agent['detail']}{RESET}\n", flush=True)
     return launch(argv + args)
