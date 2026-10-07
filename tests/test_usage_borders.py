@@ -193,6 +193,12 @@ class UsageBorderTests(unittest.TestCase):
                             percentages = []
                             for line in rendered:
                                 drawn = cells(line)
+                                bar_colors = [color for ch, color in drawn if ch == "▰"]
+                                if name == "rainbow" and bar_colors:
+                                    if workers:
+                                        self.assertTrue(any(color != panel.WHITE for color in bar_colors))
+                                    else:
+                                        self.assertTrue(all(color == panel.WHITE for color in bar_colors))
                                 plain = "".join(ch for ch, _ in drawn)
                                 for match in re.finditer(r"\d+%", plain):
                                     percentages.append([color for _, color in drawn[match.start():match.end()]])

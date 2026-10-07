@@ -493,7 +493,7 @@ def put_name(line, agent, t, bold=True, panes=None, rainbow=False):
         line.put(name, color, bold=bold).put(suffix, color)
 
 
-def draw_bar(line, w, bar, st, t, live, stale, now, offset, pulses=1):
+def draw_bar(line, w, bar, st, t, live, stale, now, offset, pulses=1, white=False):
     """pulses: how many bright waves run along the bar, one per working instance."""
     pct = min(100.0, w["pct"])
     concern = concerning(w, now)
@@ -504,6 +504,9 @@ def draw_bar(line, w, bar, st, t, live, stale, now, offset, pulses=1):
     ahead = round(frac * bar) if frac is not None else 0
     for x in range(bar):
         if x < filled:
+            if white:
+                line.put("▰", WHITE)
+                continue
             c = ap.grad(st, x / max(1, bar) * st.get("bar_span", 0.5) + offset - t * 0.08)
             if concern:
                 c = mix(c, CONCERN, 0.45)
@@ -627,7 +630,7 @@ def _card(view, i, cw, t, now, entry, fetching, working, dots=None, rows=3, pane
             bar = min(40, cw - 6 - 5 - tail_w - 1)
             if bar >= 3:
                 draw_bar(line, w, bar, st, t if view.anim else 0, live and view.anim, stale, now, i * 0.13,
-                         pulses=max(1, min(working, 4)))
+                         pulses=max(1, min(working, 4)), white=rainbow and not live)
             pcol = pct_color(w, st, now)
             pcol = WHITE if rainbow else (mix(pcol, SOFT, 0.5) if stale else pcol)
             line.put(f" {pct:3.0f}%", pcol, bold=True)
@@ -680,7 +683,8 @@ def compact_row(view, i, width, t, now):
             line.put(" " + w["label"].ljust(2) + " ", LABEL)
             bar = min(16, share - 9)
             if bar >= 2:
-                draw_bar(line, w, bar, st, t if view.anim else 0, False, False, now, i * 0.13)
+                draw_bar(line, w, bar, st, t if view.anim else 0, False, False, now, i * 0.13,
+                         white=rainbow and not working)
             line.put(f"{w['pct']:4.0f}%", WHITE if rainbow else pct_color(w, st, now), bold=True)
             line.pad(max(len(line.cells), seg_start + share))
     else:
