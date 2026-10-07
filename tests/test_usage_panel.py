@@ -113,6 +113,38 @@ class UsagePanelTests(unittest.TestCase):
                 line = "".join(line) if isinstance(line, tuple) else line
                 self.assertLessEqual(len(ANSI.sub("", line)), cols)
 
+    def test_working_status_uses_a_fixed_brand_count_and_animated_theme_wave(self):
+        def header(view, workers, tick):
+            text = panel._card(view, 0, 50, tick, 2000, None, False, workers)[0]
+            cells = []
+            for codes, ch in re.findall(r"((?:\x1b\[[0-9;]*m)*)([^\x1b])", text):
+                rgb = re.search(r"\x1b\[38;2;(\d+);(\d+);(\d+)m", codes)
+                cells.append((ch, tuple(map(int, rgb.groups())) if rgb else None))
+            plain = "".join(ch for ch, _ in cells)
+            start = plain.index(f"{workers} working")
+            self.assertTrue(plain[3 + len(view.agents[0]["name"]):start].isspace())
+            return cells[start:start + len(str(workers))], cells[start + len(str(workers)) + 1:][:7]
+
+        for agent in panel.ap.AGENTS[:5]:
+            view = panel.View([agent])
+            for theme in ("brand", "sunset", "rainbow"):
+                preferences.put(panel.THEME.key, theme)
+                expected = panel.WHITE if theme == "rainbow" else tuple(agent["color"])
+                waves = []
+                for workers in (1, 3, 12):
+                    first_count, first_wave = header(view, workers, 0.4)
+                    next_count, next_wave = header(view, workers, 0.8)
+                    self.assertTrue(all(color == expected for _, color in first_count))
+                    self.assertEqual(first_count, next_count)
+                    self.assertNotEqual(first_wave, next_wave)
+                    self.assertGreater(len({color for _, color in first_wave}), 1)
+                    waves.append(first_wave)
+                self.assertEqual(waves[0], waves[1])
+                self.assertEqual(waves[1], waves[2])
+                preferences.put(panel.ANIMATE.key, False)
+                self.assertEqual(header(view, 1, 0.4), header(view, 1, 0.8))
+                preferences.put(panel.ANIMATE.key, True)
+
     def test_only_agents_beside_this_pane_get_cards(self):
         panel.PRESENT.clear()
         view = self.view()

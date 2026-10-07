@@ -563,13 +563,8 @@ def _card(view, i, cw, t, now, entry, fetching, working, dots=None, rows=3, pane
         head.put("●", dot_color)
     head.put(" ")
     put_name(head, agent, t, panes=panes, rainbow=rainbow)
-    shimmer = None
     if live:
-        status, scol = (f"{working} working" if cw >= 30 else f"{working}×"), TEXT
-        if working > 1:
-            shimmer = len(status)
-            if cw >= 34:   # one spinner per instance, out of step with each other
-                status = "".join(SPIN[(int(t * 10) + k * 3) % len(SPIN)] for k in range(min(working, 4))) + " " + status
+        status, scol = f"{working} working", TEXT
     elif fetching:
         status, scol = "syncing" + "·" * (1 + dots), SOFT
     elif entry:
@@ -583,7 +578,6 @@ def _card(view, i, cw, t, now, entry, fetching, working, dots=None, rows=3, pane
         if live:
             status = f"{working}×"
         status = clip(status, available)
-        shimmer = None
     right = cw - 1 - len(status)
     # Burn-rate sparkline, switched off: uncomment to draw it before the status.
     # end = right - 2
@@ -595,19 +589,17 @@ def _card(view, i, cw, t, now, entry, fetching, working, dots=None, rows=3, pane
     #             glyph = "·" if r is None else ap.BLOCKS[int(r * 7.99)]
     #             color = TRACK if r is None or r == 0 else ap.grad(st, k / 12 * 0.5 + i * 0.13 - t * 0.05)
     #             head.at(end + k, glyph, color)
-    if shimmer:
-        # several instances: the agent's gradient flows through the text with a
-        # bright glint sweeping across it, and the count pulses
-        lead = len(status) - shimmer
+    if live:
+        clock = t if view.anim else 0.0
+        count_color = WHITE if rainbow else agent["color"]
+        lead = len(str(working)) + 1
         for k, ch in enumerate(status):
-            hue = ap.grad(st, k / len(status) * 0.7 - t * 0.45)
-            glow = wave(k, t, 9.0, 8.0) ** 4
-            if k < lead:
-                color = mix(hue, WHITE, 0.25)
-            elif ch.isdigit():
-                color = mix(hue, WHITE, 0.55 + 0.45 * wave(0, t, speed=6.0))
+            if ch.isdigit():
+                color = count_color
             else:
-                color = mix(mix(hue, WHITE, 0.35), WHITE, 0.6 * glow)
+                pos = k - lead
+                hue = ap.grad(st, pos / 7 * 0.7 - clock * 0.15)
+                color = mix(hue, WHITE, 0.2 + 0.3 * wave(pos, clock))
             head.at(right + k, ch, color, bold=ch.isdigit())
     else:
         head.at(right, status, scol)
