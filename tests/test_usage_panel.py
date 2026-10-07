@@ -137,8 +137,15 @@ class UsagePanelTests(unittest.TestCase):
             before = "".join(panel.card(view, 0, 40, 0, now))
             panel.PRESENT["Codex"] = 3
             after = "".join(panel.card(view, 0, 40, 0, now))
-        self.assertIn("Codex (1)", ANSI.sub("", before))
+            panel.PRESENT["Codex"] = 1
+            single = "".join(panel.card(view, 0, 40, 0, now))
+            compact = panel.compact_row(view, 0, 32, 0, now)
+        self.assertIn("Codex", ANSI.sub("", before))
+        self.assertNotIn("(1)", ANSI.sub("", before))
         self.assertIn("Codex (3)", ANSI.sub("", after))
+        for text in (single, compact):
+            self.assertIn("Codex", ANSI.sub("", text))
+            self.assertNotIn("(1)", ANSI.sub("", text))
 
     def test_pane_counts_keep_brand_color_and_regular_weight_in_both_layouts(self):
         for name in ("Codex", "Antigravity", "Cursor"):

@@ -135,7 +135,7 @@ class UsageBorderTests(unittest.TestCase):
             self.assertEqual(positions(cols, rows), expected, (cols, rows, "one limit"))
             panel.USAGE[names[0]] = entry
 
-    def test_themes_change_provider_borders_but_keep_brand_titles(self):
+    def test_themes_change_provider_borders_and_rainbow_title_and_percentage_colors(self):
         view = self.view()
         now = time.time()
         panel.WORKING.update({a["name"]: 1 for a in view.agents})
@@ -162,10 +162,41 @@ class UsageBorderTests(unittest.TestCase):
                 themed = panel.working_card(view, i, 50, 1.5, now)
                 if theme["stops"] != agent.get("gradient"):
                     self.assertNotEqual(themed[0], baseline[0], (agent["name"], theme["name"]))
-                self.assertEqual(cells(themed[1])[4:4 + len(agent["name"])], title)
                 row = panel.compact_row(view, i, 80, 1.5, now)
-                self.assertEqual(cells(row)[3:3 + len(agent["name"])], compact)
+                if theme["name"] == "rainbow" and agent["name"] in ("Claude", "Codex"):
+                    expected = [(ch, panel.ap.rainbow_rgb(k / 11 - 1.5 * 0.24, 0.2))
+                                for k, ch in enumerate(agent["name"])]
+                    self.assertEqual(cells(themed[1])[4:4 + len(agent["name"])], expected)
+                    self.assertEqual(cells(row)[3:3 + len(agent["name"])], expected)
+                else:
+                    self.assertEqual(cells(themed[1])[4:4 + len(agent["name"])], title)
+                    self.assertEqual(cells(row)[3:3 + len(agent["name"])], compact)
                 self.assertNotEqual(cells(row)[0][1], cells(panel.compact_row(view, i, 80, 2.5, now))[0][1])
+            for anim in (False, True):
+                panel.preferences.put(panel.ANIMATE.key, anim)
+                for workers in (0, 1):
+                    panel.WORKING[agent["name"]] = workers
+                    for stale in (False, True):
+                        entry = panel.USAGE[agent["name"]]
+                        entry["fetched"] = now - (1800 if stale else 0)
+                        entry["windows"][1]["pct"] = 85
+                        for name in ("brand", "rainbow"):
+                            panel.preferences.put(panel.THEME.key, name)
+                            rendered = panel._card(view, i, 50, 1.5, now, entry, False, workers)
+                            rendered.append(panel.compact_row(view, i, 80, 1.5, now))
+                            percentages = []
+                            for line in rendered:
+                                drawn = cells(line)
+                                plain = "".join(ch for ch, _ in drawn)
+                                for match in re.finditer(r"\d+%", plain):
+                                    percentages.append([color for _, color in drawn[match.start():match.end()]])
+                            self.assertEqual(len(percentages), 4)
+                            if name == "rainbow":
+                                self.assertTrue(all(color == panel.WHITE for pct in percentages for color in pct))
+                            else:
+                                self.assertEqual(percentages[1], [panel.mix(panel.CONCERN, panel.SOFT, 0.5)
+                                                                 if stale else panel.CONCERN] * 3)
+                                self.assertEqual(percentages[3], [panel.CONCERN] * 3)
 
 
 if __name__ == "__main__":

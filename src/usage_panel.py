@@ -482,10 +482,10 @@ def _spark(name, n, now):
     return [None if d is None else d / scale for d in deltas]
 
 
-def put_name(line, agent, t, bold=True, panes=None):
+def put_name(line, agent, t, bold=True, panes=None, rainbow=False):
     name = agent["name"]
-    suffix = f" ({panes})" if panes is not None else ""
-    if agent.get("pastel") == "rainbow":
+    suffix = f" ({panes})" if panes is not None and panes > 1 else ""
+    if agent.get("pastel") == "rainbow" or (rainbow and name in ("Claude", "Codex")):
         for k, ch in enumerate(name + suffix):
             line.put(ch, ap.rainbow_rgb(k / 11 - t * 0.24, 0.2), bold=bold and k < len(name))
     else:
@@ -547,6 +547,7 @@ def card(view, i, cw, t, now, rows=3):
 def _card(view, i, cw, t, now, entry, fetching, working, dots=None, rows=3, panes=None):
     agent = view.agents[i]
     name, st = agent["name"], view.style(i)
+    rainbow = THEMES[view.theme]["name"] == "rainbow"
     live = working > 0
     dots = int(t * 3) % 3 if dots is None else dots
     stale = bool(entry) and now - entry["fetched"] > 20 * 60 and not fetching
@@ -560,7 +561,7 @@ def _card(view, i, cw, t, now, entry, fetching, working, dots=None, rows=3, pane
     else:
         head.put("●", agent["color"])
     head.put(" ")
-    put_name(head, agent, t, panes=panes)
+    put_name(head, agent, t, panes=panes, rainbow=rainbow)
     shimmer = None
     if live:
         status, scol = (f"{working} working" if cw >= 30 else f"{working}×"), TEXT
@@ -631,7 +632,8 @@ def _card(view, i, cw, t, now, entry, fetching, working, dots=None, rows=3, pane
                 draw_bar(line, w, bar, st, t if view.anim else 0, live and view.anim, stale, now, i * 0.13,
                          pulses=max(1, min(working, 4)))
             pcol = pct_color(w, st, now)
-            line.put(f" {pct:3.0f}%", mix(pcol, SOFT, 0.5) if stale else pcol, bold=True)
+            pcol = WHITE if rainbow else (mix(pcol, SOFT, 0.5) if stale else pcol)
+            line.put(f" {pct:3.0f}%", pcol, bold=True)
             if tail_w and tail:
                 line.put("  " + tail, CONCERN if concerning(w, now) else (TEXT if live else SOFT))
             lines.append(line.pad(cw))
@@ -652,6 +654,7 @@ def compact_row(view, i, width, t, now):
     agent = view.agents[i]
     name, st = agent["name"], view.style(i)
     brand = THEMES[view.theme]["stops"] is None
+    rainbow = THEMES[view.theme]["name"] == "rainbow"
     with LOCK:
         entry = USAGE.get(name)
         working = WORKING.get(name, 0)
@@ -663,9 +666,10 @@ def compact_row(view, i, width, t, now):
     line = Line()
     dot = SPIN[int(t * 12) % len(SPIN)] if working else "●"
     line.put(dot, agent["color"]).put(" ")
-    name_w = min(max(11, len(name) + len(f" ({panes})")), max(4, width // 2))
+    suffix = f" ({panes})" if panes > 1 else ""
+    name_w = min(max(11, len(name) + len(suffix)), max(4, width // 2))
     start = len(line.cells)
-    put_name(line, agent, t, panes=panes)
+    put_name(line, agent, t, panes=panes, rainbow=rainbow)
     del line.cells[start + name_w:]
     line.pad(start + name_w)
     if entry:
@@ -680,7 +684,7 @@ def compact_row(view, i, width, t, now):
             bar = min(16, share - 9)
             if bar >= 2:
                 draw_bar(line, w, bar, st, t if view.anim else 0, False, False, now, i * 0.13)
-            line.put(f"{w['pct']:4.0f}%", pct_color(w, st, now), bold=True)
+            line.put(f"{w['pct']:4.0f}%", WHITE if rainbow else pct_color(w, st, now), bold=True)
             line.pad(max(len(line.cells), seg_start + share))
     else:
         line.put(" ··", SOFT)
