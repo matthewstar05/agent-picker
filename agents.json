@@ -138,9 +138,9 @@
     "model": "gemini-3.8-flash-high",
     "short": "gemini flash",
     "color": [
-      66,
-      133,
-      244
+      255,
+      255,
+      255
     ],
     "detail": "gemini-3.8-flash-high",
     "argv": [
@@ -208,9 +208,9 @@
     "model": "grok-4.7",
     "short": "grok",
     "color": [
-      236,
-      236,
-      236
+      255,
+      160,
+      165
     ],
     "detail": "grok-4.7 \u00b7 high",
     "argv": [
