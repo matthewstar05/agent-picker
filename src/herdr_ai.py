@@ -75,7 +75,7 @@ def main(argv=None, herdr=None, cwd=None):
                    if WINDOWS else "curl -fsSL https://herdr.dev/install.sh | sh")
         sys.exit("herdr-ai: herdr not found. Install it with:\n  " + install)
     cwd = cwd or os.getcwd()
-    label = argv[0] if argv else (Path(cwd).name or "root")
+    label = argv[0] if argv else (Path(cwd).name or "home")
 
     def call(*args):
         out = subprocess.run([herdr, *args], capture_output=True, text=True, encoding="utf-8")
