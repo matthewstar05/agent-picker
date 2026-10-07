@@ -15,20 +15,24 @@ The installer installs this picker, not the provider CLIs or their account crede
 
 ## Windows setup
 
-Give a Windows coding agent [docs/WINDOWS_AGENT.md](docs/WINDOWS_AGENT.md), or use these commands in PowerShell after installing Python and Git and authenticating GitHub access:
+Paste this into a PowerShell window. Skip the first line if Git is already installed. The clone opens a browser to sign in to GitHub because the repository is private.
 
 ```powershell
+winget install -e --id Git.Git --accept-package-agreements --accept-source-agreements
+$env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User')
 git clone https://github.com/matthewstar05/agent-picker.git "$HOME\Projects\agent-picker"
-cd "$HOME\Projects\agent-picker"
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-windows.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File "$HOME\Projects\agent-picker\scripts\setup-windows.ps1"
 ```
 
-Open a new PowerShell tab, then:
+`setup-windows.ps1` installs Python (winget, per-user) and [herdr](https://herdr.dev/docs/windows-beta/) only if they are missing, then runs `install-windows.ps1`. Pass `-SkipHerdr` to leave herdr out. It does not install provider CLIs or sign in to them. Open a new Windows Terminal tab, then:
 
 ```powershell
 agent --picker-doctor
-agent
+cd $HOME\Projects\some-project
+herdr-ai
 ```
+
+To install only the picker, without Python or herdr checks, run `scripts\install-windows.ps1` instead. Give a Windows coding agent [docs/WINDOWS_AGENT.md](docs/WINDOWS_AGENT.md) for a full verification pass.
 
 If your execution policy prevents your own PowerShell profile from loading, use `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` where local policy permits it, or invoke `agent-picker.cmd`. Running the installer with a process-level Bypass does not change the persistent execution policy. An administrator-managed execution policy must be respected.
 
@@ -44,7 +48,7 @@ cd ~/Desktop/Projects/agent-picker
 python3 scripts/install-macos.py
 ```
 
-Open a new terminal, then run `agent --picker-doctor` and `agent`. The installer backs up the existing `~/.local/bin/agent-picker` and changed shell profiles, replaces the launcher with a checkout-linked wrapper, and adds a managed `agent` alias to `.zshrc` and `.bashrc`. On this Mac, it replaces the original alias and preserves Kiro's post integration at the bottom of `.zshrc`. Do not move or delete the checkout after installation; rerun the installer if you relocate it or your Python executable.
+Open a new terminal, then run `agent --picker-doctor` and `agent`. The installer backs up the existing `~/.local/bin/agent-picker` and changed shell profiles, replaces the launcher with a checkout-linked wrapper, does the same for `~/.local/bin/herdr-ai`, and adds a managed `agent` alias to `.zshrc` and `.bashrc`. On this Mac, it replaces the original alias and preserves Kiro's post integration at the bottom of `.zshrc`. Do not move or delete the checkout after installation; rerun the installer if you relocate it or your Python executable.
 
 ## Commands
 
@@ -55,9 +59,11 @@ agent --picker-launch Codex           directly launch Codex
 agent --picker-doctor                 inspect detected providers and local paths
 agent --picker-update                 pull shared updates from GitHub
 agent --picker-catalog                every known CLI, its colors, and whether it is installed
+agent --picker-usage                  open on the usage panel
 agent --picker-help                   show picker help
 agent -- --picker-help                pass a management-looking argument to the CLI
 usage                                the same command as agent
+herdr-ai [label]                     open a herdr workbench of every agent in this folder
 ```
 
 Inside the command: `u` switches between the agent selector and the usage panel, and `s` opens settings from either one.
@@ -131,6 +137,18 @@ Each bar fills to the percentage used, and the empty track is brighter up to whe
 Keys: `t` or `→` next theme, `T` or `←` previous theme, `r` refresh now, `a` toggle animation (off redraws once a second), `s` settings, `u` or Esc back to the picker, `q` quit.
 
 Brand uses an animated gray outer border. Each working provider gets the same animated border as its row in the agent selector; choosing another theme changes both the outer border and provider borders to that theme. Provider titles and their dots retain their brand colors in every theme. Short panes drop the top and bottom of provider borders to keep the limits visible. Border space is reserved even while idle, so titles, bars, and card positions stay fixed as providers start or stop working. The layout changes only when the pane size or installed providers change. The theme name appears in the outer border for 2.5 seconds after changing themes, then disappears.
+
+## herdr-ai workbench
+
+`herdr-ai` opens a [herdr](https://herdr.dev) tab rooted in the current folder: Antigravity, Codex, Cursor, and Claude panes, an agent selector, a usage panel, and a plain terminal. Inside herdr it adds a tab to the current workspace; outside, it creates a workspace and attaches. Each agent pane runs `agent --picker-launch <Name>`, so it uses your saved model, effort, and permission defaults. A provider that is not installed leaves an error in its pane and the rest still open.
+
+```text
+herdr-ai                  label the tab with the folder name
+herdr-ai my-label         choose the label
+HERDR_AI_DRY=1 herdr-ai   build the layout with plain shells
+```
+
+It lives in [src/herdr_ai.py](src/herdr_ai.py) and needs only herdr and Python, so both computers run the same file and pick up changes with `agent --picker-update`. The installers add the `herdr-ai` launcher (`~/.local/bin/herdr-ai` on macOS, `herdr-ai.cmd` on Windows). On Windows, herdr is in beta. If your Python path contains spaces, panes run the installer's `agent-picker.cmd`, which must be on the PATH herdr started with; run `herdr server stop` once after installing if herdr was already running.
 
 ## Settings
 

@@ -49,3 +49,14 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Captured Cursor launch failed' }
           $profileText = Get-Content -Raw $PROFILE.CurrentUserAllHosts
           if ([regex]::Matches($profileText, '# >>> agent-picker managed >>>').Count -ne 1) { throw 'Duplicate profile blocks' }
+          herdr-ai.cmd --help
+          if ($LASTEXITCODE -ne 0) { throw 'herdr-ai shim failed' }
+      - name: Parse Windows setup scripts
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          foreach ($script in Get-ChildItem scripts/*.ps1) {
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($script.FullName, [ref]$null, [ref]$errors) | Out-Null
+            if ($errors) { $errors | Out-String | Write-Error; throw "Syntax errors in $($script.Name)" }
+          }

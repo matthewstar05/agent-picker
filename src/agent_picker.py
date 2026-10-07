@@ -803,7 +803,7 @@ def save_last(index):
         pass
 
 
-def choose():
+def choose(screen=None):
     """Run the screens until an agent is picked (its index) or the user quits (None)."""
     import usage_panel   # registers its settings; imported here so it can import this module
 
@@ -818,7 +818,7 @@ def choose():
     usage_panel.start(providers)   # live readers feed both screens
     usage = usage_panel.View(listed)
     menu = preferences.Menu()
-    screen = preferences.get(START.key)
+    screen = screen or preferences.get(START.key)
     came_from = screen               # where the settings screen returns to
     selected = load_last(listed)
     defaults_menu = None
@@ -997,6 +997,7 @@ def main():
         print("agent --picker-update                 fast-forward this Git checkout")
         print("agent --picker-doctor                 show paths and launch profiles")
         print("agent --picker-catalog                every known CLI, its colors, and whether it is installed")
+        print("agent --picker-usage [args]           open on the usage panel")
         print("agent --picker-help                   show this help")
         print("usage                                 the same command; u switches to the usage panel")
         print("Prefix CLI args with -- to escape picker management commands.")
@@ -1009,10 +1010,13 @@ def main():
             raise ValueError(f"Unknown provider: {args[1]}")
         args = args[2:]
     else:
+        start = None
+        if args[:1] == ["--picker-usage"]:
+            start, args = "usage", args[1:]
         if not (sys.stdin.isatty() and sys.stdout.isatty()):
             raise RuntimeError("agent needs an interactive terminal; try --picker-doctor")
         try:
-            index = choose()
+            index = choose(start)
         except KeyboardInterrupt:
             index = None
     if index is None:

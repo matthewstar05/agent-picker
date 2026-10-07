@@ -25,9 +25,25 @@ def backup(path):
         print(f"Backup: {target / path.name}")
 
 
+def install_herdr_ai(bindir):
+    """herdr-ai lives in this checkout too; replaces the old standalone bash script."""
+    bindir.mkdir(parents=True, exist_ok=True)
+    wrapper = bindir / "herdr-ai"
+    content = "#!/bin/sh\n# agent-picker managed launcher\nexec " + shlex.quote(sys.executable) + " " + shlex.quote(str(ROOT / "src/herdr_ai.py")) + ' "$@"\n'
+    if not wrapper.exists() or wrapper.read_text(errors="ignore") != content:
+        backup(wrapper)
+        if wrapper.is_symlink():
+            wrapper.unlink()
+        wrapper.write_text(content)
+        wrapper.chmod(0o755)
+    if not shutil.which("herdr"):
+        print("herdr is not installed; herdr-ai needs it: curl -fsSL https://herdr.dev/install.sh | sh")
+
+
 def main():
     if os.name == "nt":
         sys.exit("Use scripts/install-windows.ps1 on Windows.")
+    install_herdr_ai(Path.home() / ".local/bin")
     bindir = Path.home() / ".local/bin"
     bindir.mkdir(parents=True, exist_ok=True)
     wrapper = bindir / "agent-picker"

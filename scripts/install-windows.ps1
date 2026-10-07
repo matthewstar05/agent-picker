@@ -59,6 +59,13 @@ if (-not (Test-Path -LiteralPath $cmdPath) -or [IO.File]::ReadAllText($cmdPath) 
     Save-Backup $cmdPath
     [IO.File]::WriteAllText($cmdPath, $cmd, $utf8)
 }
+# herdr-ai opens a herdr tab with every agent, the selector, and the usage panel.
+$herdrAiPath = Join-Path $binDir 'herdr-ai.cmd'
+$herdrAi = "@echo off`r`n`"$Python`" `"$(Join-Path $repo 'src\herdr_ai.py')`" %*`r`nexit /b %errorlevel%`r`n"
+if (-not (Test-Path -LiteralPath $herdrAiPath) -or [IO.File]::ReadAllText($herdrAiPath) -ne $herdrAi) {
+    Save-Backup $herdrAiPath
+    [IO.File]::WriteAllText($herdrAiPath, $herdrAi, $utf8)
+}
 $escapedPython = $Python.Replace("'", "''")
 $escapedEntry = $entry.Replace("'", "''")
 $start = '# >>> agent-picker managed >>>'
@@ -93,5 +100,8 @@ $env:PATH = "$binDir;$env:PATH"
 Invoke-Expression $block
 & $Python $entry --picker-doctor
 if ($LASTEXITCODE -ne 0) { throw 'Installed picker validation failed.' }
+if (-not (Get-Command herdr -ErrorAction SilentlyContinue) -and -not (Test-Path (Join-Path $env:LOCALAPPDATA 'Programs\Herdr\bin\herdr.exe'))) {
+    Write-Host 'herdr is not installed; herdr-ai needs it. scripts\setup-windows.ps1 installs it.'
+}
 Write-Host 'Installed. Run agent --picker-doctor, then agent in Windows Terminal.'
 Write-Host "Updates are read directly from: $repo"
