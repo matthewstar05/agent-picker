@@ -90,6 +90,8 @@ def apply(agent, values):
     if name in ("Cursor", "Antigravity") and (model != baseline["model"] or effort != baseline["effort"]):
         row = next((r for r in model_catalog.options(agent, model) if r["id"] == model), {})
         variant = row.get("variants", {}).get(effort)
+        if not variant and effort == "provider default":
+            variant = row.get("variants", {}).get("high")
         if variant:
             model = variant
         elif effort != "provider default" and name == "Cursor":
@@ -183,7 +185,8 @@ class Menu:
         row = next((r for r in self.models() if r["id"] == self.values["model"]), {})
         levels = row.get("efforts")
         choices = tuple(levels) if levels is not None else (EFFORTS if self.agent["name"] == "Codex" else EFFORTS[:-1])
-        if self.agent["name"] != "Cursor" or "provider default" in row.get("variants", {}) or not choices:
+        variants = row.get("variants", {})
+        if self.agent["name"] not in ("Cursor", "Antigravity") or not variants or "provider default" in variants or not choices:
             choices = ("provider default",) + choices
         return choices
 

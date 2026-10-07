@@ -62,6 +62,8 @@ class CatalogTests(unittest.TestCase):
 
     def test_antigravity_effort_uses_matching_model_variant(self):
         agent = self.agent("Antigravity")
+        menu = defaults.Menu(agent)
+        self.assertNotIn("provider default", menu.efforts())
         values = dict(defaults.current(agent), effort="low")
         defaults.apply(agent, values)
         self.assertEqual(defaults.option(agent["argv"], ("--model",)), "gemini-3.8-flash-low")
