@@ -66,7 +66,7 @@ usage                                the same command as agent
 herdr-ai [label]                     open a herdr workbench of every agent in this folder
 ```
 
-Inside the command: `u` switches between the agent selector and the usage panel, and `s` opens settings from either one.
+Inside the command: `u` switches between the agent selector and the usage panel, and `s` opens settings from either one. Under **Agents** in settings, set an installed CLI to hidden to keep it out of the selector; `--picker-launch` and `herdr-ai` still run it.
 
 Updates are explicit, use `git pull --ff-only`, and refuse a dirty checkout. If the two machines have diverging commits, resolve them with normal Git operations before updating. The command does not commit, stash, reset, push, or update provider CLIs automatically.
 
@@ -120,7 +120,7 @@ Claude's [authentication documentation](https://code.claude.com/docs/en/authenti
 
 ## Agent catalog
 
-[agents.json](agents.json) is a catalog of agent CLIs: the five original profiles plus OpenCode, Gemini CLI, Qwen Code, GitHub Copilot CLI, Amp, Aider, Goose, Crush, Factory Droid, Cline, Auggie, Kimi CLI, and Continue. The picker lists only the ones installed on this computer, found on PATH or in common install folders that aren't always on it (`~/.opencode/bin`, `~/.bun/bin`, npm-global, cargo, Homebrew). The rest stay in the catalog with their color schemes and appear as soon as their CLI is installed. `agent --picker-catalog` shows every entry with its colors and status.
+[agents.json](agents.json) is a catalog of agent CLIs: the five original profiles plus OpenCode, Qwen Code, GitHub Copilot CLI, Amp, Aider, Goose, Crush, Factory Droid, Cline, Auggie, Kimi CLI, and Continue. The picker lists only the ones installed on this computer, found on PATH or in common install folders that aren't always on it (`~/.opencode/bin`, `~/.bun/bin`, npm-global, cargo, Homebrew). The rest stay in the catalog with their color schemes and appear as soon as their CLI is installed. `agent --picker-catalog` shows every entry with its colors and status.
 
 Catalog entries other than the original five launch their CLI with no arguments, so they use that CLI's own default model and permission prompts. Add model or permission flags in the local config once a CLI is installed and you have checked its flags. To add a CLI, append a profile with `name`, `color`, `pastel`, `gradient`, `short`, `detail`, `argv`, and `detect` (the names it shows up under in Herdr and in process lists). Usage limits are read only for Claude, Codex, Antigravity, Cursor, and Kiro; other CLIs' cards say no usage reader exists yet.
 

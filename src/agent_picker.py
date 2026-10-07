@@ -137,6 +137,19 @@ def installed(agent):
     return resolve_argv(agent) is not None
 
 
+def shown_setting(agent):
+    """The settings row that hides an installed CLI from the agent selector."""
+    return preferences.register(preferences.Setting(
+        "shown." + agent["name"], "Agents", agent["name"], [True, False], True,
+        hint="Hide a CLI from the selector. --picker-launch and herdr-ai still run it.",
+        names={True: "shown", False: "hidden"}))
+
+
+def shown(agents):
+    """The agents the selector lists: all but the hidden ones, or all if every one is hidden."""
+    return [a for a in agents if preferences.get(shown_setting(a).key)] or list(agents)
+
+
 # ---- usage limits -----------------------------------------------------------
 # Each agent's plan limits, read from the same place the CLI itself reads them.
 # Fetched in the background when the menu opens; the last result is cached so
@@ -812,14 +825,16 @@ def choose(screen=None):
 
     # Only installed CLIs are listed; the rest of agents.json stays in the catalog
     # until its CLI shows up on this computer.
-    listed = [a for a in AGENTS if installed(a)]
-    if not listed:
+    found = [a for a in AGENTS if installed(a)]
+    if not found:
         raise RuntimeError("No supported CLI found. Run agent --picker-doctor and configure a provider.")
+    # Hidden CLIs (settings) leave the selector only; usage still follows them.
+    listed = shown(found)
     available = [True] * len(listed)
-    providers = [a["name"] for a in listed if a["name"] in FETCHERS]
+    providers = [a["name"] for a in found if a["name"] in FETCHERS]
     load_usage()
     usage_panel.start(providers)   # live readers feed both screens
-    usage = usage_panel.View(listed)
+    usage = usage_panel.View(found)
     menu = preferences.Menu()
     screen = screen or preferences.get(START.key)
     came_from = screen               # where the settings screen returns to
@@ -860,6 +875,14 @@ def choose(screen=None):
         nonlocal selected
         selected = (selected + step) % len(listed)
 
+    def relist():
+        # Settings may have hidden or shown CLIs; keep the same one selected if it is still listed.
+        nonlocal listed, available, selected
+        current = listed[selected]["name"]
+        listed = shown(found)
+        available = [True] * len(listed)
+        selected = next((i for i, a in enumerate(listed) if a["name"] == current), 0)
+
     out.write(f"{ESC}[?1049h{ESC}[?25l{ESC}[?7l")  # alt screen, hide cursor, no autowrap
     out.flush()  # frames go straight to the fd after this
     try:
@@ -887,6 +910,7 @@ def choose(screen=None):
                     go(action)
             elif screen == "settings":
                 if menu.handle(key) == "close":
+                    relist()
                     go(came_from)
             elif screen == "defaults":
                 if key in ("\x03", "\x04"):
@@ -963,7 +987,8 @@ def doctor():
         if not argv:
             missing.append(agent["name"])
             continue
-        print(f"{agent['name']}: {argv[0]}")
+        hidden = "" if preferences.get(shown_setting(agent).key) else " (hidden in selector)"
+        print(f"{agent['name']}: {argv[0]}{hidden}")
         print("  arguments: " + json.dumps(agent["argv"][1:]))
     if missing:
         print("Not installed (listed once their CLI is found): " + ", ".join(missing))
