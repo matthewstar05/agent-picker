@@ -980,6 +980,40 @@ def catalog():
         print(f"  {name} {swatch}  {state}")
 
 
+def print_launch_banner(agent):
+    mascot = agent.get("mascot")
+    if not mascot:
+        print(f"  {fg(agent['color'])}●{RESET} {BOLD}{agent['name']}{RESET} {FAINT}{agent['detail']}{RESET}\n", flush=True)
+        return
+
+    cwd = os.getcwd()
+    home = os.path.expanduser("~")
+    cwd_disp = "~" if cwd == home else (f"~/{os.path.relpath(cwd, home)}" if cwd.startswith(home + "/") else cwd)
+
+    info_lines = [
+        f"{BOLD}{agent['name']}{RESET} {FAINT}{agent.get('short', '')}{RESET}",
+        f"{FAINT}{agent.get('detail', '')}{RESET}",
+        f"{FAINT}permissions: bypass{RESET}",
+        f"{FAINT}{cwd_disp}{RESET}"
+    ]
+
+    lines = []
+    num_rows = len(mascot)
+    for y, art_row in enumerate(mascot):
+        colored_art = ""
+        row_len = len(art_row)
+        for x, ch in enumerate(art_row):
+            if ch == " ":
+                colored_art += " "
+            else:
+                u = (x / max(1, row_len) * 0.5 + y / max(1, num_rows) * 0.5)
+                colored_art += f"{fg(grad(agent, u))}{ch}{RESET}"
+        info = info_lines[y] if y < len(info_lines) else ""
+        lines.append(f"  {colored_art}   {info}")
+
+    print("\n" + "\n".join(lines) + "\n", flush=True)
+
+
 def main():
     if os.name == "nt":
         sys.stdout.reconfigure(encoding="utf-8")
@@ -1034,7 +1068,7 @@ def main():
     defaults = provider_defaults.current(agent)
     if os.environ.get("AGENT_PICKER_NO_PRETRUST") != "1" and (defaults is None or defaults["bypass_permissions"]):
         pretrust(agent)
-    print(f"  {fg(agent['color'])}●{RESET} {BOLD}{agent['name']}{RESET} {FAINT}{agent['detail']}{RESET}\n", flush=True)
+    print_launch_banner(agent)
     return launch(argv + args)
 
 
