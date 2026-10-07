@@ -485,7 +485,7 @@ def _spark(name, n, now):
 def put_name(line, agent, t, bold=True, panes=None, rainbow=False):
     name = agent["name"]
     suffix = f" ({panes})" if panes is not None and panes > 1 else ""
-    if agent.get("pastel") == "rainbow" or (rainbow and name in ("Claude", "Codex")):
+    if rainbow or agent.get("pastel") == "rainbow":
         for k, ch in enumerate(name + suffix):
             line.put(ch, ap.rainbow_rgb(k / 11 - t * 0.24, 0.2), bold=bold and k < len(name))
     else:
@@ -556,10 +556,11 @@ def _card(view, i, cw, t, now, entry, fetching, working, dots=None, rows=3, pane
             panes = PRESENT.get(name, 0)
 
     head = Line().put(" ")
+    dot_color = WHITE if rainbow else agent["color"]
     if live:
-        head.put(SPIN[int(t * 6) % len(SPIN)], agent["color"], bold=True)
+        head.put(SPIN[int(t * 6) % len(SPIN)], dot_color, bold=True)
     else:
-        head.put("●", agent["color"])
+        head.put("●", dot_color)
     head.put(" ")
     put_name(head, agent, t, panes=panes, rainbow=rainbow)
     shimmer = None
@@ -665,7 +666,7 @@ def compact_row(view, i, width, t, now):
     t = t if view.anim else 0.4
     line = Line()
     dot = SPIN[int(t * 12) % len(SPIN)] if working else "●"
-    line.put(dot, agent["color"]).put(" ")
+    line.put(dot, WHITE if rainbow else agent["color"]).put(" ")
     suffix = f" ({panes})" if panes > 1 else ""
     name_w = min(max(11, len(name) + len(suffix)), max(4, width // 2))
     start = len(line.cells)

@@ -163,7 +163,7 @@ class UsageBorderTests(unittest.TestCase):
                 if theme["stops"] != agent.get("gradient"):
                     self.assertNotEqual(themed[0], baseline[0], (agent["name"], theme["name"]))
                 row = panel.compact_row(view, i, 80, 1.5, now)
-                if theme["name"] == "rainbow" and agent["name"] in ("Claude", "Codex"):
+                if theme["name"] == "rainbow":
                     expected = [(ch, panel.ap.rainbow_rgb(k / 11 - 1.5 * 0.24, 0.2))
                                 for k, ch in enumerate(agent["name"])]
                     self.assertEqual(cells(themed[1])[4:4 + len(agent["name"])], expected)
@@ -171,6 +171,9 @@ class UsageBorderTests(unittest.TestCase):
                 else:
                     self.assertEqual(cells(themed[1])[4:4 + len(agent["name"])], title)
                     self.assertEqual(cells(row)[3:3 + len(agent["name"])], compact)
+                dot_color = panel.WHITE if theme["name"] == "rainbow" else agent["color"]
+                self.assertEqual(cells(themed[1])[2][1], dot_color)
+                self.assertEqual(cells(row)[1][1], dot_color)
                 self.assertNotEqual(cells(row)[0][1], cells(panel.compact_row(view, i, 80, 2.5, now))[0][1])
             for anim in (False, True):
                 panel.preferences.put(panel.ANIMATE.key, anim)
@@ -184,6 +187,9 @@ class UsageBorderTests(unittest.TestCase):
                             panel.preferences.put(panel.THEME.key, name)
                             rendered = panel._card(view, i, 50, 1.5, now, entry, False, workers)
                             rendered.append(panel.compact_row(view, i, 80, 1.5, now))
+                            dot_color = panel.WHITE if name == "rainbow" else agent["color"]
+                            self.assertEqual(cells(rendered[0])[1][1], dot_color)
+                            self.assertEqual(cells(rendered[-1])[1][1], dot_color)
                             percentages = []
                             for line in rendered:
                                 drawn = cells(line)
