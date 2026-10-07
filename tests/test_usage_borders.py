@@ -171,7 +171,7 @@ class UsageBorderTests(unittest.TestCase):
                 else:
                     self.assertEqual(cells(themed[1])[4:4 + len(agent["name"])], title)
                     self.assertEqual(cells(row)[3:3 + len(agent["name"])], compact)
-                dot_color = panel.WHITE if theme["name"] == "rainbow" else agent["color"]
+                dot_color = panel.WHITE if theme["name"] == "rainbow" else tuple(agent["color"])
                 self.assertEqual(cells(themed[1])[2][1], dot_color)
                 self.assertEqual(cells(row)[1][1], dot_color)
                 self.assertNotEqual(cells(row)[0][1], cells(panel.compact_row(view, i, 80, 2.5, now))[0][1])
@@ -187,7 +187,7 @@ class UsageBorderTests(unittest.TestCase):
                             panel.preferences.put(panel.THEME.key, name)
                             rendered = panel._card(view, i, 50, 1.5, now, entry, False, workers)
                             rendered.append(panel.compact_row(view, i, 80, 1.5, now))
-                            dot_color = panel.WHITE if name == "rainbow" else agent["color"]
+                            dot_color = panel.WHITE if name == "rainbow" else tuple(agent["color"])
                             self.assertEqual(cells(rendered[0])[1][1], dot_color)
                             self.assertEqual(cells(rendered[-1])[1][1], dot_color)
                             percentages = []
