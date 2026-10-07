@@ -176,7 +176,7 @@ class UsagePanelTests(unittest.TestCase):
 
     def test_processes_map_to_profiles_through_launchers(self):
         self.assertEqual(panel.from_argv(["node", "/usr/lib/node_modules/opencode/bin/opencode.js"]), "OpenCode")
-        self.assertEqual(panel.from_argv(["/opt/homebrew/bin/gemini", "--yolo"]), "Gemini CLI")
+        self.assertEqual(panel.from_argv(["/opt/homebrew/bin/qwen", "--yolo"]), "Qwen Code")
         self.assertEqual(panel.from_argv(["kiro-cli-chat"]), "Kiro")
         self.assertIsNone(panel.from_argv(["zsh"]))
         procs = [(1, 0, ["zsh"]), (2, 1, ["claude"]), (3, 2, ["claude", "mcp"]), (4, 1, ["codex"]),
@@ -187,7 +187,7 @@ class UsagePanelTests(unittest.TestCase):
         self.assertEqual(panel.provider_of("claude"), "Claude")
         self.assertEqual(panel.provider_of("codex"), "Codex")
         self.assertEqual(panel.provider_of("agy"), "Antigravity")
-        self.assertEqual(panel.provider_of("gemini"), "Gemini CLI")
+        self.assertEqual(panel.provider_of("qwen"), "Qwen Code")
         self.assertEqual(panel.provider_of("opencode"), "OpenCode")
         self.assertIsNone(panel.provider_of(None))
         self.assertIsNone(panel.provider_of("bash"))

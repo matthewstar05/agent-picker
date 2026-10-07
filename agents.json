@@ -335,46 +335,6 @@
     ]
   },
   {
-    "name": "Gemini CLI",
-    "pastel": [
-      185,
-      205,
-      255
-    ],
-    "gradient": [
-      [
-        71,
-        150,
-        227
-      ],
-      [
-        145,
-        119,
-        199
-      ],
-      [
-        202,
-        102,
-        115
-      ]
-    ],
-    "model": "gemini",
-    "short": "gemini",
-    "color": [
-      71,
-      150,
-      227
-    ],
-    "detail": "default model and permissions",
-    "argv": [
-      "gemini"
-    ],
-    "detect": [
-      "gemini",
-      "gemini-cli"
-    ]
-  },
-  {
     "name": "Qwen Code",
     "pastel": [
       196,

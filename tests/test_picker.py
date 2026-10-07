@@ -88,6 +88,22 @@ class PickerTests(unittest.TestCase):
         self.assertNotIn("Claude", text)
         self.assertNotIn("OpenCode", text)
 
+    def test_hidden_agents_leave_the_selector_until_shown_again(self):
+        found = [a for a in picker.AGENTS if a["name"] in ("Codex", "Kiro", "OpenCode")]
+        with tempfile.TemporaryDirectory() as folder, \
+                patch.object(picker.preferences, "PATH", Path(folder) / "preferences.json"), \
+                patch.object(picker.preferences, "_values", None):
+            self.assertEqual([a["name"] for a in picker.shown(found)], ["Codex", "Kiro", "OpenCode"])
+            key = picker.shown_setting(found[2]).key
+            self.assertIn(key, [s.key for s in picker.preferences.SETTINGS])
+            picker.preferences.cycle(key)
+            self.assertEqual([a["name"] for a in picker.shown(found)], ["Codex", "Kiro"])
+            for agent in found[:2]:
+                picker.preferences.put(picker.shown_setting(agent).key, False)
+            self.assertEqual(len(picker.shown(found)), 3)   # never an empty selector
+            picker.preferences._values = None   # saved choices survive a restart
+            self.assertFalse(picker.preferences.get(key))
+
     def test_missing_providers_report_clear_error(self):
         with patch.object(picker, "installed", return_value=False):
             with self.assertRaisesRegex(RuntimeError, "No supported CLI"):
