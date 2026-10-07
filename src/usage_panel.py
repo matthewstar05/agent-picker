@@ -482,13 +482,15 @@ def _spark(name, n, now):
     return [None if d is None else d / scale for d in deltas]
 
 
-def put_name(line, agent, t, bold=True):
+def put_name(line, agent, t, bold=True, panes=None):
     name = agent["name"]
+    suffix = f" ({panes})" if panes is not None else ""
     if agent.get("pastel") == "rainbow":
-        for k, ch in enumerate(name):
-            line.put(ch, ap.rainbow_rgb(k / 11 - t * 0.24, 0.2), bold=bold)
+        for k, ch in enumerate(name + suffix):
+            line.put(ch, ap.rainbow_rgb(k / 11 - t * 0.24, 0.2), bold=bold and k < len(name))
     else:
-        line.put(name, agent.get("pastel") or agent["color"], bold=bold)
+        color = agent.get("pastel") or agent["color"]
+        line.put(name, color, bold=bold).put(suffix, color)
 
 
 def draw_bar(line, w, bar, st, t, live, stale, now, offset, pulses=1):
@@ -530,22 +532,27 @@ def card(view, i, cw, t, now, rows=3):
         entry = USAGE.get(name)
         fetching = name in INFLIGHT
         working = WORKING.get(name, 0)
+        panes = PRESENT.get(name, 0)
     # Working cards share the border's continuous 60 fps clock. Idle cards
     # still reuse their cached contents between countdown updates.
     step = t if working and view.anim else 0.0
     key = (i, name, cw, rows, view.theme, view.anim, int(now), entry and entry["fetched"], fetching,
-           int(t * 3) % 3 if fetching else 0, working, len(HISTORY.get(name) or ()), step)
+           int(t * 3) % 3 if fetching else 0, working, len(HISTORY.get(name) or ()), step, panes)
     if CARDS.get(i, (None,))[0] != key:
-        CARDS[i] = (key, _card(view, i, cw, step, now, entry, fetching, working, dots=key[9], rows=rows))
+        CARDS[i] = (key, _card(view, i, cw, step, now, entry, fetching, working,
+                             dots=key[9], rows=rows, panes=panes))
     return CARDS[i][1]
 
 
-def _card(view, i, cw, t, now, entry, fetching, working, dots=None, rows=3):
+def _card(view, i, cw, t, now, entry, fetching, working, dots=None, rows=3, panes=None):
     agent = view.agents[i]
     name, st = agent["name"], view.style(i)
     live = working > 0
     dots = int(t * 3) % 3 if dots is None else dots
     stale = bool(entry) and now - entry["fetched"] > 20 * 60 and not fetching
+    if panes is None:
+        with LOCK:
+            panes = PRESENT.get(name, 0)
 
     head = Line().put(" ")
     if live:
@@ -553,7 +560,7 @@ def _card(view, i, cw, t, now, entry, fetching, working, dots=None, rows=3):
     else:
         head.put("●", agent["color"])
     head.put(" ")
-    put_name(head, agent, t)
+    put_name(head, agent, t, panes=panes)
     shimmer = None
     if live:
         status, scol = (f"{working} working" if cw >= 30 else f"{working}×"), TEXT
@@ -568,8 +575,14 @@ def _card(view, i, cw, t, now, entry, fetching, working, dots=None, rows=3):
     else:
         status, scol = "", SOFT
     status = status.ljust(10) if fetching else status
-    right = cw - 1 - len(status)
     name_end = len(head.cells)
+    available = max(0, cw - name_end - 2)
+    if len(status) > available:
+        if live:
+            status = f"{working}×"
+        status = clip(status, available)
+        shimmer = None
+    right = cw - 1 - len(status)
     # Burn-rate sparkline, switched off: uncomment to draw it before the status.
     # end = right - 2
     # if cw >= 50 and entry:
@@ -642,6 +655,7 @@ def compact_row(view, i, width, t, now):
     with LOCK:
         entry = USAGE.get(name)
         working = WORKING.get(name, 0)
+        panes = PRESENT.get(name, 0)
     border_space = width >= 4
     if border_space:
         width -= 2
@@ -649,9 +663,9 @@ def compact_row(view, i, width, t, now):
     line = Line()
     dot = SPIN[int(t * 12) % len(SPIN)] if working else "●"
     line.put(dot, agent["color"]).put(" ")
-    name_w = min(11, max(4, width // 4))
+    name_w = min(max(11, len(name) + len(f" ({panes})")), max(4, width // 2))
     start = len(line.cells)
-    put_name(line, agent, t)
+    put_name(line, agent, t, panes=panes)
     del line.cells[start + name_w:]
     line.pad(start + name_w)
     if entry:

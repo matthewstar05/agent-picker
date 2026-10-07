@@ -129,6 +129,34 @@ class UsagePanelTests(unittest.TestCase):
             panel.PRESENT.clear()
             self.assertLessEqual(len(panel.render(view, cols, rows, 1.0)), rows)
 
+    def test_open_pane_count_refreshes_cached_idle_cards(self):
+        codex = next(a for a in panel.ap.AGENTS if a["name"] == "Codex")
+        view = panel.View([codex])
+        now = time.time()
+        with patch.object(panel, "CARDS", {}):
+            before = "".join(panel.card(view, 0, 40, 0, now))
+            panel.PRESENT["Codex"] = 3
+            after = "".join(panel.card(view, 0, 40, 0, now))
+        self.assertIn("Codex (1)", ANSI.sub("", before))
+        self.assertIn("Codex (3)", ANSI.sub("", after))
+
+    def test_pane_counts_keep_brand_color_and_regular_weight_in_both_layouts(self):
+        for name in ("Codex", "Antigravity", "Cursor"):
+            agent = next(a for a in panel.ap.AGENTS if a["name"] == name)
+            panel.PRESENT[name] = 3
+            panel.WORKING[name] = 1
+            view = panel.View([agent])
+            if agent.get("pastel") == "rainbow":
+                suffix = "".join(panel.ap.fg(panel.ap.rainbow_rgb((len(name) + k) / 11, 0.2))
+                                 + ch + panel.RESET for k, ch in enumerate(" (3)"))
+            else:
+                color = panel.ap.fg(agent.get("pastel") or agent["color"])
+                suffix = "".join(color + ch + panel.RESET for ch in " (3)")
+            for text in ("".join(panel.card(view, 0, 24, 0, time.time())),
+                         panel.compact_row(view, 0, 32, 0, time.time())):
+                self.assertIn(name + " (3)", ANSI.sub("", text))
+                self.assertIn(suffix, re.sub(r"\x1b\[48;2;[0-9;]+m", "", text))
+
     def test_working_card_keeps_its_full_border_in_a_tight_pane(self):
         # Four agents in 19 rows: too short for every card to reserve a border
         # (4 x 5 = 20), but the one working card still gets both of its lids.
