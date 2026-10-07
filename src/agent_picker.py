@@ -1255,6 +1255,7 @@ def main():
     if args[:1] == ["--picker-help"]:
         print("agent [CLI arguments]                 open picker; forward arguments")
         print("agent --picker-launch NAME [args]     launch a provider directly")
+        print("agent --picker-priority               explain the Cursor/Kiro workbench choice")
         print("agent --picker-update                 fast-forward this Git checkout")
         print("agent --picker-doctor                 show paths and launch profiles")
         print("agent --picker-catalog                every known CLI, its colors, and whether it is installed")
@@ -1262,6 +1263,13 @@ def main():
         print("usage                                 the same command; u switches to the usage panel")
         print("Prefix CLI args with -- to escape picker management commands.")
         return 0
+    if args[:1] in (["--picker-launch-priority"], ["--picker-priority"]):
+        import provider_priority
+        name, reason = provider_priority.select(sys.modules[__name__])
+        print(f"agent: workbench chose {name}: {reason}", flush=True)
+        if args[0] == "--picker-priority":
+            return 0
+        args = ["--picker-launch", name, *args[1:]]
     if args[:1] == ["--picker-launch"]:
         if len(args) < 2:
             raise ValueError("--picker-launch needs a provider name")

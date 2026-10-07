@@ -6,7 +6,7 @@ every pane rooted in the directory you ran this from.
   | Antigravity  | Codex        |              |
   |              |              | Claude       |
   +--------------+--------------+              |
-  | agent        | Cursor       |              |
+  | agent        | Cursor/Kiro  |              |
   | selector     |              +--------------+
   +--------------+--------------+ usage        |
   | terminal                    |              |
@@ -14,6 +14,7 @@ every pane rooted in the directory you ran this from.
 
 Agents launch through this checkout's picker (--picker-launch), so models,
 effort and permission flags follow your picker defaults.
+The middle-bottom pane chooses Cursor or Kiro by remaining quota and reset date.
 
 Usage: herdr-ai [label]       (label defaults to the directory name)
 Env:   HERDR_AI_DRY=1         build the layout with plain shells only
@@ -36,7 +37,7 @@ PANES = {
     "agy": ["--picker-launch", "Antigravity"],
     "codex": ["--picker-launch", "Codex"],
     "claude": ["--picker-launch", "Claude"],
-    "cursor": ["--picker-launch", "Cursor"],
+    "cursor": ["--picker-launch-priority"],  # keep the role for saved-layout compatibility
     "picker": [],
     "usage": ["--picker-usage"],
 }

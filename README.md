@@ -56,6 +56,7 @@ Open a new terminal, then run `agent --picker-doctor` and `agent`. The installer
 agent                                open the picker
 agent "help me understand this repo"  forward this prompt to the chosen CLI
 agent --picker-launch Codex           directly launch Codex
+agent --picker-priority               explain the Cursor/Kiro workbench choice
 agent --picker-doctor                 inspect detected providers and local paths
 agent --picker-update                 pull shared updates from GitHub
 agent --picker-catalog                every known CLI, its colors, and whether it is installed
@@ -71,6 +72,10 @@ In the agent selector, highlight a provider and press `→` to open its defaults
 The five original providers support these controls. Cursor effort is part of its model identifier; changing it preserves any fast suffix or existing bracket parameters. Gemini effort is also part of the model id (`gemini-3.8-flash-high`), so those models have no separate Effort control and do not pass `--effort`. Other catalog providers keep their own defaults until their launch controls are supported. Model choices come from bundled provider catalogs, refreshed locally from installed CLIs or their caches in the background. Your current model stays selectable. Cursor effort choices follow the available model variants; Codex and Claude use the effort levels reported in their catalogs. Model access still depends on your account.
 
 Updates are explicit, use `git pull --ff-only`, and refuse a dirty checkout. If the two machines have diverging commits, resolve them with normal Git operations before updating. The command does not commit, stash, reset, push, or update provider CLIs automatically.
+
+## Workbench agent priority
+
+The middle-bottom agent pane automatically chooses Cursor or Kiro. Usable quota resetting within five days takes priority, with the earlier reset winning when both are close. Otherwise it chooses the larger remaining percentage divided by days until reset. Cursor uses the Auto pool for `--model auto` and the external-model pool for named models; Kiro uses its monthly pool. Exhausted pools do not outrank usable ones. The chooser uses the shared usage cache, gives stale readers up to two seconds to refresh, and ignores data older than a day or whose reset has passed. With no usable data it falls back to an installed provider, preferring Cursor on ties. It prints the choice and reason before launching with your existing defaults. `agent --picker-priority` explains the current choice without opening an agent session. The choice is evaluated at launch, including when rerouting restarts this pane; running sessions stay on their provider.
 
 ## Agent selector defaults
 

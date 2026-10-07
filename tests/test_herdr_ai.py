@@ -69,8 +69,9 @@ class HerdrAiTests(unittest.TestCase):
         fake, _ = self.run_layout({"HERDR_ENV": "1", "HERDR_WORKSPACE_ID": "w"})
         commands = list(fake.runs().values())
         self.assertEqual(len(commands), 6)
-        for name in ("Antigravity", "Codex", "Claude", "Cursor"):
+        for name in ("Antigravity", "Codex", "Claude"):
             self.assertTrue(any(c.endswith("--picker-launch " + name) for c in commands), name)
+        self.assertTrue(any(c.endswith("--picker-launch-priority") for c in commands))
         self.assertTrue(any(c.endswith("--picker-usage") for c in commands))
 
     def test_dry_run_builds_layout_without_launching(self):
