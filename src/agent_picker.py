@@ -73,13 +73,16 @@ def tint(rgb, amount):
 def _write_json(path, data):
     """Atomic rewrite, so a CLI reading the file never sees half of it."""
     tmp = path.with_name(f".{path.name}.agent-picker.tmp")
-    tmp.write_text(json.dumps(data, indent=2) + "\n")
+    tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
     os.replace(tmp, path)
 
 
 def trust_claude(dirs):
     path = Path.home() / ".claude.json"
-    data = json.loads(path.read_text()) if path.exists() else {}
+    data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    if os.name == "nt":
+        # Claude keys Windows projects by forward-slash paths (C:/Users/...).
+        dirs = list(dict.fromkeys([*dirs, *(d.replace("\\", "/") for d in dirs)]))
     projects = data.setdefault("projects", {})
     if all(projects.get(d, {}).get("hasTrustDialogAccepted") for d in dirs):
         return
@@ -90,20 +93,20 @@ def trust_claude(dirs):
 
 def trust_codex(dirs):
     path = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")) / "config.toml"
-    text = path.read_text() if path.exists() else ""
+    text = path.read_text(encoding="utf-8") if path.exists() else ""
     for d in dirs:
         esc = d.replace("\\", "\\\\").replace('"', '\\"')
         header = f'[projects."{esc}"]'
         if header not in text.splitlines():
             text += f'\n{header}\ntrust_level = "trusted"\n'
     path.parent.mkdir(parents=True, exist_ok=True)
-    if not path.exists() or path.read_text() != text:
-        path.write_text(text)
+    if not path.exists() or path.read_text(encoding="utf-8") != text:
+        path.write_text(text, encoding="utf-8")
 
 
 def trust_antigravity(dirs):
     path = Path.home() / ".gemini/antigravity-cli/settings.json"
-    data = json.loads(path.read_text()) if path.exists() else {}
+    data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
     trusted = data.setdefault("trustedWorkspaces", [])
     missing = [d for d in dirs if d not in trusted]
     if missing:

@@ -14,7 +14,7 @@ function Update-SessionPath {
 function Find-Python {
     # The Microsoft Store "python" stub fails this check, so it is skipped.
     $ErrorActionPreference = 'Continue'
-    $check = 'import sys; print(sys.executable if sys.version_info >= (3, 9) else "")'
+    $check = 'import sys; print(sys.executable if sys.version_info >= (3, 9) else str())'
     $exe = $null
     if (Get-Command py -CommandType Application -ErrorAction SilentlyContinue) { $exe = & py -3 -c $check }
     if (-not $exe -and (Get-Command python -CommandType Application -ErrorAction SilentlyContinue)) { $exe = & python -c $check }
