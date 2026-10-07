@@ -112,11 +112,11 @@ Usage collection runs in background threads and never refreshes authentication t
 | --- | --- | --- |
 | Claude | Existing Keychain credentials or credentials file | Existing credentials file |
 | Codex | Local session rate-limit records | Local session rate-limit records |
-| Cursor | Existing macOS Keychain token | No verified native credential reader yet |
+| Cursor | Existing macOS Keychain token | Existing CLI login file (`%APPDATA%\Cursor\auth.json`) |
 | Kiro | CLI `/usage` output | CLI `/usage` output, when supported by the installed version |
-| Antigravity | Existing macOS Keychain token | No verified native credential reader yet |
+| Antigravity | Existing macOS Keychain token | Existing Credential Manager login (`gemini:antigravity`) |
 
-Claude's [authentication documentation](https://code.claude.com/docs/en/authentication#credential-management) describes its platform-specific credential files. `CLAUDE_CONFIG_DIR` and `CODEX_HOME` are respected by the usage readers. Cursor and Antigravity usage endpoints and credential formats come from the original Mac implementation and may change. Windows meters for those providers show a dash until a verified reader is added; their launch commands still work when installed. Login, expired credentials, provider-specific model access, and live usage accuracy need verification on each computer.
+Claude's [authentication documentation](https://code.claude.com/docs/en/authentication#credential-management) describes its platform-specific credential files. `CLAUDE_CONFIG_DIR` and `CODEX_HOME` are respected by the usage readers. Cursor and Antigravity usage endpoints and credential formats come from the original Mac implementation and may change. On Windows both are read from where their CLIs store the login, without refreshing it, so a meter shows a dash while that login's access token has expired until the CLI next runs. Login, expired credentials, provider-specific model access, and live usage accuracy need verification on each computer.
 
 ## Agent catalog
 

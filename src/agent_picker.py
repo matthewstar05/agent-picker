@@ -170,6 +170,31 @@ def _keychain(service):
     return out.stdout.strip() if out.returncode == 0 else None
 
 
+def _wincred(target):
+    """A generic Windows Credential Manager secret (where go-keyring stores logins), read only."""
+    if os.name != "nt":
+        return None
+    import ctypes
+    from ctypes import wintypes
+
+    class Credential(ctypes.Structure):
+        _fields_ = [("Flags", wintypes.DWORD), ("Type", wintypes.DWORD), ("TargetName", wintypes.LPWSTR),
+                    ("Comment", wintypes.LPWSTR), ("LastWritten", wintypes.FILETIME),
+                    ("CredentialBlobSize", wintypes.DWORD), ("CredentialBlob", ctypes.POINTER(ctypes.c_ubyte)),
+                    ("Persist", wintypes.DWORD), ("AttributeCount", wintypes.DWORD),
+                    ("Attributes", ctypes.c_void_p), ("TargetAlias", wintypes.LPWSTR), ("UserName", wintypes.LPWSTR)]
+
+    advapi = ctypes.WinDLL("advapi32")
+    found = ctypes.POINTER(Credential)()
+    if not advapi.CredReadW(target, 1, 0, ctypes.byref(found)):   # 1 = CRED_TYPE_GENERIC
+        return None
+    try:
+        cred = found.contents
+        return bytes(cred.CredentialBlob[:cred.CredentialBlobSize]).decode("utf-8")
+    finally:
+        advapi.CredFree(found)
+
+
 def _http_json(url, headers, body=None):
     req = urllib.request.Request(url, data=body, headers=headers)
     with urllib.request.urlopen(req, timeout=8) as resp:
@@ -228,6 +253,9 @@ def usage_codex():
 
 def usage_cursor():
     token = _keychain("cursor-access-token")
+    auth_file = Path(os.environ.get("APPDATA", "")) / "Cursor/auth.json"   # the Windows CLI's login
+    if not token and os.name == "nt" and auth_file.exists():
+        token = json.loads(auth_file.read_text(encoding="utf-8")).get("accessToken")
     if not token:
         return None
     d = _http_json("https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage",
@@ -249,7 +277,7 @@ def usage_kiro():
     if not argv or Path(argv[0]).stem.lower() not in ("kiro-cli", "kiro"):
         return None  # custom wrappers have no verified usage protocol
     out = subprocess.run([argv[0], "chat", "--no-interactive", "/usage"], capture_output=True,
-                         text=True, timeout=30, stdin=subprocess.DEVNULL, start_new_session=True,
+                         text=True, encoding="utf-8", errors="replace", timeout=30, stdin=subprocess.DEVNULL, start_new_session=True,
                          cwd=tempfile.gettempdir())
     text = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", out.stdout + out.stderr)
     pct = re.search(r"\),\s*([\d.]+)%", text) or re.search(r"([\d.]+)%", text)
@@ -261,7 +289,7 @@ def usage_kiro():
 
 
 def usage_antigravity():
-    raw = _keychain("gemini")
+    raw = _keychain("gemini") or _wincred("gemini:antigravity")
     if not raw:
         return None
     if raw.startswith("go-keyring-base64:"):

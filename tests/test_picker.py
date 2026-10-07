@@ -177,6 +177,29 @@ class PickerTests(unittest.TestCase):
             self.assertEqual(windows[0]["pct"], 20)
             self.assertEqual(path.read_text(), original)
 
+    def test_windows_cursor_and_antigravity_logins_are_read_only(self):
+        usage = {"billingCycleEnd": "1900000000000", "planUsage": {"autoPercentUsed": 24, "apiPercentUsed": 5}}
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "Cursor/auth.json"
+            path.parent.mkdir()
+            original = json.dumps({"accessToken": "fake-test-token", "refreshToken": "fake"})
+            path.write_text(original)
+            with patch.dict(os.environ, {"APPDATA": folder}), patch.object(picker.os, "name", "nt"), \
+                    patch.object(picker, "_keychain", return_value=None), \
+                    patch.object(picker, "_http_json", return_value=usage) as http:
+                windows = picker.usage_cursor()
+            self.assertEqual([(w["label"], w["pct"]) for w in windows], [("cr", 24.0), ("ex", 5.0)])
+            self.assertIn("Bearer fake-test-token", http.call_args[0][1]["Authorization"])
+            self.assertEqual(path.read_text(), original)
+        token = {"token": {"access_token": "fake", "expiry": "2999-01-01T00:00:00Z"}}
+        quota = {"groups": [{"displayName": "Gemini", "buckets": [
+            {"window": "weekly", "remainingFraction": 0.75, "resetTime": "2999-01-01T00:00:00Z"}]}]}
+        with patch.object(picker, "_keychain", return_value=None), \
+                patch.object(picker, "_wincred", return_value=json.dumps(token)) as cred, \
+                patch.object(picker, "_http_json", return_value=quota):
+            self.assertEqual(picker.usage_antigravity()[0]["pct"], 25)
+        cred.assert_called_once_with("gemini:antigravity")
+
     @unittest.skipIf(os.name == "nt", "macOS shell installer")
     def test_macos_install_is_idempotent_and_uses_live_checkout(self):
         with tempfile.TemporaryDirectory() as folder:

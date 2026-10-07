@@ -166,7 +166,7 @@ class DefaultsTests(unittest.TestCase):
                 agent = self.agents()["Codex"]
                 defaults.save(agent, {"model": "after", "effort": "low", "bypass_permissions": False}, config)
             env = dict(os.environ, AGENT_PICKER_CONFIG=str(config), AGENT_PICKER_STATE_HOME=str(root / "state"), AGENT_PICKER_NO_PRETRUST="1")
-            result = subprocess.run([sys.executable, str(ROOT / "src/agent_picker.py"), "--picker-launch", "Codex"], env=env, capture_output=True, text=True)
+            result = subprocess.run([sys.executable, str(ROOT / "src/agent_picker.py"), "--picker-launch", "Codex"], env=env, capture_output=True, text=True, encoding="utf-8")
             self.assertEqual(result.returncode, 0, result.stderr)
             args = json.loads(output.read_text())
             self.assertIn("after", args)

@@ -176,7 +176,7 @@ def pane_agent(pane_id):
         return name
     try:
         out = subprocess.run([HERDR, "pane", "process-info", "--pane", pane_id],
-                             capture_output=True, text=True, timeout=5)
+                             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5)
         info = json.loads(out.stdout)["result"]["process_info"]
         name = next((n for n in (from_argv(p.get("argv") or [p.get("name", "")])
                                  for p in info.get("foreground_processes", [])) if n), None)
@@ -188,7 +188,8 @@ def pane_agent(pane_id):
 
 def herdr_sessions(me):
     """(agents in this pane's tab, working pane ids per profile anywhere)."""
-    out = subprocess.run([HERDR, "pane", "list"], capture_output=True, text=True, timeout=5)
+    out = subprocess.run([HERDR, "pane", "list"], capture_output=True, text=True, encoding="utf-8",
+                         errors="replace", timeout=5)
     panes = json.loads(out.stdout)["result"]["panes"]
     tab = next((p.get("tab_id") for p in panes if p.get("pane_id") == me), os.environ.get("HERDR_TAB_ID"))
     here, working = {}, {}
