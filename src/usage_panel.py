@@ -307,6 +307,7 @@ def ago(epoch):
     return f"{s // 3600}h ago"
 
 
+SPARK_FULL = 5.0   # percent of a limit used in one slice that draws a full block
 SPARKS = {}  # (provider, slices) -> (computed at, rates); recomputed every few seconds
 
 
@@ -322,8 +323,8 @@ def spark(name, n, now):
 def _spark(name, n, now):
     """Burn rate over the last five hours: how much of the first limit each slice used."""
     series = list(HISTORY.get(name) or [])
-    if len(series) < 2:
-        return None
+    if len(series) < 2 or series[0][0] > now - 3600:
+        return None  # under an hour of history is too little to show a trend
     start, step = now - 5 * 3600, 5 * 3600 / n
 
     def value_at(t):
@@ -338,8 +339,10 @@ def _spark(name, n, now):
     for k in range(n):
         a, b = value_at(start + k * step), value_at(start + (k + 1) * step)
         deltas.append(None if b is None else max(0.0, b - (a if a is not None else b)))
-    peak = max((d for d in deltas if d), default=0)
-    return [None if d is None else (d / peak if peak else 0.0) for d in deltas]
+    # Fixed scale, so a 1% blip stays a small tick: a full block is 5% of the
+    # limit used in one slice (about 25 minutes), or the busiest slice if more.
+    scale = max([SPARK_FULL] + [d for d in deltas if d])
+    return [None if d is None else d / scale for d in deltas]
 
 
 def put_name(line, agent, st, brand, t, bold=True):
@@ -426,15 +429,16 @@ def _card(view, i, cw, t, now, entry, fetching, working, dots=None):
     status = status.ljust(10) if fetching else status
     right = cw - 1 - len(status)
     name_end = len(head.cells)
-    end = right - 2   # the sparkline ends here
-    if cw >= 50 and entry:
-        rates = spark(name, 12, now)
-        if rates and end - name_end >= 12 + 2:
-            end -= 12
-            for k, r in enumerate(rates):
-                glyph = "·" if r is None else ap.BLOCKS[int(r * 7.99)]
-                color = TRACK if r is None or r == 0 else ap.grad(st, k / 12 * 0.5 + i * 0.13 - t * 0.05)
-                head.at(end + k, glyph, color)
+    # Burn-rate sparkline, switched off: uncomment to draw it before the status.
+    # end = right - 2
+    # if cw >= 50 and entry:
+    #     rates = spark(name, 12, now)
+    #     if rates and end - name_end >= 12 + 2:
+    #         end -= 12
+    #         for k, r in enumerate(rates):
+    #             glyph = "·" if r is None else ap.BLOCKS[int(r * 7.99)]
+    #             color = TRACK if r is None or r == 0 else ap.grad(st, k / 12 * 0.5 + i * 0.13 - t * 0.05)
+    #             head.at(end + k, glyph, color)
     head.at(right, status, scol)
     lines = [head.pad(cw)]
 
@@ -451,18 +455,18 @@ def _card(view, i, cw, t, now, entry, fetching, working, dots=None):
             line = Line().put("   ").put(w["label"].ljust(2), LABEL).put(" ")
             reset = f"↻ {until(w.get('resets'))}" if w.get("resets") else ""
             tail = f"out {until(out)}" if out else reset
-            tail_w = 12 if tail and cw - 6 - 5 - 12 >= 6 else 0
-            if out and cw - 6 - 5 - 24 >= 12:  # room to keep the reset beside the warning
-                tail, tail_w = f"out {until(out)}", 24
+            # Every row of a card gets the same bar, so the percentages line up;
+            # a warning only changes the text after it.
+            tail_w = 12 if cw - 6 - 5 - 12 >= 6 else 0
             bar = min(40, cw - 6 - 5 - tail_w - 1)
             if bar >= 3:
                 draw_bar(line, w, bar, st, t if view.anim else 0, live and view.anim, stale, now, i * 0.13)
             pcol = HOT if pct >= 90 else WARN if pct >= 70 else mix(st["color"], WHITE, 0.6)
             line.put(f" {pct:3.0f}%", mix(pcol, SOFT, 0.5) if stale else pcol, bold=True)
-            if tail_w:
+            if tail_w and tail:
                 line.put("  " + tail, HOT if out else SOFT)
-                if tail_w == 24:
-                    line.put(" · ", TRACK).put(reset, SOFT)
+                if out and reset and cw - len(line.cells) >= 3 + len(reset) + 1:
+                    line.put(" · ", TRACK).put(reset, SOFT)  # room to keep the reset too
             lines.append(line.pad(cw))
     while len(lines) < 3:
         lines.append(Line().pad(cw))

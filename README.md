@@ -111,7 +111,7 @@ Claude's [authentication documentation](https://code.claude.com/docs/en/authenti
 
 Refreshing follows the agents. Every two seconds the panel asks Herdr (`herdr pane list`) which panes are working. A provider with a working agent is read often (Codex every 5 seconds from its local logs, the web endpoints every 45 to 60 seconds). It is read again a few seconds after one of its agents finishes a turn, and only every 5 to 15 minutes while idle. Failed reads back off. Without Herdr it falls back to fixed intervals between those two.
 
-Each bar fills to the percentage used. The empty track is brighter up to where an even pace through the window would be by now, and any filled part beyond that point turns hot. When the current pace would reach the limit before the window resets, the countdown changes from `↻ 2h 31m` to `out 1h 20m`. In wide cards, a small sparkline shows how quickly the first limit was used over the last five hours.
+Each bar fills to the percentage used. The empty track is brighter up to where an even pace through the window would be by now, and any filled part beyond that point turns hot. When the current pace would reach the limit before the window resets, the countdown changes from `↻ 2h 31m` to `out 1h 20m`. History for a burn-rate sparkline is still recorded, but drawing it is commented out in `usage_panel.py`.
 
 Keys: `t` or `→` next theme, `T` or `←` previous theme, `r` refresh now, `a` toggle animation (off redraws once a second), `q` quit. The theme and animation choice are saved in the local state directory.
 
