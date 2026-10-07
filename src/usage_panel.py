@@ -552,7 +552,7 @@ def working_card(view, i, width, t, now, lids=True, active=True):
     """Reserve the selector's border space, drawing it only while working."""
     content = card(view, i, width - 2, t, now)
     agent = view.agents[i]
-    tick = int(t * 6) / 6 if view.anim else 0.4
+    tick = t if view.anim else 0.4
     ring = ap.border_ring(agent, tick, width - 2, len(content)) if active else None
     lines = [(ring[(y + 1, 0)] + RESET if active else " ") + line
              + (ring[(y + 1, width - 1)] + RESET if active else " ")
@@ -680,10 +680,16 @@ def run(view, providers):
     sys.stdout.flush()
     try:
         terminal.__enter__()
+        frame_at = time.monotonic()
         while True:
             draw()
-            # ~15 fps while animating; once a second otherwise (for the countdowns)
-            if not terminal.wait(1 / 15 if view.anim else 1.0):
+            # Fixed deadlines keep render time inside the 60 fps frame budget.
+            step = ap.FRAME_TIME if view.anim else 1.0
+            frame_at += step
+            now = time.monotonic()
+            if frame_at < now:
+                frame_at = now
+            if not terminal.wait(max(0, frame_at - now)):
                 continue
             key = terminal.read_key()
             if key in ("t", "right", "l"):
