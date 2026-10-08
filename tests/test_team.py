@@ -42,7 +42,7 @@ class TeamTests(unittest.TestCase):
 
     def test_summaries_name_lead_then_crew(self):
         expected = {"Claude": "opus → haiku", "Codex": "sol → luna", "Antigravity": "flash high → low",
-                    "Cursor": "opus → grok", "Kiro": "opus → haiku"}
+                    "Cursor": "opus → grok", "Kiro": "opus → sonnet"}
         for name, text in expected.items():
             self.assertEqual(team.summary(self.agents[name]), text, name)
             self.assertEqual(team.option(self.agents[name])["short"], text, name)
@@ -100,6 +100,20 @@ class TeamTests(unittest.TestCase):
             if tomllib:
                 self.assertEqual(tomllib.loads("v = " + raw)["v"], text)
             self.assertEqual(args, ["--extra"])
+
+    def test_codex_team_turns_off_imcp(self):
+        for role, target in (("--picker-lead", "w:p2,w:p3"), ("--picker-crew", "w:p1")):
+            prepared, _ = self.prepare("Codex", role, target)
+            argv = prepared["argv"]
+            self.assertIn("mcp_servers.iMCP.enabled=false", argv, role)
+            self.assertEqual(argv[argv.index("mcp_servers.iMCP.enabled=false") - 1], "-c", role)
+
+    def test_claude_team_denies_imcp(self):
+        for role, target in (("--picker-lead", "w:p2,w:p3"), ("--picker-crew", "w:p1")):
+            prepared, _ = self.prepare("Claude", role, target)
+            argv = prepared["argv"]
+            with open(argv[argv.index("--settings") + 1], encoding="utf-8") as f:
+                self.assertEqual(json.load(f), {"deniedMcpServers": [{"serverName": "iMCP"}]}, role)
 
     def test_flagless_lead_gets_opening_prompt_last(self):
         for name in ("Kiro", "Cursor"):

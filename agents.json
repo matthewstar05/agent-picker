@@ -327,8 +327,8 @@
         "effort": "high"
       },
       "crew": {
-        "model": "claude-haiku-4.5",
-        "effort": "high"
+        "model": "claude-sonnet-5.5",
+        "effort": "low"
       }
     },
     "argv": [

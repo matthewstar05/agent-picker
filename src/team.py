@@ -127,6 +127,19 @@ def cmd_safe(text):
     return re.sub(r'["<>&|^%]', "", text)
 
 
+# iMCP drops every client when several connect at once, as a team's five panes do at launch.
+CLAUDE_SETTINGS = {"deniedMcpServers": [{"serverName": "iMCP"}]}
+
+
+def claude_settings():
+    """A settings file that keeps iMCP out of a Claude team pane. A file, not inline JSON,
+    since a .cmd shim would strip the quotes."""
+    path = os.path.join(tempfile.gettempdir(), "herdr-team-claude-settings.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(CLAUDE_SETTINGS, f)
+    return path
+
+
 def prepare(agent, args):
     """The profile and arguments for a team member: --picker-lead PANES or --picker-crew PANE first in args."""
     if len(args) < 2:
@@ -147,10 +160,11 @@ def prepare(agent, args):
         brief = cmd_safe(brief)
     name = agent["name"]
     if name == "Claude":
-        agent["argv"] += ["--append-system-prompt", brief]
+        agent["argv"] += ["--append-system-prompt", brief, "--settings", claude_settings()]
     elif name == "Codex":
         # A TOML string; through a cmd shim, unquoted text Codex reads as a literal string instead.
         agent["argv"] += ["-c", "developer_instructions=" + (brief if shim else json.dumps(brief))]
+        agent["argv"] += ["-c", "mcp_servers.iMCP.enabled=false"]  # see CLAUDE_SETTINGS
     elif lead:
         # No system prompt flag: the lead reads its brief as the opening prompt.
         opening = brief + "\n\nThese are your standing instructions for this session. Reply only: ready."
