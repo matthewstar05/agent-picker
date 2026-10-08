@@ -1,0 +1,181 @@
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+import agent_picker as picker
+import model_catalog
+import provider_defaults
+import settings
+import team
+
+TEAM = ("Claude", "Codex", "Antigravity", "Cursor", "Kiro")
+
+
+def catalog():
+    """The shared profiles from agents.json, without this machine's config."""
+    with tempfile.TemporaryDirectory() as folder:
+        with patch.dict(os.environ, {"AGENT_PICKER_CONFIG": str(Path(folder) / "missing.json")}):
+            return {a["name"]: a for a in settings.load_agents()}
+
+
+class TeamTests(unittest.TestCase):
+    def setUp(self):
+        self.agents = catalog()
+        # Cursor and Antigravity read cached model rows; keep them out of the result.
+        rows = patch.object(model_catalog, "load_rows", return_value=[])
+        rows.start()
+        self.addCleanup(rows.stop)
+
+    def prepare(self, name, role, panes):
+        agent = self.agents[name]
+        before = json.loads(json.dumps(agent))
+        prepared, args = team.prepare(agent, [role, panes, "--extra"])
+        self.assertEqual(agent, before, "prepare must not change the shared profile")
+        return prepared, args
+
+    def test_summaries_name_lead_then_crew(self):
+        expected = {"Claude": "opus → haiku", "Codex": "sol → luna", "Antigravity": "flash high → low",
+                    "Cursor": "opus → grok", "Kiro": "opus → haiku"}
+        for name, text in expected.items():
+            self.assertEqual(team.summary(self.agents[name]), text, name)
+            self.assertEqual(team.option(self.agents[name])["short"], text, name)
+
+    def test_nick_shortens_model_ids(self):
+        claude = self.agents["Claude"]
+        self.assertEqual(team.nick(claude, "claude-opus-5-5"), "opus")
+        self.assertEqual(team.nick(claude, "gpt-6.1-sol"), "sol")
+        self.assertEqual(team.nick(claude, "gpt-6-luna"), "luna")
+        self.assertEqual(team.nick(claude, "gemini-3.8-flash-high"), "flash high")
+        self.assertEqual(team.nick(claude, "grok-4.7"), "grok")
+        self.assertEqual(team.nick(claude, "claude-haiku-4.5"), "haiku")
+
+    def test_lead_and_crew_models_and_effort(self):
+        for name in TEAM:
+            for role, key in (("--picker-lead", "lead"), ("--picker-crew", "crew")):
+                prepared, _ = self.prepare(name, role, "w:p1")
+                values = provider_defaults.current(prepared)
+                config = self.agents[name]["team"][key]
+                self.assertEqual(values["model"], config["model"], (name, role))
+                self.assertEqual(values["effort"], config["effort"], (name, role))
+                self.assertTrue(prepared["detail"].startswith(key + " · "), (name, role))
+                self.assertTrue(values["bypass_permissions"], (name, role))
+
+    def test_claude_appends_system_prompt(self):
+        lead, args = self.prepare("Claude", "--picker-lead", "w:p2,w:p3,w:p4,w:p5")
+        flag = lead["argv"].index("--append-system-prompt")
+        brief = lead["argv"][flag + 1]
+        self.assertIn("w:p2, w:p3, w:p4, w:p5", brief)
+        self.assertIn("claude-haiku-5-5", brief)
+        self.assertEqual(args, ["--extra"])
+        crew, args = self.prepare("Claude", "--picker-crew", "w:p1")
+        brief = crew["argv"][crew["argv"].index("--append-system-prompt") + 1]
+        self.assertIn("herdr pane w:p1", brief)
+        self.assertIn(f"at most {team.REPLY} lines", brief)
+        self.assertEqual(args, ["--extra"])
+
+    def test_codex_developer_instructions_are_a_toml_string(self):
+        for role, needle in (("--picker-lead", "w:p2, w:p3"), ("--picker-crew", "herdr pane w:p1")):
+            prepared, args = self.prepare("Codex", role, "w:p2,w:p3" if role == "--picker-lead" else "w:p1")
+            argv = prepared["argv"]
+            values = [argv[i + 1] for i, a in enumerate(argv[:-1])
+                      if a == "-c" and argv[i + 1].startswith("developer_instructions=")]
+            self.assertEqual(len(values), 1, role)
+            raw = values[0].split("=", 1)[1]
+            self.assertTrue(raw.startswith('"') and raw.endswith('"'))
+            text = json.loads(raw)
+            self.assertIn(needle, text)
+            self.assertNotIn("\n", raw, "a TOML basic string cannot hold raw newlines")
+            self.assertTrue(all(ord(c) >= 32 for c in raw), "control characters must be escaped")
+            try:
+                import tomllib
+            except ImportError:
+                tomllib = None
+            if tomllib:
+                self.assertEqual(tomllib.loads("v = " + raw)["v"], text)
+            self.assertEqual(args, ["--extra"])
+
+    def test_flagless_lead_gets_opening_prompt_last(self):
+        for name in ("Kiro", "Cursor"):
+            prepared, args = self.prepare(name, "--picker-lead", "w:p2,w:p3")
+            self.assertEqual(args[0], "--extra")
+            self.assertEqual(len(args), 2, name)
+            self.assertIn("w:p2, w:p3", args[-1])
+            self.assertTrue(args[-1].endswith("Reply only: ready."), name)
+            self.assertFalse(any("herdr team" in a for a in prepared["argv"]), name)
+
+    def test_antigravity_lead_uses_interactive_flag(self):
+        _, args = self.prepare("Antigravity", "--picker-lead", "w:p2")
+        self.assertEqual(args[:2], ["--extra", "-i"])
+        self.assertIn("herdr panes w:p2", args[2])
+        self.assertEqual(len(args), 3)
+
+    def test_flagless_crew_get_no_opening_prompt(self):
+        for name in ("Kiro", "Cursor", "Antigravity"):
+            prepared, args = self.prepare(name, "--picker-crew", "w:p1")
+            self.assertEqual(args, ["--extra"], name)
+            self.assertFalse(any("herdr" in a for a in prepared["argv"]), name)
+
+    def test_prepare_rejects_missing_panes_and_team(self):
+        with self.assertRaisesRegex(ValueError, "needs pane ids"):
+            team.prepare(self.agents["Claude"], ["--picker-lead"])
+        plain = dict(self.agents["Claude"])
+        plain.pop("team")
+        with self.assertRaisesRegex(ValueError, "no team"):
+            team.prepare(plain, ["--picker-crew", "w:p1"])
+
+    def test_cmd_shim_gets_a_one_line_brief_without_cmd_metacharacters(self):
+        text = team.cmd_safe('a "b" <c> & d | e ^ f %g%\n  next line')
+        self.assertEqual(text, "a b c  d  e  f g next line")
+        with patch.object(team, "WINDOWS", True), \
+             patch.object(team, "resolve_argv", return_value=[r"C:\npm\codex.CMD"]):
+            agent, _ = team.prepare(self.agents["Codex"], ["--picker-lead", "w:p1,w:p2,w:p3,w:p4"])
+        value = next(a for a in agent["argv"] if a.startswith("developer_instructions="))
+        self.assertNotRegex(value, r'[\n"<>&|^%]')
+        self.assertIn("w:p1", value)
+
+    def test_find_standard_and_providers(self):
+        agents = list(self.agents.values())
+        with patch.object(picker, "AGENTS", agents), patch.object(picker, "installed", return_value=True):
+            self.assertEqual([a["name"] for a in team.providers()], list(TEAM))
+            self.assertIsNone(team.find("standard"))
+            self.assertIsNone(team.find("STANDARD"))
+            self.assertEqual(team.find("Codex"), "Codex")
+            self.assertEqual(team.find("kiro"), "Kiro")
+            self.assertEqual(team.find("ANTIGRAVITY"), "Antigravity")
+            with self.assertRaisesRegex(ValueError, "unknown setup 'nope'.*standard, claude"):
+                team.find("nope")
+            self.assertEqual([s["name"] for s in team.setups()], ["Standard"] + list(TEAM))
+
+    def test_main_launches_crew_with_fake_cli(self):
+        with tempfile.TemporaryDirectory(prefix="team test ") as folder:
+            folder = Path(folder)
+            script = folder / "fake cli.py"
+            output = folder / "args.json"
+            script.write_text("import json, sys\nfrom pathlib import Path\nPath(sys.argv[1]).write_text(json.dumps(sys.argv[2:]))\nsys.exit(3)\n")
+            config = folder / "config.json"
+            config.write_text(json.dumps({"agents": {"Claude": {"argv": [sys.executable, str(script), str(output)]}}}))
+            env = dict(os.environ, AGENT_PICKER_CONFIG=str(config), AGENT_PICKER_STATE_HOME=str(folder / "state"),
+                       AGENT_PICKER_NO_PRETRUST="1")
+            result = subprocess.run([sys.executable, str(ROOT / "src/agent_picker.py"), "--picker-launch", "Claude",
+                                     "--picker-crew", "w:p1", "hello"],
+                                    cwd=folder, env=env, capture_output=True, text=True, encoding="utf-8")
+            self.assertEqual(result.returncode, 3, result.stderr)
+            args = json.loads(output.read_text())
+            self.assertEqual(args[args.index("--model") + 1], "claude-haiku-5-5")
+            self.assertEqual(args[args.index("--effort") + 1], "high")
+            brief = args[args.index("--append-system-prompt") + 1]
+            self.assertIn("herdr pane w:p1", brief)
+            self.assertEqual(args[-1], "hello")
+            self.assertNotIn("--picker-crew", args)
+            self.assertEqual((folder / "state/last").read_text(), "Claude")
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -363,12 +363,15 @@ def force_all(providers):
 # ---- drawing ----------------------------------------------------------------
 
 class View:
-    def __init__(self, agents):
+    def __init__(self, agents, pinned=False):
         self.installed = agents   # every listed profile, in picker order
+        self.pinned = pinned      # draw every listed profile, even ones not beside this pane
         self.toast_until = 0
         self.agents = self.present()  # the ones beside this pane; refreshed each frame
 
     def present(self):
+        if self.pinned:
+            return list(self.installed)
         with LOCK:
             return [a for a in self.installed if a["name"] in PRESENT]
 

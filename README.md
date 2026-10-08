@@ -77,11 +77,25 @@ Updates are explicit, use `git pull --ff-only`, and refuse a dirty checkout. If 
 
 Run `herdr-ai` in a herdr pane to lay out that tab as the workbench: Antigravity, Codex, Cursor or Kiro, the agent selector, Claude, the usage panel, and a terminal along the bottom. The pane you ran it from becomes that terminal. Nothing else on the tab is touched, and no new tab is created. Outside herdr it opens a new workspace and attaches. An optional label renames the tab; otherwise the tab is named after the directory.
 
-Run `herdr-ai` again from a tab it already laid out, usually from the bottom terminal after a `cd`, and it reroutes instead of adding panes: the four agents and the selector stop and restart in the new directory. If the selector had launched an agent, that agent restarts with the same arguments. The usage panel keeps running.
+`herdr-ai` first opens a menu drawn like the agent selector, with each provider's usage beside it. **Standard** (sakura pink) is the workbench above, unchanged. Choosing a provider lays out a team of that provider instead: a lead agent on the right, four crew agents in a 2x2 grid on the left, the terminal under them, and a short usage panel for that provider alone under the lead. The launch animation and key bindings match the selector; Esc quits without touching the tab, and the menu remembers your last choice. `herdr-ai --setup NAME [label]` skips the menu (`standard`, `claude`, `codex`, `antigravity`, `cursor`, `kiro`), and without a terminal to draw in it lays out Standard.
+
+| Team | Lead | Crew (x4) |
+| --- | --- | --- |
+| Claude | Opus 5.5, high | Haiku 5.5, high |
+| Codex | GPT-6.1-Sol, high | GPT-6-Luna, high |
+| Kiro | Opus 5.5, high | Haiku 4.5, high (Kiro has no Haiku 5.5) |
+| Cursor | Opus 5.5, high | Grok 4.7, high |
+| Antigravity | Gemini 3.8 Flash High | Gemini 3.8 Flash Low |
+
+The pairs are the `team` entry of each profile in `agents.json`; a local config can override them per machine. The other picker defaults, such as permissions, still apply. The lead is told to hand searches, test runs, builds, research and well specified edits to the crew panes through `herdr agent prompt`, run them in parallel when they can be, ask for replies of at most 15 lines, read only the end of each reply, and keep planning, decisions and the final check for itself, so its own context and quota stay small. The crew are told to stay in the scope they are given and to finish with that short summary. Claude takes these instructions as an appended system prompt and Codex as developer instructions. Kiro, Cursor and Antigravity have no such flag, so their lead receives its instructions as an opening prompt (one short turn) and passes the reply rules to the crew inside each task. On Windows, a CLI behind a `.cmd` shim gets the instructions on one line without cmd metacharacters.
+
+Run `herdr-ai` again from a tab it already laid out, usually from the bottom terminal after a `cd`, and it reroutes instead of adding panes: the four agents and the selector, or a team's lead and crew, stop and restart in the new directory with the same setup. If the selector had launched an agent, that agent restarts with the same arguments. The usage panel keeps running.
 
 `agent-route` does the same for every agent herdr detects on the current tab, including ones `herdr-ai` did not start. Each one restarts with its original command line in the directory you ran `agent-route` from. Panes running something other than an agent are left alone, as is the pane you run it from.
 
 `herdr-reset` closes every other pane on the current tab, agents included, and leaves only the pane you run it from, usually the bottom terminal, with its history and directory intact. Run `herdr-ai` from there to lay the tab out again.
+
+To switch a tab between Standard and a team, or to a different team, run `herdr-reset` and then `herdr-ai`; `herdr-ai --setup` refuses a tab laid out differently, and a team whose lead pane was closed is not rerouted.
 
 Rerouting stops the agents, so unsaved conversation state in them is lost. herdr-ai remembers each tab's panes in `herdr-ai-tabs.json` in the local state directory. On Windows, agents are stopped with Ctrl+C rather than a signal.
 

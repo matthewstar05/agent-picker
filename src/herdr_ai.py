@@ -2,6 +2,9 @@
 """herdr-ai: lay out the current herdr tab as a multi-agent workbench, with
 every pane rooted in the directory you ran this from.
 
+It opens a menu like the agent selector's: Standard, or one provider's team.
+Standard is the mixed workbench:
+
   +--------------+--------------+--------------+
   | Antigravity  | Codex        |              |
   |              |              | Claude       |
@@ -10,6 +13,20 @@ every pane rooted in the directory you ran this from.
   | selector     |              +--------------+
   +--------------+--------------+ usage        |
   | terminal                    |              |
+  +-----------------------------+--------------+
+
+A provider's team is a lead agent on its strongest model beside four crew
+agents on a cheaper one (the "team" pair in agents.json), all from that
+provider. The lead is told to delegate to the crew through herdr (see team.py):
+
+  +--------------+--------------+--------------+
+  | crew         | crew         |              |
+  |              |              | lead         |
+  +--------------+--------------+              |
+  | crew         | crew         |              |
+  |              |              |              |
+  +--------------+--------------+--------------+
+  | terminal                    | usage        |
   +-----------------------------+--------------+
 
 The pane you run it in becomes the terminal. Run it again in a tab it already
@@ -27,9 +44,12 @@ Agents launch through this checkout's picker (--picker-launch), so models,
 effort and permission flags follow your picker defaults.
 The middle-bottom pane chooses Cursor or Kiro by remaining quota and reset date.
 
-Usage: herdr-ai [label]       (label defaults to the directory name)
+Usage: herdr-ai [--setup NAME] [label]
+                              (label defaults to the directory name; --setup
+                              skips the menu: standard, claude, codex, ...)
        agent-route
        herdr-reset
+Without a terminal to draw the menu in, herdr-ai lays out Standard.
 Env:   HERDR_AI_DRY=1         build the layout with plain shells only
        HERDR_BIN_PATH         herdr executable to use
 """
@@ -58,8 +78,10 @@ PANES = {
     "picker": [],
     "usage": ["--picker-usage"],
 }
+# A team's panes: the lead, four crew, usage for that provider, and the terminal.
+CREW = ("crew1", "crew2", "crew3", "crew4")
 # The usage panel does not depend on the directory, so rerouting leaves it running.
-ROUTED = ("agy", "codex", "claude", "cursor", "picker")
+KEPT = "usage"
 
 
 def find_herdr():
@@ -146,6 +168,17 @@ def relaunch_line(info):
     return leader.get("cmdline")
 
 
+def layout_commands(team, panes):
+    """role -> picker arguments for a layout's panes; team is a provider name, or None for Standard."""
+    if not team:
+        return PANES
+    commands = {"lead": ["--picker-launch", team, "--picker-lead", ",".join(panes[r] for r in CREW)],
+                "usage": ["--picker-usage", "--picker-only", team]}
+    for role in CREW:
+        commands[role] = ["--picker-launch", team, "--picker-crew", panes["lead"]]
+    return commands
+
+
 def stop_panes(herdr, panes):
     """Stop whatever runs in each pane and wait for its shell prompt."""
     if WINDOWS:   # no process groups; ask politely the way a user would
@@ -171,9 +204,10 @@ def stop_panes(herdr, panes):
             return
 
 
-def route(herdr, cwd, recorded, everything):
+def route(herdr, cwd, recorded, everything, commands=PANES):
     """Restart agents on the caller's tab in cwd. recorded maps herdr-ai roles to
-    pane ids; everything also takes any other pane herdr sees an agent in."""
+    pane ids, and commands maps those roles to picker arguments; everything also
+    takes any other pane herdr sees an agent in."""
     me = os.environ.get("HERDR_PANE_ID")
     live = herdr.tab_panes(os.environ["HERDR_WORKSPACE_ID"], os.environ["HERDR_TAB_ID"])
     by_pane = {pane: role for role, pane in recorded.items()}
@@ -182,13 +216,13 @@ def route(herdr, cwd, recorded, everything):
         if pane == me:
             continue
         role = by_pane.get(pane)
-        if role in PANES and role not in ROUTED:
+        if role == KEPT:
             continue
         agent = info.get("agent")
-        if role in ROUTED:
+        if role in commands:
             # A selector that already launched an agent keeps that agent.
             line = (relaunch_line(herdr.process_info(pane)) if role == "picker" and agent else None)
-            plan[pane] = (role, line or picker_command(PANES[role]))
+            plan[pane] = (role, line or picker_command(commands[role]))
         elif everything and agent:
             line = relaunch_line(herdr.process_info(pane))
             if line:
@@ -205,12 +239,15 @@ def route(herdr, cwd, recorded, everything):
     return [name for name, _ in plan.values()]
 
 
-def build(herdr, root, cwd):
-    """Split root into the workbench. root ends up as the terminal along the bottom."""
+def build(herdr, root, cwd, team=None):
+    """Split root into the workbench, or into team's layout. root ends up as the
+    terminal along the bottom."""
     def split(pane, direction, ratio):
         return herdr("pane", "split", pane, "--direction", direction, "--ratio", str(ratio),
                      "--cwd", cwd, "--no-focus")["pane"]["pane_id"]
 
+    if team:
+        return build_team(herdr, root, split, team)
     panes = {"terminal": root}
     panes["claude"] = split(root, "right", 0.72)            # right column: Claude over usage
     panes["usage"] = split(panes["claude"], "down", 0.54)
@@ -221,10 +258,42 @@ def build(herdr, root, cwd):
     panes["picker"] = split(panes["agy"], "down", 0.54)
     panes["cursor"] = split(panes["codex"], "down", 0.54)
 
-    if os.environ.get("HERDR_AI_DRY", "0") != "1":
-        for name, args in PANES.items():
-            herdr("pane", "run", panes[name], picker_command(args))
+    launch_panes(herdr, panes, PANES)
     return panes
+
+
+def build_team(herdr, root, split, team):
+    """The lead on the right over a short usage pane (one provider fits in a few
+    rows), the crew in a 2x2 grid on the left, and the terminal under them."""
+    panes = {"terminal": root}
+    panes["lead"] = split(root, "right", 0.72)
+    panes["usage"] = split(panes["lead"], "down", 0.82)
+    panes["crew1"] = split(root, "down", 0.82)
+    # Swap so the caller's shell, which keeps focus, becomes the terminal.
+    herdr("pane", "swap", "--source-pane", root, "--target-pane", panes["crew1"])
+    panes["crew2"] = split(panes["crew1"], "right", 0.49)
+    panes["crew3"] = split(panes["crew1"], "down", 0.54)
+    panes["crew4"] = split(panes["crew2"], "down", 0.54)
+    launch_panes(herdr, panes, layout_commands(team, panes))
+    return panes
+
+
+def launch_panes(herdr, panes, commands):
+    if os.environ.get("HERDR_AI_DRY", "0") != "1":
+        for role, args in commands.items():
+            herdr("pane", "run", panes[role], picker_command(args))
+
+
+def pick_setup(name=None):
+    """The provider whose team to lay out, None for Standard, or False to quit.
+    name is a --setup value; otherwise the menu decides when there is a terminal for it."""
+    if name is None and not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return None
+    import team   # loads the agent profiles; only needed when choosing
+    if name is not None:
+        return team.find(name)
+    chosen = team.choose()
+    return False if chosen is None else None if chosen is team.STANDARD else chosen["name"]
 
 
 def require_herdr(name):
@@ -249,7 +318,33 @@ def recorded_panes(herdr, state, key):
     live = herdr.tab_panes(os.environ["HERDR_WORKSPACE_ID"], os.environ["HERDR_TAB_ID"])
     panes = {role: pane for role, pane in entry["panes"].items()
              if pane in live and live[pane].get("terminal_id") == entry["terminals"].get(pane)}
-    return panes if any(role in ROUTED for role in panes) else {}
+    return panes if any(role not in ("terminal", KEPT) for role in panes) else {}
+
+
+def layout_problem(entry, recorded, setup):
+    """Why a laid-out tab cannot simply be rerouted, or None."""
+    team = entry.get("team")
+    if setup is not None:
+        import team as teams
+        try:
+            wanted = teams.find(setup)
+        except ValueError as exc:
+            sys.exit(f"herdr-ai: {exc}")
+        if wanted != team:
+            return f"this tab is laid out as {team or 'Standard'}, not {wanted or 'Standard'}"
+    if team and "lead" not in recorded:
+        return f"this tab's {team} lead pane is gone"
+    return None
+
+
+def entry_commands(entry, recorded=None):
+    """The picker arguments for each role of a recorded layout. A team whose lead
+    is gone keeps no commands, so its crew restart as they were."""
+    if not entry:
+        return PANES
+    if entry.get("team") and recorded is not None and "lead" not in recorded:
+        return {}
+    return layout_commands(entry.get("team"), entry["panes"])
 
 
 def report(name, routed, cwd):
@@ -264,14 +359,28 @@ def main(argv=None, herdr=None, cwd=None):
     if argv[:1] in (["-h"], ["--help"]):
         print(__doc__.strip())
         return 0
+    setup = None
+    if argv[:1] == ["--setup"] or (argv and argv[0].startswith("--setup=")):
+        if argv[0] == "--setup" and len(argv) < 2:
+            sys.exit("herdr-ai: --setup needs a name: standard, claude, codex, ...")
+        setup, argv = (argv[1], argv[2:]) if argv[0] == "--setup" else (argv[0].split("=", 1)[1], argv[1:])
     herdr = Herdr(herdr or require_herdr("herdr-ai"), "herdr-ai")
     cwd = cwd or os.getcwd()
     auto = not argv
     label = argv[0] if argv else (Path(cwd).name or "home")
 
+    def choose():
+        try:
+            return pick_setup(setup)
+        except ValueError as exc:
+            sys.exit(f"herdr-ai: {exc}")
+
     if not inside_herdr():
+        team = choose()
+        if team is False:
+            return 0
         out = herdr("workspace", "create", "--cwd", cwd, "--label", label, "--focus")
-        build(herdr, out["root_pane"]["pane_id"], cwd)
+        build(herdr, out["root_pane"]["pane_id"], cwd, team)
         if WINDOWS:   # exec on Windows detaches from the console
             return subprocess.call([herdr.binary])
         return os.execvp(herdr.binary, [herdr.binary])
@@ -279,13 +388,19 @@ def main(argv=None, herdr=None, cwd=None):
     state, key = load_state(), tab_key(os.environ["HERDR_TAB_ID"])
     recorded = recorded_panes(herdr, state, key)
     if recorded:
-        report("herdr-ai", route(herdr, cwd, recorded, everything=False), cwd)
         entry = state[key]
+        problem = layout_problem(entry, recorded, setup)
+        if problem:
+            sys.exit(f"herdr-ai: {problem}; run herdr-reset, then herdr-ai")
+        report("herdr-ai", route(herdr, cwd, recorded, everything=False, commands=entry_commands(entry)), cwd)
         entry["auto_label"] = entry.get("auto_label", True) and auto
     else:
-        panes = build(herdr, os.environ["HERDR_PANE_ID"], cwd)
+        team = choose()
+        if team is False:
+            return 0
+        panes = build(herdr, os.environ["HERDR_PANE_ID"], cwd, team)
         live = herdr.tab_panes(os.environ["HERDR_WORKSPACE_ID"], os.environ["HERDR_TAB_ID"])
-        entry = state[key] = {"panes": panes, "auto_label": auto,
+        entry = state[key] = {"panes": panes, "auto_label": auto, "team": team,
                               "terminals": {p: live.get(p, {}).get("terminal_id") for p in panes.values()}}
     # An explicit label sticks; otherwise the tab follows the directory.
     if not auto or entry["auto_label"]:
@@ -307,8 +422,10 @@ def route_main(argv, herdr=None, cwd=None):
     herdr = Herdr(herdr or require_herdr("agent-route"), "agent-route")
     cwd = cwd or os.getcwd()
     state, key = load_state(), tab_key(os.environ["HERDR_TAB_ID"])
-    report("agent-route", route(herdr, cwd, recorded_panes(herdr, state, key), everything=True), cwd)
     entry = state.get(key)
+    recorded = recorded_panes(herdr, state, key)
+    report("agent-route", route(herdr, cwd, recorded, everything=True,
+                                commands=entry_commands(entry, recorded)), cwd)
     if entry and entry.get("auto_label", True):
         herdr("tab", "rename", os.environ["HERDR_TAB_ID"], Path(cwd).name or "home")
     return 0

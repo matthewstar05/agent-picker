@@ -512,7 +512,7 @@ def agent_rows(agent, ok, width, t, selected):
     columns line up; only the selected row draws the wave."""
     color = agent["color"]
     left, bar, reset, spark = layout(width, True)
-    spark = spark and selected
+    spark = spark and selected and not agent.get("aside")
     l1, l2 = Line(), Line()
     if selected:
         l1.put(" ❯ ", (255, 255, 255))
@@ -538,7 +538,11 @@ def agent_rows(agent, ok, width, t, selected):
         col = 5 + left
         for line in (l1, l2):
             line.at(col, " │ ", rule)
-        if ok:
+        if ok and agent.get("aside"):
+            # a row that is not one provider (herdr-ai's Standard) says what it is instead
+            for line, text in zip((l1, l2), agent["aside"]):
+                line.pad(col + DIVIDER).put(clip(text, max(1, width - col - DIVIDER - (12 if spark else 1))), SOFT)
+        elif ok:
             for line, parts in zip((l1, l2), usage_block(agent["name"], t, bar, reset)):
                 line.pad(col + DIVIDER)
                 for text, c, b in parts:
@@ -593,10 +597,16 @@ def border_ring(agent, t, bw, height=1, solid=None):
     return cells
 
 
-def render(selected, available, t, cols, rows, sweep=None, agents=None):
+HINTS = [" ↑↓ move · → defaults · ⏎ launch · u usage · s settings · esc quit ",
+         " → defaults · ⏎ launch · u usage · s settings · esc quit ",
+         " → defaults · ⏎ launch · u · s · esc ", " → defaults · ⏎ launch ", ""]
+
+
+def render(selected, available, t, cols, rows, sweep=None, agents=None, title="agent selector", hints=HINTS):
     """Lines for the current terminal size, each at most cols wide.
 
-    agents: the profiles to list (the installed ones); every profile by default."""
+    agents: the profiles to list (the installed ones); every profile by default.
+    title and hints let herdr-ai's setup menu reuse the same panel."""
     agents = AGENTS if agents is None else agents
     color = agents[selected]["color"]
     iw = min(MAX_IW, cols - 2)
@@ -622,7 +632,7 @@ def render(selected, available, t, cols, rows, sweep=None, agents=None):
         return f"{edge}│{RESET}{content}{' ' * max(0, iw - visible)}{edge}│{RESET}"
 
     star = fg(mix((225, 165, 40), (255, 222, 120), wave(0, t, speed=3.0))) + "✦" + RESET  # gold, glinting
-    title = "agent selector"
+    title = clip(title, iw - 6)
     top = f"{edge}╭─{RESET} {star} {BOLD}{title}{RESET} {edge}{'─' * max(0, iw - len(title) - 5)}╮{RESET}"
 
     # body entries: (kind, line). "lid" lines are dropped first when short on rows,
@@ -644,10 +654,7 @@ def render(selected, available, t, cols, rows, sweep=None, agents=None):
             for y, line in enumerate(rows_i):
                 body.append(("first" if y == 0 else "second", framed("  " + line.paint(), bw + 2)))
 
-    hints = [" ↑↓ move · → defaults · ⏎ launch · u usage · s settings · esc quit ",
-             " → defaults · ⏎ launch · u usage · s settings · esc quit ",
-             " → defaults · ⏎ launch · u · s · esc ", " → defaults · ⏎ launch ", ""]
-    hint = next(h for h in hints if len(h) <= iw - 2)
+    hint = next((h for h in hints if len(h) <= iw - 2), "")
     bottom = f"{edge}╰─{RESET}{FAINT}{hint}{RESET}{edge}{'─' * (iw - 1 - len(hint))}╯{RESET}"
 
     every = [line for kind, line in body if kind != "bare"]
@@ -1004,13 +1011,15 @@ def save_last(index):
         pass
 
 
-def choose(screen=None):
-    """Run the screens until an agent is picked (its index) or the user quits (None)."""
+def choose(screen=None, only=None):
+    """Run the screens until an agent is picked (its index) or the user quits (None).
+
+    only: a provider name to show alone (a herdr-ai team's usage pane)."""
     import usage_panel   # registers its settings; imported here so it can import this module
 
     # Only installed CLIs are listed; the rest of agents.json stays in the catalog
     # until its CLI shows up on this computer.
-    found = [a for a in AGENTS if installed(a)]
+    found = [a for a in AGENTS if installed(a) and only in (None, a["name"])]
     if not found:
         raise RuntimeError("No supported CLI found. Run agent --picker-doctor and configure a provider.")
     # Hidden CLIs (settings) leave the selector only; usage still follows them.
@@ -1019,7 +1028,7 @@ def choose(screen=None):
     providers = [a["name"] for a in found if a["name"] in FETCHERS]
     load_usage()
     usage_panel.start(providers)   # live readers feed both screens
-    usage = usage_panel.View(found)
+    usage = usage_panel.View(found, pinned=only is not None)
     menu = preferences.Menu()
     screen = screen or preferences.get(START.key)
     came_from = screen               # where the settings screen returns to
@@ -1255,6 +1264,9 @@ def main():
     if args[:1] == ["--picker-help"]:
         print("agent [CLI arguments]                 open picker; forward arguments")
         print("agent --picker-launch NAME [args]     launch a provider directly")
+        print("agent --picker-launch NAME --picker-lead PANES|--picker-crew PANE")
+        print("                                      launch as a herdr-ai team lead or worker")
+        print("agent --picker-usage --picker-only NAME  the usage panel for one provider")
         print("agent --picker-priority               explain the Cursor/Kiro workbench choice")
         print("agent --picker-update                 fast-forward this Git checkout")
         print("agent --picker-doctor                 show paths and launch profiles")
@@ -1278,18 +1290,23 @@ def main():
             raise ValueError(f"Unknown provider: {args[1]}")
         args = args[2:]
     else:
-        start = None
+        start, only = None, None
         if args[:1] == ["--picker-usage"]:
             start, args = "usage", args[1:]
+        if args[:1] == ["--picker-only"] and len(args) > 1:
+            only, args = args[1], args[2:]
         if not (sys.stdin.isatty() and sys.stdout.isatty()):
             raise RuntimeError("agent needs an interactive terminal; try --picker-doctor")
         try:
-            index = choose(start)
+            index = choose(start, only)
         except KeyboardInterrupt:
             index = None
     if index is None:
         return 0
     agent = AGENTS[index]
+    if args[:1] in (["--picker-lead"], ["--picker-crew"]):
+        import team
+        agent, args = team.prepare(agent, args)
     argv = resolve_argv(agent)
     if not argv:
         raise RuntimeError(f"{agent['name']} is not installed. Run --picker-doctor.")

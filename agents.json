@@ -37,6 +37,16 @@
       87
     ],
     "detail": "opus \u00b7 medium",
+    "team": {
+      "lead": {
+        "model": "claude-opus-5-5",
+        "effort": "high"
+      },
+      "crew": {
+        "model": "claude-haiku-5-5",
+        "effort": "high"
+      }
+    },
     "argv": [
       "claude",
       "--model",
@@ -81,6 +91,16 @@
       127
     ],
     "detail": "gpt-6.1-sol \u00b7 high",
+    "team": {
+      "lead": {
+        "model": "gpt-6.1-sol",
+        "effort": "high"
+      },
+      "crew": {
+        "model": "gpt-6-luna",
+        "effort": "high"
+      }
+    },
     "argv": [
       "codex",
       "-m",
@@ -143,6 +163,16 @@
       255
     ],
     "detail": "gemini-3.8-flash-high",
+    "team": {
+      "lead": {
+        "model": "gemini-3.8-flash-high",
+        "effort": "provider default"
+      },
+      "crew": {
+        "model": "gemini-3.8-flash-low",
+        "effort": "provider default"
+      }
+    },
     "argv": [
       "agy",
       "--model",
@@ -213,6 +243,16 @@
       165
     ],
     "detail": "grok-4.7 \u00b7 high",
+    "team": {
+      "lead": {
+        "model": "claude-opus-5-5",
+        "effort": "high"
+      },
+      "crew": {
+        "model": "grok-4.7",
+        "effort": "high"
+      }
+    },
     "argv": [
       "cursor-cli",
       "--model",
@@ -281,6 +321,16 @@
       255
     ],
     "detail": "opus-5.5 \u00b7 medium",
+    "team": {
+      "lead": {
+        "model": "claude-opus-5.5",
+        "effort": "high"
+      },
+      "crew": {
+        "model": "claude-haiku-4.5",
+        "effort": "high"
+      }
+    },
     "argv": [
       "kiro-cli",
       "chat",
