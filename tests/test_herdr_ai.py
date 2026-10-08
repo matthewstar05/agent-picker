@@ -132,7 +132,7 @@ class HerdrAiTests(unittest.TestCase):
         self.assertEqual(len(runs), 5)   # four agents and the selector; usage keeps running
         self.assertEqual(len(self.stopped), 5)
         for lines in runs.values():
-            self.assertEqual(lines[0], "cd " + shlex.quote(str(ROOT / "src")))
+            self.assertEqual(lines[0], herdr_ai.cd_command(str(ROOT / "src")))
         launched = [lines[1] for lines in runs.values()]
         for name in ("Antigravity", "Codex", "Claude"):
             self.assertTrue(any(c.endswith("--picker-launch " + name) for c in launched), name)
@@ -152,7 +152,7 @@ class HerdrAiTests(unittest.TestCase):
             "w9:p4": {"agent": "codex"},                         # agent pane already at its shell
         })
         self.run_cli(INSIDE, cwd=ROOT / "src", entry=herdr_ai.route_main)
-        self.assertEqual(self.fake.runs(), {"w9:p2": ["cd " + shlex.quote(str(ROOT / "src")),
+        self.assertEqual(self.fake.runs(), {"w9:p2": [herdr_ai.cd_command(str(ROOT / "src")),
                                                       "claude --resume abc"]})
         self.assertEqual(self.stopped, ["w9:p2"])
 
