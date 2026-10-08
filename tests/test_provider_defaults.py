@@ -122,10 +122,9 @@ class DefaultsTests(unittest.TestCase):
                 defaults.save(agent, dict(defaults.current(agent), model="sonnet"), path)
         self.assertEqual(agent, before)
 
-    def test_keyboard_flow_saves_then_confirms_selector_exit(self):
+    def test_keyboard_flow_saves_then_exits_without_another_prompt(self):
         import usage_panel
-        keys = iter(["right", "down", "left", "down", "left", "esc", "right", "\r",
-                     "esc", "esc", "esc", "right", "\r"])
+        keys = iter(["right", "down", "left", "down", "left", "esc", "\r", "esc"])
         frames = []
         class Keyboard:
             def __enter__(self):
@@ -155,12 +154,15 @@ class DefaultsTests(unittest.TestCase):
             saved = json.loads(path.read_text())["agents"]["Claude"]["defaults"]
             self.assertEqual(saved, {"model": "opus", "effort": "low", "bypass_permissions": False})
         visible = picker._ANSI.sub("", "".join(frames))
-        self.assertGreaterEqual(visible.count("Are you sure"), 2)
+        self.assertIn("Save Claude settings?", visible)
+        self.assertIn("Save settings", visible)
+        self.assertIn("Discard changes", visible)
+        self.assertNotIn("Stay", visible)
+        self.assertNotIn("quit?", visible)
         self.assertRegex(visible, r"Model +opus")
         self.assertRegex(visible, r"Effort +low")
         self.assertIn("medium → low", visible)
         self.assertIn("On → Off", visible)
-        self.assertIn("Your changes are saved locally", visible)
 
     def test_unchanged_defaults_return_without_prompt(self):
         import usage_panel
@@ -192,7 +194,71 @@ class DefaultsTests(unittest.TestCase):
             self.assertIsNone(picker.choose())
             self.assertFalse(path.exists())
         visible = picker._ANSI.sub("", "".join(frames))
-        self.assertNotIn("Are you sure", visible)
+        self.assertNotIn("Save Claude settings?", visible)
+
+    def run_defaults_keys(self, keys, path):
+        import usage_panel
+        keys, frames = iter(keys), []
+        class Keyboard:
+            def __enter__(self):
+                self.old = True
+                return self
+            def __exit__(self, *args):
+                pass
+            def wait(self, seconds):
+                return True
+            def read_key(self):
+                return next(keys)
+            def write(self, text):
+                frames.append(text)
+            def keyboard(self, enhanced):
+                pass
+        with ExitStack() as stack:
+            stack.enter_context(patch.dict(os.environ, AGENT_PICKER_CONFIG=str(path)))
+            agents = list(self.agents().values())[:5]
+            before = copy.deepcopy(agents)
+            stack.enter_context(patch.object(picker, "AGENTS", agents))
+            stack.enter_context(patch.object(picker, "installed", return_value=True))
+            stack.enter_context(patch.object(picker, "load_last", return_value=0))
+            stack.enter_context(patch.object(picker, "load_usage"))
+            stack.enter_context(patch.object(usage_panel, "start"))
+            stack.enter_context(patch.object(picker.preferences, "get", return_value="agents"))
+            stack.enter_context(patch.object(picker, "Terminal", Keyboard))
+            stack.enter_context(patch.object(sys, "stdout", io.StringIO()))
+            self.assertIsNone(picker.choose())
+        return before, agents, picker._ANSI.sub("", "".join(frames))
+
+    def test_discard_returns_to_selector_without_changing_saved_settings(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "config.json"
+            original = json.dumps({"keep": True, "agents": {"Claude": {"defaults": {
+                "model": "opus", "effort": "medium", "bypass_permissions": True}}}})
+            path.write_text(original)
+            before, after, visible = self.run_defaults_keys(
+                ["right", "down", "left", "esc", "right", "\r", "right", "esc", "esc"], path)
+            self.assertEqual(path.read_text(), original)
+            self.assertEqual(after, before)
+            self.assertIn("Discard changes", visible)
+
+    def test_escape_from_save_prompt_keeps_edits_for_further_editing(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "config.json"
+            self.run_defaults_keys(["right", "down", "left", "esc", "esc",
+                                    "right", "right", "esc", "\r", "esc"], path)
+            saved = json.loads(path.read_text())["agents"]["Claude"]["defaults"]
+            self.assertEqual(saved["effort"], "high")
+
+    def test_save_discard_prompt_fits_and_shows_selected_action_in_small_panes(self):
+        menu = defaults.Menu(self.agents()["Codex"])
+        menu.values["fast_mode"] = True
+        for choice, label in enumerate(("Save settings", "Discard changes")):
+            for cols in (1, 8, 24, 32, 40, 80):
+                for rows in (1, 4, 7, 12, 24):
+                    lines = picker.render_back_confirmation(menu, choice, cols, rows)
+                    self.assertLessEqual(len(lines), rows)
+                    self.assertTrue(all(picker.visible_len(line) <= cols for line in lines), (cols, rows))
+                    if cols >= 24:
+                        self.assertIn(label, picker._ANSI.sub("", "\n".join(lines)), (cols, rows, choice))
 
     def test_saved_defaults_reach_fake_provider_on_next_invocation(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -252,7 +318,7 @@ a.main()
             ready, acknowledged = root / "ready", root / "keys"
             process = subprocess.Popen([sys.executable, "-c", code, str(ROOT / "src"), str(ready), str(acknowledged)], stdin=slave, stdout=slave, stderr=slave, env=env)
             output = b""
-            keys = [b"\x1b[C", b"\x1b[B", b"\x1b[D", b"\x1b[B", b"\x1b[D", b"\x1b", b"\x1b[C", b"\r", b"\x1b", b"\x1b[C", b"\r"]
+            keys = [b"\x1b[C", b"\x1b[B", b"\x1b[D", b"\x1b[B", b"\x1b[D", b"\x1b", b"\r", b"\x1b"]
             start, sent = time.monotonic(), 0
             try:
                 while time.monotonic() - start < 15:
@@ -268,7 +334,7 @@ a.main()
                 values = json.loads((root / "config.json").read_text())["agents"]["Claude"]["defaults"]
                 self.assertEqual(values["effort"], "low")
                 self.assertFalse(values["bypass_permissions"])
-                self.assertIn(b"Are you sure", output)
+                self.assertIn(b"Save Claude settings?", output)
                 restored = termios.tcgetattr(slave)
                 for modes in (original, restored):
                     modes[3] &= ~getattr(termios, "PENDIN", 0)

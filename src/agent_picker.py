@@ -736,8 +736,13 @@ def buttons(agent, labels, choice, t, bw):
     """A row of buttons; the chosen one sits in the agent's glowing ring."""
     total = sum(len(label) + 4 for label in labels) + 3 * (len(labels) - 1)
     if total > bw:
-        text = "   ".join(("❯ " if i == choice else "  ") + label for i, label in enumerate(labels))
-        return [("selected", "  " + BOLD + clip(text, bw) + RESET, 2 + min(len(text), bw))]
+        out = []
+        for i, label in enumerate(labels):
+            text = ("❯ " if i == choice else "  ") + label
+            out.append(("selected" if i == choice else "row",
+                        "  " + (BOLD if i == choice else FAINT) + clip(text, bw) + RESET,
+                        2 + min(len(text), bw)))
+        return out
     left = (bw - total) // 2
     parts = [" " * left, " " * left, " " * left]
     for i, label in enumerate(labels):
@@ -840,20 +845,8 @@ def render_models(menu, cols, rows, t, accent):
     return panel(f"{agent['name']} models", body, hints, cols, rows, t, plain)
 
 
-def render_quit_confirmation(choice, cols, rows, t=0, agent=None):
-    agent = agent or GOLD
-
-    def body(bw):
-        return [note("Your changes are saved locally.", bw), ("gap", "", 0)] + buttons(agent, ("Stay", "Quit"), choice, t, bw)
-
-    plain = [("Are you sure you want to quit agent selector?", False), ("Your changes are saved locally.", False),
-             (("❯ Stay     Quit" if choice == 0 else "  Stay   ❯ Quit"), True)]
-    hints = [" ←→ choose · ⏎ confirm · esc stay ", " ⏎ confirm · esc stay ", ""]
-    return panel("Are you sure you want to quit?", body, hints, cols, rows, t, plain)
-
-
 def render_back_confirmation(menu, choice, cols, rows, t=0):
-    """Confirm leaving provider settings after a change: the new choice, then the delta."""
+    """Choose whether to save or discard pending provider settings."""
     agent = menu.agent
     accent = tuple(agent.get("pastel")) if isinstance(agent.get("pastel"), list) else agent["color"]
     selection, delta = menu.review()
@@ -874,14 +867,14 @@ def render_back_confirmation(menu, choice, cols, rows, t=0):
                 line.at(col, change[:split], SOFT).at(col + split, " → ", LABEL)
                 line.at(col + split + 3, change[split + 3:], accent, bold=True)
             out.append(flat(line, bw))
-        return out + [("gap", "", 0)] + buttons(agent, ("Stay", "Save"), choice, t, bw)
+        return out + [("gap", "", 0)] + buttons(agent, ("Save settings", "Discard changes"), choice, t, bw)
 
-    plain = [(f"Are you sure? {agent['name']} defaults", False)]
+    plain = [(f"Save {agent['name']} settings?", False)]
     plain += [(f"{label}: {value}", False) for label, value in selection]
     plain += [(f"{label}: {old} → {new}", False) for label, old, new in delta]
-    plain += [(("❯ Stay     Save" if choice == 0 else "  Stay   ❯ Save"), True)]
-    hints = [" ←→ choose · ⏎ confirm · esc stay ", " ⏎ confirm · esc stay ", ""]
-    return panel(f"Are you sure? Save {agent['name']} defaults", body, hints, cols, rows, t, plain)
+    plain += [("❯ " + ("Save settings" if choice == 0 else "Discard changes"), True)]
+    hints = [" ←→ choose · ⏎ confirm · esc edit ", " ⏎ confirm · esc edit ", ""]
+    return panel(f"Save {agent['name']} settings?", body, hints, cols, rows, t, plain)
 
 
 def render_settings(menu, cols, rows, t, accent):
@@ -1036,7 +1029,6 @@ def choose(screen=None, only=None):
     came_from = screen               # where the settings screen returns to
     selected = load_last(listed)
     defaults_menu = None
-    changed_defaults = False
     quit_choice = 0
     terminal = Terminal()
     writer = Screen(terminal)
@@ -1056,8 +1048,6 @@ def choose(screen=None, only=None):
             frame = centered(render_defaults(defaults_menu, cols, rows, t), cols, rows)
         elif screen == "confirm_back":
             frame = centered(render_back_confirmation(defaults_menu, quit_choice, cols, rows, t), cols, rows)
-        elif screen == "confirm_quit":
-            frame = centered(render_quit_confirmation(quit_choice, cols, rows, t, listed[selected]), cols, rows)
         else:
             frame = centered(render(selected, available, t, cols, rows, sweep, listed), cols, rows)
         writer.show(frame, cols, rows)
@@ -1122,29 +1112,17 @@ def choose(screen=None, only=None):
             elif screen == "confirm_back":
                 if key in ("left", "right", "up", "down", "\t"):
                     quit_choice = 1 - quit_choice
-                elif key in ("\r", "\n", "y", "Y") and (quit_choice == 1 or key in ("y", "Y")):
+                elif key in ("s", "S", "y", "Y") or (key in ("\r", "\n", " ") and quit_choice == 0):
                     try:
                         provider_defaults.save(defaults_menu.agent, defaults_menu.values, config_path())
-                        changed_defaults = True
                         go("agents")
                     except (OSError, ValueError) as exc:
                         defaults_menu.error = f"Could not save: {exc}"
                         go("defaults")
-                elif key in ("\r", "\n", "esc", "n", "N", "q"):
+                elif key in ("\r", "\n", " ", "d", "D", "n", "N"):
+                    go("agents")
+                elif key in ("esc", "q"):
                     go("defaults")
-                elif key in ("\x03", "\x04"):
-                    return None
-            elif screen == "confirm_quit":
-                if key in ("left", "right", "up", "down", "\t"):
-                    quit_choice = 1 - quit_choice
-                elif key in ("\r", "\n"):
-                    if quit_choice == 1:
-                        return None
-                    go("agents")
-                elif key in ("y", "Y"):
-                    return None
-                elif key in ("esc", "n", "N", "q"):
-                    go("agents")
                 elif key in ("\x03", "\x04"):
                     return None
             elif key == "right":
@@ -1168,11 +1146,7 @@ def choose(screen=None, only=None):
                 draw(sweep=1.0)
                 return AGENTS.index(listed[selected])
             elif key in ("q", "esc", "\x03", "\x04"):
-                if changed_defaults and key in ("q", "esc"):
-                    quit_choice = 0
-                    go("confirm_quit")
-                else:
-                    return None
+                return None
             draw()
     finally:
         if hasattr(terminal, "old") or hasattr(terminal, "modes"):
