@@ -74,6 +74,7 @@ class HerdrAiTests(unittest.TestCase):
                                  else None if name == "standard" else name.capitalize())
         with patch.dict(os.environ, {**clean, **env, "AGENT_PICKER_STATE_HOME": self.state.name}, clear=True), \
              self.menu as menu, \
+             patch.object(herdr_ai, "sidebar_update"), \
              patch.object(herdr_ai.subprocess, "run", self.fake), \
              patch.object(herdr_ai.subprocess, "call", return_value=0) as attach, \
              patch.object(herdr_ai.os, "execvp") as execvp, \
@@ -102,6 +103,28 @@ class HerdrAiTests(unittest.TestCase):
         self.assertEqual(self.fake.calls[0][:2], ["workspace", "create"])
         self.assertIn(ROOT.name, self.fake.calls[0])
         self.assertTrue(attached)
+
+    def test_outside_team_records_layout_identity(self):
+        original = self.fake.__call__
+
+        def respond(argv, **kwargs):
+            result = original(argv, **kwargs)
+            if argv[1:3] == ["workspace", "create"]:
+                payload = json.loads(result.stdout)
+                payload["result"]["workspace"] = {"workspace_id": "w9"}
+                payload["result"]["tab"] = {"tab_id": "w9:t1"}
+                result.stdout = json.dumps(payload)
+            return result
+
+        with patch.object(herdr_ai.herdr_sidebar, "endpoint", return_value="outside.sock"):
+            # run_cli patches subprocess with the fake object, so give it the
+            # real creation response shape for this outside-launch regression.
+            with patch.object(FakeHerdr, "__call__", side_effect=respond):
+                self.run_cli({}, setup="Codex")
+        saved = json.loads((Path(self.state.name) / "herdr-ai-tabs.json").read_text())
+        entry = saved["outside.sock|w9:t1"]
+        self.assertEqual(entry["team"], "Codex")
+        self.assertEqual(entry["terminals"][entry["panes"]["crew1"]], "term_" + entry["panes"]["crew1"])
 
     def test_every_pane_is_split_in_the_working_directory(self):
         self.run_cli(INSIDE)

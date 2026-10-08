@@ -79,6 +79,10 @@ Run `herdr-ai` in a herdr pane to lay out that tab as the workbench: Antigravity
 
 `herdr-ai` first opens a menu drawn like the agent selector, with each provider's usage beside it. **Standard** (sakura pink) is the workbench above, unchanged. Choosing a provider lays out a team of that provider instead: a lead agent on the right, four crew agents in a 2x2 grid on the left, the terminal under them, and a short usage panel for that provider alone under the lead. The launch animation and key bindings match the selector; Esc quits without touching the tab, and the menu remembers your last choice. `herdr-ai --setup NAME [label]` skips the menu (`standard`, `claude`, `codex`, `antigravity`, `cursor`, `kiro`), and without a terminal to draw in it lays out Standard.
 
+Press `s` in the `herdr-ai` setup menu to open its settings, or run `herdr-ai --settings` from any terminal to change them without restarting or rerouting agents. **Hide crew agents** defaults to **on**: crew panes remain running and available to the lead, but only the lead appears in Herdr's Agents sidebar. Use Left/Right or Enter to toggle, then Esc to return; the preference is saved immediately. Existing teams are migrated from saved pane identities or their exact team launch brief. This changes the Agents view only, so `herdr agent list`, delegation, usage counts, and notifications still include crew.
+
+Herdr 0.9.3 or newer is required for sidebar filtering. The first `herdr-ai` run links a local **Herdr AI** startup hook to restore the saved visibility after a server restart. The hook only refreshes role metadata and the view filter; it does not launch agents. Herdr supports one active Agents view filter, so setting crew visibility replaces another plugin's view filter. Turning hiding off clears only the view owned by `herdr-ai`.
+
 | Team | Lead | Crew (x4) |
 | --- | --- | --- |
 | Claude | Opus 5.5, high | Haiku 5.5, high |

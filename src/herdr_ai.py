@@ -47,6 +47,7 @@ The middle-bottom pane chooses Cursor or Kiro by remaining quota and reset date.
 Usage: herdr-ai [--setup NAME] [label]
                               (label defaults to the directory name; --setup
                               skips the menu: standard, claude, codex, ...)
+       herdr-ai --settings    change crew visibility without rerouting
        agent-route
        herdr-reset
 Without a terminal to draw the menu in, herdr-ai lays out Standard.
@@ -65,6 +66,7 @@ import time
 from pathlib import Path
 
 from platform_runtime import state_dir
+import herdr_sidebar
 
 WINDOWS = os.name == "nt"
 ENTRY = Path(__file__).resolve().parent / "agent_picker.py"
@@ -280,6 +282,7 @@ def build_team(herdr, root, split, team):
 
 def launch_panes(herdr, panes, commands):
     if os.environ.get("HERDR_AI_DRY", "0") != "1":
+        sidebar_update(lambda: herdr_sidebar.mark_roles(panes))
         for role, args in commands.items():
             herdr("pane", "run", panes[role], picker_command(args))
 
@@ -359,6 +362,19 @@ def main(argv=None, herdr=None, cwd=None):
     if argv[:1] in (["-h"], ["--help"]):
         print(__doc__.strip())
         return 0
+    if argv[:1] == ["--sync-sidebar"]:
+        herdr_sidebar.sync(load_state(), restore=True)
+        return 0
+    if argv[:1] == ["--settings"]:
+        if not (sys.stdin.isatty() and sys.stdout.isatty()):
+            sys.exit("herdr-ai: --settings needs an interactive terminal")
+        binary = herdr or find_herdr()
+        if binary:
+            sidebar_update(lambda: herdr_sidebar.install_startup(binary))
+            sidebar_update(lambda: herdr_sidebar.sync(load_state()))
+        import team
+        team.choose(settings_only=True)
+        return 0
     setup = None
     if argv[:1] == ["--setup"] or (argv and argv[0].startswith("--setup=")):
         if argv[0] == "--setup" and len(argv) < 2:
@@ -368,6 +384,8 @@ def main(argv=None, herdr=None, cwd=None):
     cwd = cwd or os.getcwd()
     auto = not argv
     label = argv[0] if argv else (Path(cwd).name or "home")
+    if os.environ.get("HERDR_AI_DRY", "0") != "1":
+        sidebar_update(lambda: herdr_sidebar.install_startup(herdr.binary))
 
     def choose():
         try:
@@ -380,7 +398,19 @@ def main(argv=None, herdr=None, cwd=None):
         if team is False:
             return 0
         out = herdr("workspace", "create", "--cwd", cwd, "--label", label, "--focus")
-        build(herdr, out["root_pane"]["pane_id"], cwd, team)
+        panes = build(herdr, out["root_pane"]["pane_id"], cwd, team)
+        # Outside launches need the same saved identity as tabs built inside Herdr.
+        root = out["root_pane"]
+        workspace = root.get("workspace_id") or out.get("workspace", {}).get("workspace_id")
+        tab = root.get("tab_id") or out.get("tab", {}).get("tab_id")
+        if workspace and tab:
+            live = herdr.tab_panes(workspace, tab)
+            state = load_state()
+            key = herdr_sidebar.endpoint() + "|" + tab
+            state[key] = {"panes": panes, "auto_label": auto, "team": team,
+                                   "terminals": {p: live.get(p, {}).get("terminal_id") for p in panes.values()}}
+            save_state(state)
+        sidebar_update(lambda: herdr_sidebar.sync(load_state()))
         if WINDOWS:   # exec on Windows detaches from the console
             return subprocess.call([herdr.binary])
         return os.execvp(herdr.binary, [herdr.binary])
@@ -406,7 +436,18 @@ def main(argv=None, herdr=None, cwd=None):
     if not auto or entry["auto_label"]:
         herdr("tab", "rename", os.environ["HERDR_TAB_ID"], label)
     save_state(state)
+    sidebar_update(lambda: herdr_sidebar.sync(state))
     return 0
+
+
+def sidebar_update(action):
+    """Visibility errors should explain the limitation without interrupting launches."""
+    if os.environ.get("HERDR_AI_DRY", "0") == "1":
+        return
+    try:
+        return action()
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
+        print(f"herdr-ai: sidebar update unavailable: {exc}", file=sys.stderr)
 
 
 def route_main(argv, herdr=None, cwd=None):

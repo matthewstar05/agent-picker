@@ -18,6 +18,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import threading
@@ -25,6 +26,8 @@ import time
 
 import agent_picker as ap
 import provider_defaults
+import preferences
+import herdr_sidebar
 from platform_runtime import WINDOWS, Terminal, resolve_argv
 
 CREW = ("crew1", "crew2", "crew3", "crew4")
@@ -36,7 +39,7 @@ STANDARD = {
     "model": "every provider", "short": "every provider",
     "aside": ["Claude · Codex · Antigravity", "Cursor/Kiro · selector · usage"],
 }
-HINTS = [" ↑↓ move · ⏎ lay out · esc quit ", " ⏎ lay out · esc quit ", " ⏎ lay out ", ""]
+HINTS = [" ↑↓ move · ⏎ lay out · s settings · esc quit ", " ⏎ lay out · esc quit ", " ⏎ lay out ", ""]
 LAST = ap.STATE / "herdr-ai-setup"
 
 
@@ -205,21 +208,26 @@ def refresh_usage(options):
         threading.Thread(target=ap._fetch, args=(name,), daemon=True).start()
 
 
-def choose():
+def choose(settings_only=False):
     """The agent selector's panel listing the setups. Returns the chosen row, or None to quit."""
     options = setups()
-    refresh_usage(options)
+    if not settings_only:
+        refresh_usage(options)
     available = [True] * len(options)
     selected = load_last(options)
     terminal = Terminal()
     writer = ap.Screen(terminal)
     out = sys.stdout
     start = time.monotonic()
+    menu = preferences.Menu([preferences.register(herdr_sidebar.HIDE_CREW)])
+    settings_open = settings_only
+    notices = []
 
     def draw(sweep=None):
         cols, rows = shutil.get_terminal_size((80, 24))
         t = time.monotonic() - start
-        lines = ap.render(selected, available, t, cols, rows, sweep, options, title="herdr-ai", hints=HINTS)
+        lines = (ap.render_settings(menu, cols, rows, t, STANDARD) if settings_open else
+                 ap.render(selected, available, t, cols, rows, sweep, options, title="herdr-ai", hints=HINTS))
         writer.show(ap.centered(lines, cols, rows), cols, rows)
 
     out.write(f"{ap.ESC}[?1049h{ap.ESC}[?25l{ap.ESC}[?7l")  # alt screen, hide cursor, no autowrap
@@ -237,7 +245,28 @@ def choose():
                 draw()
                 continue
             key = terminal.read_key()
-            if key in ("up", "k"):
+            if settings_open:
+                if key in ("\x03", "\x04"):
+                    return None
+                before = preferences.get(herdr_sidebar.HIDE_CREW.key)
+                closed = menu.handle(key) == "close"
+                if preferences.get(herdr_sidebar.HIDE_CREW.key) != before:
+                    try:
+                        import herdr_ai
+                        herdr_sidebar.sync(herdr_ai.load_state())
+                    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
+                        notices.append(f"herdr-ai: visibility saved; {exc}")
+                if closed:
+                    if settings_only:
+                        return None
+                    settings_open = False
+                    writer.reset()
+                draw()
+                continue
+            if key == "s":
+                settings_open = True
+                writer.reset()
+            elif key in ("up", "k"):
                 selected = (selected - 1) % len(options)
             elif key in ("down", "j", "\t"):
                 selected = (selected + 1) % len(options)
@@ -259,3 +288,5 @@ def choose():
             terminal.__exit__()
         out.write(f"{ap.ESC}[?7h{ap.ESC}[?25h{ap.ESC}[?1049l")
         out.flush()
+        for notice in dict.fromkeys(notices):
+            print(notice, file=sys.stderr)

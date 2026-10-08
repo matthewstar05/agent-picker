@@ -82,22 +82,23 @@ def cycle(key, step=1):
 class Menu:
     """Cursor state for the settings screen; drawing lives in the shared renderer."""
 
-    def __init__(self):
+    def __init__(self, items=None):
         self.index = 0
+        self.items = SETTINGS if items is None else list(items)
 
     def handle(self, key):
         """Apply a key. Returns "close" when the screen should be left."""
-        if not SETTINGS:
+        if not self.items:
             return "close"
-        self.index = min(self.index, len(SETTINGS) - 1)
+        self.index = min(self.index, len(self.items) - 1)
         if key in ("up", "k"):
-            self.index = (self.index - 1) % len(SETTINGS)
+            self.index = (self.index - 1) % len(self.items)
         elif key in ("down", "j", "\t"):
-            self.index = (self.index + 1) % len(SETTINGS)
+            self.index = (self.index + 1) % len(self.items)
         elif key in ("left", "h"):
-            cycle(SETTINGS[self.index].key, -1)
+            cycle(self.items[self.index].key, -1)
         elif key in ("right", "l", "\r", "\n", " "):
-            cycle(SETTINGS[self.index].key, 1)
+            cycle(self.items[self.index].key, 1)
         elif key in ("esc", "s", "q", "\x7f", "\b"):
             return "close"
         return None

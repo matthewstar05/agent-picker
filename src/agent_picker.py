@@ -884,7 +884,7 @@ def render_back_confirmation(menu, choice, cols, rows, t=0):
 
 def render_settings(menu, cols, rows, t, accent):
     """The settings screen: every registered setting, grouped by section."""
-    items = preferences.SETTINGS
+    items = menu.items
     index = min(menu.index, len(items) - 1)
     iw = min(MAX_IW, cols - 2)
     if iw < 26 or rows < 5:
