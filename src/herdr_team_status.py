@@ -17,6 +17,14 @@ from platform_runtime import WINDOWS, state_dir
 STATUSES = ("blocked", "crew_working", "working", "done", "idle", "unknown")
 RANK = {"blocked": 4, "done": 3, "working": 2, "idle": 1, "unknown": 0}
 TOKEN_PREFIX = "herdr_ai_icon_"
+SPACE_TOKEN_PREFIX = "herdr_ai_space_"
+
+
+def glyph(status, symbols=False):
+    if symbols:
+        return {"blocked": "×", "working": "◐", "crew_working": "◐", "done": "✓",
+                "idle": "○", "unknown": "·"}[status]
+    return {"idle": "○", "unknown": "·"}.get(status, "●")
 
 
 def effective_statuses(panes, seen=None):
@@ -58,10 +66,7 @@ def publish(panes, refreshed, call=sidebar.request, now=None, symbols=False, see
         if previous and previous[0] == identity and now - previous[1] < 4:
             continue
         native_status = "working" if status == "crew_working" else status
-        glyph = {"idle": "○", "unknown": "·"}.get(status, "●")
-        if symbols:
-            glyph = {"blocked": "×", "working": "◐", "crew_working": "◐", "done": "✓"}.get(status, glyph)
-        tokens = {TOKEN_PREFIX + key: glyph if key == status else None for key in STATUSES}
+        tokens = {TOKEN_PREFIX + key: glyph(status, symbols) if key == status else None for key in STATUSES}
         tokens.update({"herdr_ai_priority": str(RANK[native_status]), "herdr_ai_status": native_status})
         call("pane.report_metadata", {
             "pane_id": pid, "source": "custom:herdr-ai-status", "agent": pane["agent"],
@@ -70,6 +75,36 @@ def publish(panes, refreshed, call=sidebar.request, now=None, symbols=False, see
     for pid in set(refreshed) - set(effective):
         refreshed.pop(pid)
     return effective
+
+
+def space_statuses(workspaces, panes, effective):
+    candidates = {w["workspace_id"]: [] for w in workspaces}
+    for pane in panes:
+        workspace = pane.get("workspace_id")
+        if (workspace in candidates and pane["pane_id"] in effective
+                and (pane.get("tokens") or {}).get(sidebar.ROLE) != "crew"):
+            candidates[workspace].append(effective[pane["pane_id"]])
+    return {workspace: max(states, key=lambda s: RANK["working" if s == "crew_working" else s])
+            if states else "idle" for workspace, states in candidates.items()}
+
+
+def publish_spaces(workspaces, panes, effective, refreshed, call=sidebar.request, now=None, symbols=False):
+    now = time.monotonic() if now is None else now
+    statuses = space_statuses(workspaces, panes, effective)
+    for workspace, status in statuses.items():
+        identity = (status, symbols)
+        previous = refreshed.get(workspace)
+        if previous and previous[0] == identity and now - previous[1] < 4:
+            continue
+        tokens = {SPACE_TOKEN_PREFIX + key: glyph(status, symbols) if key == status else None
+                  for key in STATUSES}
+        tokens["herdr_ai_space_status"] = status
+        call("workspace.report_metadata", {"workspace_id": workspace, "source": "custom:herdr-ai-status",
+                                           "tokens": tokens, "ttl_ms": 10000})
+        refreshed[workspace] = (identity, now)
+    for workspace in set(refreshed) - set(statuses):
+        refreshed.pop(workspace)
+    return statuses
 
 
 def config_path():
@@ -102,26 +137,33 @@ def colors(text):
 
 def indicator_config(text):
     palette = colors(text)
-    icons = ", ".join('{ token = "$' + TOKEN_PREFIX + s + '", fg = "' + palette[s] + '" }'
-                      for s in STATUSES)
     parts = re.split(r"(?m)(^\[[^\n]+\]\s*\n)", text)
-    found = False
+    found = set()
     for i in range(1, len(parts), 2):
         header = parts[i].strip()
-        if header not in ("[ui.sidebar.agents]", "[ui.sidebar.agents.rows_by_agent]"):
+        if header not in ("[ui.sidebar.agents]", "[ui.sidebar.agents.rows_by_agent]", "[ui.sidebar.spaces]"):
             continue
-        found = found or header == "[ui.sidebar.agents]"
+        found.add(header)
+        prefix = SPACE_TOKEN_PREFIX if header == "[ui.sidebar.spaces]" else TOKEN_PREFIX
+        icons = ", ".join('{ token = "$' + prefix + s + '", fg = "' + palette[s] + '" }'
+                          for s in STATUSES)
+        if header == "[ui.sidebar.spaces]" and not re.search(r"(?m)^\s*rows\s*=", parts[i + 1]):
+            parts[i + 1] = 'rows = [[' + icons + ', "workspace"], ["branch", "git_status"]]\n' + parts[i + 1]
         # The native layout uses plain state_icon tokens. Preserve all other
         # rows, task labels, sorting, keys, and theme settings byte for byte.
         parts[i + 1] = re.sub(r'\{[^{}]*\btoken\s*=\s*(["\'])state_icon\1[^{}]*\}',
                               lambda _: icons, parts[i + 1])
         parts[i + 1] = re.sub(r'(?<![\w$])(["\'])state_icon\1', lambda _: icons, parts[i + 1])
         for status in STATUSES:
-            pattern = r'(token\s*=\s*"\$' + TOKEN_PREFIX + status + r'"\s*,\s*fg\s*=\s*")[^"]+("\s*\})'
+            pattern = r'(token\s*=\s*"\$' + prefix + status + r'"\s*,\s*fg\s*=\s*")[^"]+("\s*\})'
             parts[i + 1] = re.sub(pattern, lambda m, s=status: m[1] + palette[s] + m[2], parts[i + 1])
     result = "".join(parts)
-    if not found:
-        result += '\n[ui.sidebar.agents]\nrows = [[' + icons + ', "machine", "workspace", "tab"], ["agent"]]\n'
+    for name, prefix, rows in (("agents", TOKEN_PREFIX, ', "machine", "workspace", "tab"], ["agent"]'),
+                               ("spaces", SPACE_TOKEN_PREFIX, ', "workspace"], ["branch", "git_status"]')):
+        if "[ui.sidebar." + name + "]" not in found:
+            icons = ", ".join('{ token = "$' + prefix + s + '", fg = "' + palette[s] + '" }'
+                              for s in STATUSES)
+            result += '\n[ui.sidebar.' + name + ']\nrows = [[' + icons + rows + ']\n'
     return result
 
 
@@ -202,7 +244,7 @@ def run():
     with watcher_lock(path) as acquired:
         if not acquired:
             return
-        refreshed, previous_settings = {}, None
+        refreshed, spaces_refreshed, previous_settings = {}, {}, None
         seen_path = state_dir() / ("herdr-ai-seen-" + hashlib.sha256(path.encode()).hexdigest()[:16] + ".json")
         try:
             seen = json.loads(seen_path.read_text(encoding="utf-8"))
@@ -210,11 +252,14 @@ def run():
             seen = {}
         while True:
             try:
-                panes = call("session.snapshot", {}).get("snapshot", {}).get("agents", [])
+                snapshot = call("session.snapshot", {}).get("snapshot", {})
+                panes = snapshot.get("agents", [])
                 text = config_path().read_text(encoding="utf-8") if config_path().exists() else ""
                 symbols = bool(re.search(r'(?m)^\s*status_indicators\s*=\s*"symbols"', section(text, "ui")))
                 before_seen = dict(seen)
-                publish(panes, refreshed, call, symbols=symbols, seen=seen)
+                effective = publish(panes, refreshed, call, symbols=symbols, seen=seen)
+                publish_spaces(snapshot.get("workspaces", []), panes, effective, spaces_refreshed,
+                               call, symbols=symbols)
                 if seen != before_seen:
                     seen_path.write_text(json.dumps(seen) + "\n", encoding="utf-8")
                 install_indicators(call)
@@ -228,4 +273,5 @@ def run():
             except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
                 print(f"herdr-ai status: {exc}", file=sys.stderr, flush=True)
                 refreshed.clear()
+                spaces_refreshed.clear()
             time.sleep(1)

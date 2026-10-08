@@ -19,6 +19,70 @@ def pane(pid, role=None, state='idle', tab='t1'):
 
 
 class TeamStatusTests(unittest.TestCase):
+    def test_space_ignores_crew_completions_and_keeps_lead_and_standalone_statuses(self):
+        workspaces = [{"workspace_id": "w1"}, {"workspace_id": "empty"}]
+        live = [pane('lead', 'lead'), pane('crew', 'crew'), pane('standalone')]
+        live[1]['completion_seq'] = 10
+        effective = status.effective_statuses(live, {})
+        self.assertEqual(effective['crew'], 'done')
+        self.assertEqual(status.space_statuses(workspaces, live, effective), {'w1': 'idle', 'empty': 'idle'})
+        live[0]['agent_status'] = 'working'
+        self.assertEqual(status.space_statuses(workspaces, live, status.effective_statuses(live, {}))['w1'], 'working')
+        live[2]['completion_seq'] = 11
+        self.assertEqual(status.space_statuses(workspaces, live, status.effective_statuses(live, {}))['w1'], 'done')
+        live[0]['agent_status'] = 'blocked'
+        self.assertEqual(status.space_statuses(workspaces, live, status.effective_statuses(live, {}))['w1'], 'blocked')
+
+    def test_space_inherits_displayed_lead_activity_and_stays_within_its_workspace(self):
+        workspaces = [{"workspace_id": "w1"}, {"workspace_id": "w2"}]
+        live = [pane('lead', 'lead'), pane('crew', 'crew', 'working'), pane('other', state='done')]
+        live[2]['workspace_id'] = 'w2'
+        self.assertEqual(status.space_statuses(workspaces, live, status.effective_statuses(live)),
+                         {'w1': 'crew_working', 'w2': 'done'})
+        live[1]['agent_status'] = 'blocked'
+        self.assertEqual(status.space_statuses(workspaces, live, status.effective_statuses(live))['w1'], 'idle')
+
+    def test_space_reports_refresh_and_clear_obsolete_icons_without_lifecycle_changes(self):
+        workspaces, live = [{"workspace_id": "w1"}], [pane('lead', 'lead', 'working')]
+        refreshed, call = {}, Mock()
+        status.publish_spaces(workspaces, live, status.effective_statuses(live), refreshed, call, now=0)
+        params = call.call_args.args[1]
+        self.assertEqual(call.call_args.args[0], 'workspace.report_metadata')
+        self.assertEqual(params['tokens']['herdr_ai_space_working'], '●')
+        self.assertIsNone(params['tokens']['herdr_ai_space_done'])
+        self.assertEqual(params['ttl_ms'], 10000)
+        call.reset_mock()
+        status.publish_spaces(workspaces, live, status.effective_statuses(live), refreshed, call, now=1)
+        call.assert_not_called()
+        live.clear()
+        status.publish_spaces(workspaces, live, {}, refreshed, call, now=2)
+        self.assertEqual(call.call_args.args[1]['tokens']['herdr_ai_space_idle'], '○')
+        self.assertIsNone(call.call_args.args[1]['tokens']['herdr_ai_space_working'])
+        call.reset_mock()
+        status.publish_spaces(workspaces, live, {}, refreshed, call, now=7, symbols=True)
+        call.assert_called_once()
+        status.publish_spaces([], live, {}, refreshed, call, now=8)
+        self.assertEqual(refreshed, {})
+
+    def test_space_config_preserves_custom_rows_and_updates_theme_colors(self):
+        original = '''[theme]
+name = "gruvbox"
+[ui.sidebar.spaces]
+rows = [[{ token = "state_icon", bold = true }, "workspace"], ["branch", "$custom"]]
+row_gap = 2
+'''
+        changed = status.indicator_config(original)
+        self.assertIn('["branch", "$custom"]', changed)
+        self.assertIn('row_gap = 2', changed)
+        self.assertIn('token = "$herdr_ai_space_done", fg = "#8ec07c"', changed)
+        self.assertEqual(status.indicator_config(changed), changed)
+        rethemed = status.indicator_config(changed.replace('name = "gruvbox"', 'name = "nord"'))
+        self.assertIn('token = "$herdr_ai_space_done", fg = "#8fbcbb"', rethemed)
+        default = status.indicator_config('[ui.sidebar.spaces]\nrow_gap = 3\n')
+        self.assertIn('["branch", "git_status"]', default)
+        self.assertIn('row_gap = 3', default)
+        self.assertEqual(default.count('[ui.sidebar.spaces]'), 1)
+
     def test_finished_indicator_stays_until_agent_is_viewed(self):
         live = [pane('agent')]
         live[0]['completion_seq'] = 10
@@ -124,19 +188,22 @@ zoom = "prefix+z"
     def test_observer_reads_completion_sequences_from_session_agents(self):
         live = [pane('agent')]
         live[0]['completion_seq'] = 10
+        workspaces = [{'workspace_id': 'w1'}]
         with tempfile.TemporaryDirectory() as folder, \
              patch.object(status, 'state_dir', return_value=Path(folder)), \
              patch.object(status, 'config_path', return_value=Path(folder) / 'config.toml'), \
              patch.object(sidebar, 'endpoint', return_value='fake.sock'), \
-             patch.object(sidebar, 'request', return_value={'snapshot': {'agents': live}}) as call, \
+             patch.object(sidebar, 'request', return_value={'snapshot': {'agents': live, 'workspaces': workspaces}}) as call, \
              patch.object(sidebar, 'sync'), \
              patch.object(status, 'install_indicators'), \
              patch.object(status, 'publish') as publish, \
+             patch.object(status, 'publish_spaces') as publish_spaces, \
              patch.object(status.time, 'sleep', side_effect=KeyboardInterrupt):
             with self.assertRaises(KeyboardInterrupt):
                 status.run()
             self.assertEqual(call.call_args.args, ('session.snapshot', {}, 'fake.sock'))
             self.assertEqual(publish.call_args.args[0][0]['completion_seq'], 10)
+            self.assertEqual(publish_spaces.call_args.args[:3], (workspaces, live, publish.return_value))
 
     def test_config_reload_failure_rolls_back_original(self):
         with tempfile.TemporaryDirectory() as folder:
