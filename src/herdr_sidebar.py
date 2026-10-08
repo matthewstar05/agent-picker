@@ -161,8 +161,7 @@ def sync(state=None, socket_path=None, call=None, migrate=True, restore=False):
         os.replace(temporary, registry)
     hide = preferences.get(HIDE_CREW.key)
     priority = preferences.get(ORDER.key) == "priority"
-    params = {"source": SOURCE, "label": ("priority" if priority else "grouped")
-              + (" · crew hidden" if hide else " · crew shown")}
+    params = {"source": SOURCE}
     if hide:
         params["filter"] = {"op": "not", "filter": {
             "op": "eq", "field": {"token": ROLE}, "value": "crew"}}
@@ -181,9 +180,15 @@ def install_startup(binary):
     folder = state_dir() / "herdr-ai-plugin"
     manifest = folder / "herdr-plugin.toml"
     command = [sys.executable, str(Path(__file__).with_name("herdr_ai.py")), "--sync-sidebar"]
+    settings = [*command[:-1], "--settings"]
+    open_settings = [*command[:-1], "--open-settings"]
     text = ('id = "local.herdr-ai"\nname = "Herdr AI"\nversion = "0.1.0"\n'
             'min_herdr_version = "0.9.3"\ndescription = "Restore crew visibility at server startup"\n'
-            'platforms = ["macos", "linux", "windows"]\n\n[[startup]]\ncommand = ' + json.dumps(command) + '\n')
+            'platforms = ["macos", "linux", "windows"]\n\n[[startup]]\ncommand = ' + json.dumps(command) + '\n'
+            '\n[[actions]]\nid = "settings"\ntitle = "Herdr AI settings"\n'
+            'contexts = ["global"]\ncommand = ' + json.dumps(open_settings) + '\n'
+            '\n[[panes]]\nid = "settings"\ntitle = "Herdr AI settings"\n'
+            'placement = "popup"\nwidth = "80%"\nheight = "80%"\ncommand = ' + json.dumps(settings) + '\n')
     if manifest.exists() and manifest.read_text(encoding="utf-8") == text:
         import herdr_team_status
         herdr_team_status.ensure_running()

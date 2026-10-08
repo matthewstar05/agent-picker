@@ -48,6 +48,7 @@ Usage: herdr-ai [--setup NAME] [label]
                               (label defaults to the directory name; --setup
                               skips the menu: standard, claude, codex, ...)
        herdr-ai --settings    change crew visibility without rerouting
+       herdr-ai --open-settings    open those settings in a Herdr popup
        agent-route
        herdr-reset
 Without a terminal to draw the menu in, herdr-ai lays out Standard.
@@ -370,6 +371,10 @@ def main(argv=None, herdr=None, cwd=None):
     if argv[:1] == ["--watch-sidebar"]:
         import herdr_team_status
         herdr_team_status.run()
+        return 0
+    if argv[:1] == ["--open-settings"]:
+        herdr_sidebar.request("plugin.pane.open", {
+            "plugin_id": "local.herdr-ai", "entrypoint": "settings"})
         return 0
     if argv[:1] == ["--settings"]:
         if not (sys.stdin.isatty() and sys.stdout.isatty()):

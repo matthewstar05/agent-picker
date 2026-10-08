@@ -83,7 +83,17 @@ Press `s` in the `herdr-ai` setup menu to open its settings, or run `herdr-ai --
 
 **Agent order** is a separate setting in the same panel and defaults to **priority**. It works together with crew hiding: blocked agents come first, then finished agents, working agents, idle agents, and unknown agents. Within a priority level, recent state changes come first. Choose **grouped** to order agents by workspace, tab, and pane. Crew visibility is independent, so all four combinations of priority/grouped and crew hidden/shown are available.
 
-Herdr 0.9.3 or newer is required for sidebar filtering. The first `herdr-ai` run links a local **Herdr AI** startup hook to restore the saved visibility after a server restart. The hook only refreshes role metadata and the view filter; it does not launch agents. Herdr supports one active Agents view filter, so setting crew visibility replaces another plugin's view filter. Turning hiding off keeps the selected ordering active, and the Agents header shows both choices.
+Herdr 0.9.3 or newer is required for sidebar filtering. The first `herdr-ai` run links a local **Herdr AI** startup hook to restore the saved visibility after a server restart. The hook only refreshes role metadata and the view filter; it does not launch agents. Herdr supports one active Agents view filter, so setting crew visibility replaces another plugin's view filter. Turning hiding off keeps the selected ordering active. The sidebar keeps Herdr's normal Agents heading. The local plugin also provides a settings popup through `herdr-ai --open-settings`. To bind it, add this to Herdr's `config.toml` and reload the config:
+
+```toml
+[[keys.command]]
+key = "prefix+shift+s"
+type = "plugin_action"
+command = "local.herdr-ai.settings"
+description = "Herdr AI settings"
+```
+
+Press Ctrl+B, then Shift+S to open it; Esc saves and closes the popup. Herdr 0.9.3 does not expose custom buttons beside the Agents heading.
 
 | Team | Lead | Crew (x4) |
 | --- | --- | --- |

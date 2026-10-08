@@ -50,7 +50,7 @@ class SidebarTests(unittest.TestCase):
         preferences.put(sidebar.HIDE_CREW.key, False)
         sidebar.sync(socket_path="fake.sock", call=call, migrate=False)
         self.assertNotIn("filter", call.call_args.args[1])
-        self.assertEqual(call.call_args.args[1]["label"], "grouped · crew shown")
+        self.assertNotIn("label", call.call_args.args[1])
         self.assertFalse(any(c.args[0] in ("pane.release_agent", "pane.close", "pane.report_agent")
                              for c in call.call_args_list))
 
@@ -70,8 +70,7 @@ class SidebarTests(unittest.TestCase):
                         {"field": {"token": "herdr_ai_priority"}, "order": "desc"},
                         {"field": "attention", "order": "desc"},
                         {"field": "state_change_seq", "order": "desc"}])
-                if hide and priority:
-                    self.assertEqual(params["label"], "priority · crew hidden")
+                self.assertNotIn("label", params)
 
     def test_priority_defaults_on_and_order_setting_applies_live_from_menu(self):
         self.assertEqual(preferences.get(sidebar.ORDER.key), "priority")
@@ -165,6 +164,18 @@ class SidebarTests(unittest.TestCase):
         text = (self.path / "herdr-ai-plugin/herdr-plugin.toml").read_text()
         self.assertIn(json.dumps([sys.executable, str(ROOT / "src/herdr_ai.py"), "--sync-sidebar"]), text)
         self.assertNotIn("--setup", text)
+        self.assertIn('placement = "popup"', text)
+        self.assertIn(json.dumps([sys.executable, str(ROOT / "src/herdr_ai.py"), "--settings"]), text)
+        self.assertIn('title = "Herdr AI settings"', text)
+
+    def test_settings_action_opens_popup_without_routing_or_launching_agents(self):
+        with patch.object(sidebar, "request") as request, \
+             patch.object(herdr_ai, "build") as build, patch.object(herdr_ai, "route") as route:
+            self.assertEqual(herdr_ai.main(["--open-settings"]), 0)
+        request.assert_called_once_with("plugin.pane.open", {
+            "plugin_id": "local.herdr-ai", "entrypoint": "settings"})
+        build.assert_not_called()
+        route.assert_not_called()
 
     def test_windows_pipe_payload_is_structured_and_bounded(self):
         def run(args, **kwargs):
