@@ -51,6 +51,10 @@ jobs:
           if ([regex]::Matches($profileText, '# >>> agent-picker managed >>>').Count -ne 1) { throw 'Duplicate profile blocks' }
           herdr-ai.cmd --help
           if ($LASTEXITCODE -ne 0) { throw 'herdr-ai shim failed' }
+          agent-route.cmd --help
+          if ($LASTEXITCODE -ne 0) { throw 'agent-route shim failed' }
+          herdr-reset.cmd --help
+          if ($LASTEXITCODE -ne 0) { throw 'herdr-reset shim failed' }
       - name: Parse Windows setup scripts
         if: runner.os == 'Windows'
         shell: pwsh

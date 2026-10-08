@@ -59,16 +59,32 @@ if (-not (Test-Path -LiteralPath $cmdPath) -or [IO.File]::ReadAllText($cmdPath) 
     Save-Backup $cmdPath
     [IO.File]::WriteAllText($cmdPath, $cmd, $utf8)
 }
-# herdr-ai opens a herdr tab with every agent, the selector, and the usage panel.
+# herdr-ai lays out the current herdr tab with every agent, the selector, and the usage panel.
 $herdrAiPath = Join-Path $binDir 'herdr-ai.cmd'
 $herdrAi = "@echo off`r`n`"$Python`" `"$(Join-Path $repo 'src\herdr_ai.py')`" %*`r`nexit /b %errorlevel%`r`n"
 if (-not (Test-Path -LiteralPath $herdrAiPath) -or [IO.File]::ReadAllText($herdrAiPath) -ne $herdrAi) {
     Save-Backup $herdrAiPath
     [IO.File]::WriteAllText($herdrAiPath, $herdrAi, $utf8)
 }
+# agent-route restarts every agent on the current herdr tab in the current folder.
+$agentRoutePath = Join-Path $binDir 'agent-route.cmd'
+$agentRoute = "@echo off`r`n`"$Python`" `"$(Join-Path $repo 'src\agent_route.py')`" %*`r`nexit /b %errorlevel%`r`n"
+if (-not (Test-Path -LiteralPath $agentRoutePath) -or [IO.File]::ReadAllText($agentRoutePath) -ne $agentRoute) {
+    Save-Backup $agentRoutePath
+    [IO.File]::WriteAllText($agentRoutePath, $agentRoute, $utf8)
+}
+# herdr-reset closes every other pane on the current herdr tab.
+$herdrResetPath = Join-Path $binDir 'herdr-reset.cmd'
+$herdrReset = "@echo off`r`n`"$Python`" `"$(Join-Path $repo 'src\herdr_reset.py')`" %*`r`nexit /b %errorlevel%`r`n"
+if (-not (Test-Path -LiteralPath $herdrResetPath) -or [IO.File]::ReadAllText($herdrResetPath) -ne $herdrReset) {
+    Save-Backup $herdrResetPath
+    [IO.File]::WriteAllText($herdrResetPath, $herdrReset, $utf8)
+}
 $escapedPython = $Python.Replace("'", "''")
 $escapedEntry = $entry.Replace("'", "''")
 $escapedHerdrAi = (Join-Path $repo 'src\herdr_ai.py').Replace("'", "''")
+$escapedAgentRoute = (Join-Path $repo 'src\agent_route.py').Replace("'", "''")
+$escapedHerdrReset = (Join-Path $repo 'src\herdr_reset.py').Replace("'", "''")
 $start = '# >>> agent-picker managed >>>'
 $end = '# <<< agent-picker managed <<<'
 $block = @"
@@ -79,6 +95,8 @@ function global:agent { & '$escapedPython' '$escapedEntry' @args }
 function global:agent-picker { & '$escapedPython' '$escapedEntry' @args }
 function global:usage { & '$escapedPython' '$escapedEntry' @args }
 function global:herdr-ai { & '$escapedPython' '$escapedHerdrAi' @args }
+function global:agent-route { & '$escapedPython' '$escapedAgentRoute' @args }
+function global:herdr-reset { & '$escapedPython' '$escapedHerdrReset' @args }
 $end
 "@
 $profiles = @($PROFILE.CurrentUserAllHosts)

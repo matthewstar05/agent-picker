@@ -73,6 +73,18 @@ The five original providers support these controls. Cursor effort is part of its
 
 Updates are explicit, use `git pull --ff-only`, and refuse a dirty checkout. If the two machines have diverging commits, resolve them with normal Git operations before updating. The command does not commit, stash, reset, push, or update provider CLIs automatically.
 
+## herdr-ai, agent-route and herdr-reset
+
+Run `herdr-ai` in a herdr pane to lay out that tab as the workbench: Antigravity, Codex, Cursor or Kiro, the agent selector, Claude, the usage panel, and a terminal along the bottom. The pane you ran it from becomes that terminal. Nothing else on the tab is touched, and no new tab is created. Outside herdr it opens a new workspace and attaches. An optional label renames the tab; otherwise the tab is named after the directory.
+
+Run `herdr-ai` again from a tab it already laid out, usually from the bottom terminal after a `cd`, and it reroutes instead of adding panes: the four agents and the selector stop and restart in the new directory. If the selector had launched an agent, that agent restarts with the same arguments. The usage panel keeps running.
+
+`agent-route` does the same for every agent herdr detects on the current tab, including ones `herdr-ai` did not start. Each one restarts with its original command line in the directory you ran `agent-route` from. Panes running something other than an agent are left alone, as is the pane you run it from.
+
+`herdr-reset` closes every other pane on the current tab, agents included, and leaves only the pane you run it from, usually the bottom terminal, with its history and directory intact. Run `herdr-ai` from there to lay the tab out again.
+
+Rerouting stops the agents, so unsaved conversation state in them is lost. herdr-ai remembers each tab's panes in `herdr-ai-tabs.json` in the local state directory. On Windows, agents are stopped with Ctrl+C rather than a signal.
+
 ## Workbench agent priority
 
 The middle-bottom agent pane automatically chooses Cursor or Kiro. Usable quota resetting within five days takes priority, with the earlier reset winning when both are close. Otherwise it chooses the larger remaining percentage divided by days until reset. Cursor uses the Auto pool for `--model auto` and the external-model pool for named models; Kiro uses its monthly pool. Exhausted pools do not outrank usable ones. The chooser uses the shared usage cache, gives stale readers up to two seconds to refresh, and ignores data older than a day or whose reset has passed. With no usable data it falls back to an installed provider, preferring Cursor on ties. It prints the choice and reason before launching with your existing defaults. `agent --picker-priority` explains the current choice without opening an agent session. The choice is evaluated at launch, including when rerouting restarts this pane; running sessions stay on their provider.

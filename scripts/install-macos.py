@@ -26,16 +26,18 @@ def backup(path):
 
 
 def install_herdr_ai(bindir):
-    """herdr-ai lives in this checkout too; replaces the old standalone bash script."""
+    """herdr-ai, agent-route and herdr-reset live in this checkout too; herdr-ai replaces the old standalone bash script."""
     bindir.mkdir(parents=True, exist_ok=True)
-    wrapper = bindir / "herdr-ai"
-    content = "#!/bin/sh\n# agent-picker managed launcher\nexec " + shlex.quote(sys.executable) + " " + shlex.quote(str(ROOT / "src/herdr_ai.py")) + ' "$@"\n'
-    if not wrapper.exists() or wrapper.read_text(errors="ignore") != content:
-        backup(wrapper)
-        if wrapper.is_symlink():
-            wrapper.unlink()
-        wrapper.write_text(content)
-        wrapper.chmod(0o755)
+    for name, script in (("herdr-ai", "herdr_ai.py"), ("agent-route", "agent_route.py"),
+                         ("herdr-reset", "herdr_reset.py")):
+        wrapper = bindir / name
+        content = "#!/bin/sh\n# agent-picker managed launcher\nexec " + shlex.quote(sys.executable) + " " + shlex.quote(str(ROOT / "src" / script)) + ' "$@"\n'
+        if not wrapper.exists() or wrapper.read_text(errors="ignore") != content:
+            backup(wrapper)
+            if wrapper.is_symlink():
+                wrapper.unlink()
+            wrapper.write_text(content)
+            wrapper.chmod(0o755)
     if not shutil.which("herdr"):
         print("herdr is not installed; herdr-ai needs it: curl -fsSL https://herdr.dev/install.sh | sh")
 
