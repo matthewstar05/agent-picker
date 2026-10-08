@@ -20,8 +20,8 @@ HIDE_CREW = preferences.Setting(
     names={False: "off", True: "on"})
 ORDER = preferences.Setting(
     "herdr_ai.agent_order", "Herdr AI", "Agent order", ["default", "priority"], "priority",
-    hint="Priority: blocked, finished, working, idle, then unknown.",
-    names={"default": "Herdr default", "priority": "priority"})
+    hint="Group agents by workspace, or put active and finished agents first.",
+    names={"default": "grouped", "priority": "priority"})
 SETTINGS = (HIDE_CREW, ORDER)
 
 # PowerShell's async line read gives named pipes the same bounded wait as Unix sockets.
@@ -161,16 +161,18 @@ def sync(state=None, socket_path=None, call=None, migrate=True, restore=False):
         os.replace(temporary, registry)
     hide = preferences.get(HIDE_CREW.key)
     priority = preferences.get(ORDER.key) == "priority"
-    if not hide and not priority:
-        return call("agent.view.clear", {"source": SOURCE})
-    params = {"source": SOURCE, "label": " · ".join(
-        label for enabled, label in ((priority, "priority"), (hide, "crew hidden")) if enabled)}
+    params = {"source": SOURCE, "label": ("priority" if priority else "grouped")
+              + (" · crew hidden" if hide else " · crew shown")}
     if hide:
         params["filter"] = {"op": "not", "filter": {
             "op": "eq", "field": {"token": ROLE}, "value": "crew"}}
     if priority:
-        params["sort"] = [{"field": "attention", "order": "desc"},
+        params["sort"] = [{"field": {"token": "herdr_ai_priority"}, "order": "desc"},
+                          {"field": "attention", "order": "desc"},
                           {"field": "state_change_seq", "order": "desc"}]
+    else:
+        params["sort"] = [{"field": field, "order": "asc"}
+                          for field in ("workspace_order", "tab_order", "pane_order")]
     return call("agent.view.set", params)
 
 
@@ -183,6 +185,8 @@ def install_startup(binary):
             'min_herdr_version = "0.9.3"\ndescription = "Restore crew visibility at server startup"\n'
             'platforms = ["macos", "linux", "windows"]\n\n[[startup]]\ncommand = ' + json.dumps(command) + '\n')
     if manifest.exists() and manifest.read_text(encoding="utf-8") == text:
+        import herdr_team_status
+        herdr_team_status.ensure_running()
         return
     folder.mkdir(parents=True, exist_ok=True)
     manifest.write_text(text, encoding="utf-8")
@@ -190,3 +194,5 @@ def install_startup(binary):
     if out.returncode:
         manifest.unlink()  # allow a later invocation to retry
         raise RuntimeError("Could not register Herdr AI startup hook: " + (out.stderr or out.stdout).strip())
+    import herdr_team_status
+    herdr_team_status.ensure_running()

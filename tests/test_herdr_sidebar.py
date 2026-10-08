@@ -30,13 +30,14 @@ class SidebarTests(unittest.TestCase):
         for p in (patch.object(preferences, "PATH", self.path / "preferences.json"),
                   patch.object(preferences, "_values", None),
                   patch.object(preferences, "SETTINGS", list(preferences.SETTINGS)),
+                  patch("herdr_team_status.ensure_running"),
                   patch.object(sidebar, "state_dir", return_value=self.path)):
             p.start()
             self.addCleanup(p.stop)
         for setting in sidebar.SETTINGS:
             preferences.register(setting)
 
-    def test_default_filter_and_source_guarded_clear_preserve_agents(self):
+    def test_grouped_filter_preserves_agents_and_does_not_change_lifecycle(self):
         preferences.put(sidebar.ORDER.key, "default")
         call = Mock(return_value={})
         sidebar.sync(socket_path="fake.sock", call=call, migrate=False)
@@ -44,10 +45,12 @@ class SidebarTests(unittest.TestCase):
         self.assertEqual(method, "agent.view.set")
         self.assertEqual(params["filter"], {"op": "not", "filter": {
             "op": "eq", "field": {"token": sidebar.ROLE}, "value": "crew"}})
-        self.assertNotIn("sort", params)
+        self.assertEqual(params["sort"], [{"field": field, "order": "asc"}
+                                         for field in ("workspace_order", "tab_order", "pane_order")])
         preferences.put(sidebar.HIDE_CREW.key, False)
         sidebar.sync(socket_path="fake.sock", call=call, migrate=False)
-        self.assertEqual(call.call_args.args, ("agent.view.clear", {"source": sidebar.SOURCE}))
+        self.assertNotIn("filter", call.call_args.args[1])
+        self.assertEqual(call.call_args.args[1]["label"], "grouped · crew shown")
         self.assertFalse(any(c.args[0] in ("pane.release_agent", "pane.close", "pane.report_agent")
                              for c in call.call_args_list))
 
@@ -59,14 +62,12 @@ class SidebarTests(unittest.TestCase):
                 preferences.put(sidebar.ORDER.key, "priority" if priority else "default")
                 sidebar.sync(socket_path="fake.sock", call=call, migrate=False)
                 method, params = call.call_args.args
-                if not hide and not priority:
-                    self.assertEqual((method, params), ("agent.view.clear", {"source": sidebar.SOURCE}))
-                    continue
                 self.assertEqual(method, "agent.view.set")
                 self.assertEqual("filter" in params, hide)
-                self.assertEqual("sort" in params, priority)
+                self.assertIn("sort", params)
                 if priority:
                     self.assertEqual(params["sort"], [
+                        {"field": {"token": "herdr_ai_priority"}, "order": "desc"},
                         {"field": "attention", "order": "desc"},
                         {"field": "state_change_seq", "order": "desc"}])
                 if hide and priority:

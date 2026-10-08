@@ -1,0 +1,19 @@
+{
+  "catppuccin": {"working": "#f9e2af", "blocked": "#f38ba8", "done": "#94e2d5", "idle": "#a6e3a1", "unknown": "#6c7086", "crew_working": "#fab387"},
+  "catppuccin-latte": {"working": "#df8e1d", "blocked": "#d20f39", "done": "#179299", "idle": "#40a02b", "unknown": "#9ca0b0", "crew_working": "#fe640b"},
+  "tokyo-night": {"working": "#e0af68", "blocked": "#f7768e", "done": "#7dcfff", "idle": "#9ece6a", "unknown": "#565f89", "crew_working": "#ff9e64"},
+  "tokyo-night-day": {"working": "#8c6c3e", "blocked": "#f52a65", "done": "#118c74", "idle": "#587539", "unknown": "#8990b3", "crew_working": "#b15c00"},
+  "dracula": {"working": "#f1fa8c", "blocked": "#ff5555", "done": "#8be9fd", "idle": "#50fa7b", "unknown": "#6272a4", "crew_working": "#ffb86c"},
+  "nord": {"working": "#ebcb8b", "blocked": "#bf616a", "done": "#8fbcbb", "idle": "#a3be8c", "unknown": "#4c566a", "crew_working": "#d08770"},
+  "gruvbox": {"working": "#fabd2f", "blocked": "#fb4934", "done": "#8ec07c", "idle": "#b8bb26", "unknown": "#928374", "crew_working": "#fe8019"},
+  "gruvbox-light": {"working": "#b57614", "blocked": "#9d0006", "done": "#427b58", "idle": "#79740e", "unknown": "#928374", "crew_working": "#af3a03"},
+  "one-dark": {"working": "#e5c07b", "blocked": "#e06c75", "done": "#56b6c2", "idle": "#98c379", "unknown": "#5c6370", "crew_working": "#d19a66"},
+  "one-light": {"working": "#c18401", "blocked": "#e45649", "done": "#0184bc", "idle": "#50a14f", "unknown": "#a0a1a7", "crew_working": "#986801"},
+  "solarized": {"working": "#b58900", "blocked": "#dc322f", "done": "#2aa198", "idle": "#859900", "unknown": "#586e75", "crew_working": "#cb4b16"},
+  "solarized-light": {"working": "#b58900", "blocked": "#dc322f", "done": "#2aa198", "idle": "#859900", "unknown": "#93a1a1", "crew_working": "#cb4b16"},
+  "kanagawa": {"working": "#c0a36e", "blocked": "#c34043", "done": "#7fb4ca", "idle": "#76946a", "unknown": "#727169", "crew_working": "#ffa066"},
+  "kanagawa-lotus": {"working": "#77713f", "blocked": "#c84053", "done": "#4e8ca2", "idle": "#6f894e", "unknown": "#a09cac", "crew_working": "#cc6d00"},
+  "rose-pine": {"working": "#f6c177", "blocked": "#eb6f92", "done": "#9ccfd8", "idle": "#31748f", "unknown": "#6e6a86", "crew_working": "#ea9a97"},
+  "rose-pine-dawn": {"working": "#ea9d34", "blocked": "#b4637a", "done": "#56949f", "idle": "#286983", "unknown": "#9893a5", "crew_working": "#d7827e"},
+  "vesper": {"working": "#ffc799", "blocked": "#ff8080", "done": "#66ddcc", "idle": "#99ffe4", "unknown": "#5c5c5c", "crew_working": "#ffc799"}
+}

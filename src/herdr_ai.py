@@ -364,6 +364,12 @@ def main(argv=None, herdr=None, cwd=None):
         return 0
     if argv[:1] == ["--sync-sidebar"]:
         herdr_sidebar.sync(load_state(), restore=True)
+        import herdr_team_status
+        herdr_team_status.ensure_running()
+        return 0
+    if argv[:1] == ["--watch-sidebar"]:
+        import herdr_team_status
+        herdr_team_status.run()
         return 0
     if argv[:1] == ["--settings"]:
         if not (sys.stdin.isatty() and sys.stdout.isatty()):
