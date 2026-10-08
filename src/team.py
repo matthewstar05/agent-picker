@@ -219,7 +219,7 @@ def choose(settings_only=False):
     writer = ap.Screen(terminal)
     out = sys.stdout
     start = time.monotonic()
-    menu = preferences.Menu([preferences.register(herdr_sidebar.HIDE_CREW)])
+    menu = preferences.Menu([preferences.register(s) for s in herdr_sidebar.SETTINGS])
     settings_open = settings_only
     notices = []
 
@@ -248,9 +248,9 @@ def choose(settings_only=False):
             if settings_open:
                 if key in ("\x03", "\x04"):
                     return None
-                before = preferences.get(herdr_sidebar.HIDE_CREW.key)
+                before = [preferences.get(s.key) for s in menu.items]
                 closed = menu.handle(key) == "close"
-                if preferences.get(herdr_sidebar.HIDE_CREW.key) != before:
+                if [preferences.get(s.key) for s in menu.items] != before:
                     try:
                         import herdr_ai
                         herdr_sidebar.sync(herdr_ai.load_state())

@@ -81,7 +81,9 @@ Run `herdr-ai` in a herdr pane to lay out that tab as the workbench: Antigravity
 
 Press `s` in the `herdr-ai` setup menu to open its settings, or run `herdr-ai --settings` from any terminal to change them without restarting or rerouting agents. **Hide crew agents** defaults to **on**: crew panes remain running and available to the lead, but only the lead appears in Herdr's Agents sidebar. Use Left/Right or Enter to toggle, then Esc to return; the preference is saved immediately. Existing teams are migrated from saved pane identities or their exact team launch brief. This changes the Agents view only, so `herdr agent list`, delegation, usage counts, and notifications still include crew.
 
-Herdr 0.9.3 or newer is required for sidebar filtering. The first `herdr-ai` run links a local **Herdr AI** startup hook to restore the saved visibility after a server restart. The hook only refreshes role metadata and the view filter; it does not launch agents. Herdr supports one active Agents view filter, so setting crew visibility replaces another plugin's view filter. Turning hiding off clears only the view owned by `herdr-ai`.
+**Agent order** is a separate setting in the same panel and defaults to **priority**. It works together with crew hiding: blocked agents come first, then finished agents, working agents, idle agents, and unknown agents. Within a priority level, recent state changes come first. Choose **Herdr default** to follow Herdr's own ordering instead.
+
+Herdr 0.9.3 or newer is required for sidebar filtering. The first `herdr-ai` run links a local **Herdr AI** startup hook to restore the saved visibility after a server restart. The hook only refreshes role metadata and the view filter; it does not launch agents. Herdr supports one active Agents view filter, so setting crew visibility replaces another plugin's view filter. Turning hiding off keeps priority sorting active. With hiding off and Agent order set to Herdr default, only the view owned by `herdr-ai` is cleared.
 
 | Team | Lead | Crew (x4) |
 | --- | --- | --- |

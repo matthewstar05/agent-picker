@@ -18,6 +18,11 @@ HIDE_CREW = preferences.Setting(
     "herdr_ai.hide_crew", "Herdr AI", "Hide crew agents", [False, True], True,
     hint="Hide crew from Herdr's Agents sidebar; keep the lead visible.",
     names={False: "off", True: "on"})
+ORDER = preferences.Setting(
+    "herdr_ai.agent_order", "Herdr AI", "Agent order", ["default", "priority"], "priority",
+    hint="Priority: blocked, finished, working, idle, then unknown.",
+    names={"default": "Herdr default", "priority": "priority"})
+SETTINGS = (HIDE_CREW, ORDER)
 
 # PowerShell's async line read gives named pipes the same bounded wait as Unix sockets.
 PIPE_REQUEST = r'''
@@ -122,7 +127,8 @@ def legacy_roles(live, call):
 
 
 def sync(state=None, socket_path=None, call=None, migrate=True, restore=False):
-    preferences.register(HIDE_CREW)
+    for setting in SETTINGS:
+        preferences.register(setting)
     path = socket_path or endpoint()
     call = call or (lambda method, params: request(method, params, path))
     if migrate:
@@ -153,11 +159,19 @@ def sync(state=None, socket_path=None, call=None, migrate=True, restore=False):
         temporary = registry.with_name(f".herdr-ai-roles.{os.getpid()}.tmp")
         temporary.write_text(json.dumps(saved, indent=2) + "\n", encoding="utf-8")
         os.replace(temporary, registry)
-    if preferences.get(HIDE_CREW.key):
-        return call("agent.view.set", {
-            "source": SOURCE, "label": "crew hidden",
-            "filter": {"op": "not", "filter": {"op": "eq", "field": {"token": ROLE}, "value": "crew"}}})
-    return call("agent.view.clear", {"source": SOURCE})
+    hide = preferences.get(HIDE_CREW.key)
+    priority = preferences.get(ORDER.key) == "priority"
+    if not hide and not priority:
+        return call("agent.view.clear", {"source": SOURCE})
+    params = {"source": SOURCE, "label": " · ".join(
+        label for enabled, label in ((priority, "priority"), (hide, "crew hidden")) if enabled)}
+    if hide:
+        params["filter"] = {"op": "not", "filter": {
+            "op": "eq", "field": {"token": ROLE}, "value": "crew"}}
+    if priority:
+        params["sort"] = [{"field": "attention", "order": "desc"},
+                          {"field": "state_change_seq", "order": "desc"}]
+    return call("agent.view.set", params)
 
 
 def install_startup(binary):

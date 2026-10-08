@@ -33,9 +33,11 @@ class SidebarTests(unittest.TestCase):
                   patch.object(sidebar, "state_dir", return_value=self.path)):
             p.start()
             self.addCleanup(p.stop)
-        preferences.register(sidebar.HIDE_CREW)
+        for setting in sidebar.SETTINGS:
+            preferences.register(setting)
 
     def test_default_filter_and_source_guarded_clear_preserve_agents(self):
+        preferences.put(sidebar.ORDER.key, "default")
         call = Mock(return_value={})
         sidebar.sync(socket_path="fake.sock", call=call, migrate=False)
         method, params = call.call_args.args
@@ -48,6 +50,41 @@ class SidebarTests(unittest.TestCase):
         self.assertEqual(call.call_args.args, ("agent.view.clear", {"source": sidebar.SOURCE}))
         self.assertFalse(any(c.args[0] in ("pane.release_agent", "pane.close", "pane.report_agent")
                              for c in call.call_args_list))
+
+    def test_priority_and_crew_hiding_can_be_enabled_independently(self):
+        call = Mock(return_value={})
+        for hide, priority in ((True, True), (False, True), (True, False), (False, False)):
+            with self.subTest(hide=hide, priority=priority):
+                preferences.put(sidebar.HIDE_CREW.key, hide)
+                preferences.put(sidebar.ORDER.key, "priority" if priority else "default")
+                sidebar.sync(socket_path="fake.sock", call=call, migrate=False)
+                method, params = call.call_args.args
+                if not hide and not priority:
+                    self.assertEqual((method, params), ("agent.view.clear", {"source": sidebar.SOURCE}))
+                    continue
+                self.assertEqual(method, "agent.view.set")
+                self.assertEqual("filter" in params, hide)
+                self.assertEqual("sort" in params, priority)
+                if priority:
+                    self.assertEqual(params["sort"], [
+                        {"field": "attention", "order": "desc"},
+                        {"field": "state_change_seq", "order": "desc"}])
+                if hide and priority:
+                    self.assertEqual(params["label"], "priority · crew hidden")
+
+    def test_priority_defaults_on_and_order_setting_applies_live_from_menu(self):
+        self.assertEqual(preferences.get(sidebar.ORDER.key), "priority")
+        terminal = MagicMock()
+        terminal.wait.return_value = True
+        terminal.read_key.side_effect = ["down", "left", "esc"]
+        with patch.object(team, "Terminal", return_value=terminal), \
+             patch.object(team.ap, "Screen", return_value=Mock()), \
+             patch.object(team.sys, "stdout", io.StringIO()), \
+             patch.object(sidebar, "sync") as sync:
+            self.assertIsNone(team.choose(settings_only=True))
+        self.assertTrue(preferences.get(sidebar.HIDE_CREW.key))
+        self.assertEqual(preferences.get(sidebar.ORDER.key), "default")
+        sync.assert_called_once()
 
     def test_setting_persists_and_scoped_menu_does_not_change_other_settings(self):
         preferences.put("unrelated", "keep")
