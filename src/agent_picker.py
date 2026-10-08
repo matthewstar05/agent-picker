@@ -797,6 +797,8 @@ def render_defaults(menu, cols, rows, t):
                             " • " if moved else "   ", agent["color"])
                 out.append(flat(line, bw))
         out.append(("gap", "", 0))
+        if field == "fast_mode":
+            out.append(note("Faster replies use more quota.", bw, accent))
         if menu.error:
             out.append(note(menu.error, bw, HOT))
         elif menu.changed:

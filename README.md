@@ -125,6 +125,10 @@ The middle-bottom agent pane automatically chooses Cursor or Kiro. Usable quota 
 
 ## Agent selector defaults
 
+Codex has a **Fast Mode** toggle below Bypass Permissions. Highlight Codex, press `→`, move down to Fast Mode, and use `←→`, Space, or Enter to toggle it. Esc opens the existing save confirmation. The choice is saved locally and applies to future picker and team launches; it starts Off. On uses Codex's `service_tier=fast` with `features.fast_mode=true`; Off explicitly selects `service_tier=default`. The selector shows `fast` beside the model when enabled. Existing sessions keep their current mode.
+
+Fast mode gives faster replies in exchange for higher usage, not higher usage limits. Speed depends on the model; the documented 1.5x speedup applies to GPT-5.6 and GPT-5.5. Included subscription usage is consumed at 2.5x the Standard rate; purchased credits and Enterprise pay-as-you-go usage use a 2x rate. Availability depends on the model and account. See [OpenAI's speed documentation](https://learn.chatgpt.com/docs/agent-configuration/speed).
+
 Choices come from bundled model catalogs, refreshed from installed CLIs or their local caches in the background. Your current model stays selectable. Cursor, Claude, and Codex effort choices follow their model catalogs.
 
 Changes are saved in the machine-local config as `agents.<Provider>.defaults`, preserving local paths and unrelated arguments. Turning Bypass Permissions Off removes that provider's bypass flags and skips new picker folder-trust writes. Claude uses its default permission mode; Codex uses on-request approvals and the workspace-write sandbox.

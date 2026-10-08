@@ -47,6 +47,24 @@ def replace_option(argv, flags, value, preferred):
     return out
 
 
+def codex_configs(argv):
+    """Yield (start, end, key, value) for Codex CLI config overrides."""
+    i = 1
+    while i < len(argv):
+        arg, end = argv[i], i + 1
+        value = ""
+        if arg in ("-c", "--config") and end < len(argv):
+            value, end = argv[end], end + 1
+        elif arg.startswith("--config="):
+            value = arg[len("--config="):]
+        elif arg.startswith("-c") and arg != "-c":
+            value = arg[2:]
+        if "=" in value:
+            key, value = value.split("=", 1)
+            yield i, end, key.strip(), value.strip().strip('"\'')
+        i = end
+
+
 def current(agent):
     name, argv = agent["name"], agent["argv"]
     if name not in PROVIDERS:
@@ -69,8 +87,12 @@ def current(agent):
                 effort = match.group(1) if match else bracket.group(1) if bracket else "provider default"
             if match:
                 model = model[:match.start()] + model[match.end():]
-    return {"model": model, "effort": effort or "provider default",
-            "bypass_permissions": any(a in bypass_flags for a in argv[1:])}
+    values = {"model": model, "effort": effort or "provider default",
+              "bypass_permissions": any(a in bypass_flags for a in argv[1:])}
+    if name == "Codex":
+        config = {key: value for _, _, key, value in codex_configs(argv)}
+        values["fast_mode"] = config.get("service_tier") in ("fast", "priority")
+    return values
 
 
 def apply(agent, values):
@@ -78,6 +100,7 @@ def apply(agent, values):
     baseline = current(agent)
     if baseline is None:
         return agent
+    set_fast = agent["name"] == "Codex" and "fast_mode" in values
     values = dict(baseline, **values)
     model, effort = values["model"], values["effort"]
     if not isinstance(model, str) or not model.strip() or any(ord(c) < 32 for c in model):
@@ -86,6 +109,8 @@ def apply(agent, values):
         raise ValueError(f"{agent['name']}: unknown effort {effort}")
     if not isinstance(values["bypass_permissions"], bool):
         raise ValueError("Bypass Permissions must be on or off")
+    if agent["name"] == "Codex" and not isinstance(values["fast_mode"], bool):
+        raise ValueError("Fast Mode must be on or off")
     name = agent["name"]
     if name == "Antigravity" and not str(model).startswith("gemini"):
         model = CURSOR_EFFORT.sub("", model)
@@ -141,6 +166,15 @@ def apply(agent, values):
             argv.append(bypass_flags[0])
             if name == "Cursor":
                 argv.append("--trust")
+    if set_fast:
+        remove = set()
+        for start, end, key, _ in codex_configs(argv):
+            if key in ("service_tier", "features.fast_mode"):
+                remove.update(range(start, end))
+        argv = [arg for i, arg in enumerate(argv) if i not in remove]
+        # Keep /fast available in Codex; the service tier controls this launch.
+        argv.extend(["-c", "features.fast_mode=true", "-c",
+                     "service_tier=" + ("fast" if values["fast_mode"] else "default")])
     values["model"] = model
     values["effort"] = effort
     agent["argv"] = argv
@@ -148,6 +182,8 @@ def apply(agent, values):
     agent["model"] = model
     agent["short"] = model
     agent["detail"] = model if str(model).startswith("gemini") else model + " · " + effort
+    if name == "Codex" and values["fast_mode"]:
+        agent["detail"] += " · fast"
     return agent
 
 
@@ -170,7 +206,8 @@ def save(agent, values, path):
 
 
 class Menu:
-    LABELS = {"model": "Model", "effort": "Effort", "bypass_permissions": "Bypass Permissions"}
+    LABELS = {"model": "Model", "effort": "Effort", "bypass_permissions": "Bypass Permissions",
+              "fast_mode": "Fast Mode"}
 
     def __init__(self, agent):
         self.agent = agent
@@ -189,7 +226,7 @@ class Menu:
 
     @staticmethod
     def shown(key, value):
-        return ("On" if value else "Off") if key == "bypass_permissions" else str(value)
+        return ("On" if value else "Off") if key in ("bypass_permissions", "fast_mode") else str(value)
 
     def review(self):
         """(label, new) for the model and effort to keep, then (label, old, new) for each change."""
@@ -198,10 +235,12 @@ class Menu:
             keys.append("effort")
         selection = [(self.LABELS[k], self.shown(k, self.values[k])) for k in keys]
         delta = [(self.LABELS[k], self.shown(k, self.original[k]), self.shown(k, self.values[k]))
-                 for k in ("model", "effort", "bypass_permissions") if self.original[k] != self.values[k]]
+                 for k in self.values if self.original[k] != self.values[k]]
         return selection, delta
 
     def fields(self):
+        if self.agent["name"] == "Codex":
+            return ("model", "effort", "bypass_permissions", "fast_mode")
         if str(self.values.get("model", "")).startswith("gemini"):
             return ("model", "bypass_permissions")
         return ("model", "effort", "bypass_permissions")

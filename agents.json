@@ -107,7 +107,11 @@
       "gpt-6.1-sol",
       "-c",
       "model_reasoning_effort=high",
-      "--dangerously-bypass-approvals-and-sandbox"
+      "--dangerously-bypass-approvals-and-sandbox",
+      "-c",
+      "features.fast_mode=true",
+      "-c",
+      "service_tier=default"
     ],
     "detect": [
       "codex"

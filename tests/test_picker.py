@@ -18,7 +18,7 @@ import settings
 class PickerTests(unittest.TestCase):
     def test_original_launch_settings_preserved(self):
         agents = {a["name"]: a for a in settings.load_agents()}
-        self.assertEqual(agents["Codex"]["argv"][1:], ["-m", "gpt-6.1-sol", "-c", "model_reasoning_effort=high", "--dangerously-bypass-approvals-and-sandbox"])
+        self.assertEqual(agents["Codex"]["argv"][1:], ["-m", "gpt-6.1-sol", "-c", "model_reasoning_effort=high", "--dangerously-bypass-approvals-and-sandbox", "-c", "features.fast_mode=true", "-c", "service_tier=default"])
         self.assertIn("--dangerously-skip-permissions", agents["Claude"]["argv"])
         self.assertIn("--trust-all-tools", agents["Kiro"]["argv"])
         self.assertEqual(list(agents)[:5], ["Claude", "Codex", "Antigravity", "Cursor", "Kiro"])
