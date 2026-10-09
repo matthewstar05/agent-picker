@@ -12,13 +12,28 @@ import usage_panel as panel
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 
 
+def painted_cells(text):
+    color, bold, out = None, False, []
+    for token in re.findall(r"\x1b\[[0-9;]*m|[^\x1b]", text):
+        if token == panel.RESET:
+            color, bold = None, False
+        elif token == panel.BOLD:
+            bold = True
+        elif token.startswith("\x1b[38;2;"):
+            color = tuple(map(int, token[7:-1].split(";")))
+        elif not token.startswith("\x1b["):
+            out.append((token, color, bold))
+    return out
+
+
 class UsageBorderTests(unittest.TestCase):
     def setUp(self):
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
         if hasattr(panel, "preferences"):
             for patcher in (patch.object(panel.preferences, "PATH", Path(folder.name) / "preferences.json"),
-                            patch.object(panel.preferences, "_values", {})):
+                            patch.object(panel.preferences, "_values", {}),
+                            patch.object(panel.CARDS_PAGE, "children", list(panel.CARDS_PAGE.children))):
                 patcher.start()
                 self.addCleanup(patcher.stop)
         self.saved = dict(panel.USAGE), dict(panel.WORKING)
@@ -135,7 +150,7 @@ class UsageBorderTests(unittest.TestCase):
             self.assertEqual(positions(cols, rows), expected, (cols, rows, "one limit"))
             panel.USAGE[names[0]] = entry
 
-    def test_themes_change_provider_borders_and_rainbow_title_and_percentage_colors(self):
+    def test_themes_change_provider_borders_titles_and_status_colors(self):
         view = self.view()
         now = time.time()
         panel.WORKING.update({a["name"]: 1 for a in view.agents})
@@ -155,8 +170,6 @@ class UsageBorderTests(unittest.TestCase):
         for i, agent in enumerate(view.agents):
             self.select_theme(view, "brand")
             baseline = panel.working_card(view, i, 50, 1.5, now)
-            title = cells(baseline[1])[4:4 + len(agent["name"])]
-            compact = cells(panel.compact_row(view, i, 80, 1.5, now))[3:3 + len(agent["name"])]
             for theme in panel.THEMES[1:]:
                 self.select_theme(view, theme["name"])
                 themed = panel.working_card(view, i, 50, 1.5, now)
@@ -169,9 +182,12 @@ class UsageBorderTests(unittest.TestCase):
                     self.assertEqual(cells(themed[1])[4:4 + len(agent["name"])], expected)
                     self.assertEqual(cells(row)[3:3 + len(agent["name"])], expected)
                 else:
-                    self.assertEqual(cells(themed[1])[4:4 + len(agent["name"])], title)
-                    self.assertEqual(cells(row)[3:3 + len(agent["name"])], compact)
-                dot_color = panel.WHITE if theme["name"] == "rainbow" else tuple(agent["color"])
+                    expected = [(ch, panel.mix(panel.ap.grad({"gradient": theme["stops"]},
+                                                            k / 11 - 1.5 * 0.24), panel.WHITE, 0.2))
+                                for k, ch in enumerate(agent["name"])]
+                    self.assertEqual(cells(themed[1])[4:4 + len(agent["name"])], expected)
+                    self.assertEqual(cells(row)[3:3 + len(agent["name"])], expected)
+                dot_color = panel.WHITE if theme["name"] == "rainbow" else expected[0][1]
                 self.assertEqual(cells(themed[1])[2][1], dot_color)
                 self.assertEqual(cells(row)[1][1], dot_color)
                 self.assertNotEqual(cells(row)[0][1], cells(panel.compact_row(view, i, 80, 2.5, now))[0][1])
@@ -209,6 +225,71 @@ class UsageBorderTests(unittest.TestCase):
                                 self.assertEqual(percentages[1], [panel.mix(panel.CONCERN, panel.SOFT, 0.5)
                                                                  if stale else panel.CONCERN] * 3)
                                 self.assertEqual(percentages[3], [panel.CONCERN] * 3)
+
+    def test_theme_palette_is_shared_by_every_provider_in_both_layouts(self):
+        view = panel.View(panel.ap.AGENTS, pinned=True)
+        now = time.time()
+        entry = panel.USAGE["Claude"]
+        for theme in panel.THEMES[1:]:
+            self.select_theme(view, theme["name"])
+            for workers in (0, 3):
+                with patch.dict(panel.PRESENT, {a["name"]: 12 for a in view.agents}, clear=True), \
+                        patch.dict(panel.WORKING, {a["name"]: workers for a in view.agents}, clear=True), \
+                        patch.dict(panel.USAGE, {a["name"]: entry for a in view.agents}, clear=True):
+                    shared = []
+                    for i, agent in enumerate(view.agents):
+                        full = [painted_cells(line) for line in panel.card(view, i, 66, 1.5, now)]
+                        compact = painted_cells(panel.compact_row(view, i, 80, 1.5, now))
+                        title_len = len(agent["name"] + " (12)")
+                        title = full[0][3:3 + title_len]
+                        self.assertEqual(title, compact[3:3 + title_len])
+                        self.assertTrue(all(bold for _, _, bold in title[:len(agent["name"])]))
+                        self.assertTrue(all(not bold for _, _, bold in title[len(agent["name"]):]))
+                        self.assertGreater(len({color for _, color, _ in title}), 1)
+                        plain = "".join(ch for ch, _, _ in full[0])
+                        status = full[0][plain.index("3 working"):] if workers else []
+                        shared.append(([color for _, color, _ in title[:4]], full[0][1][1], status,
+                                       [color for ch, color, _ in full[1] if ch == "▰"],
+                                       [color for ch, color, _ in compact if ch == "▰"]))
+                    for sample in shared[1:]:
+                        self.assertEqual(sample, shared[0], (theme["name"], workers))
+
+    def test_themed_titles_and_counts_stay_still_when_animation_is_off(self):
+        view = self.view()
+        now = time.time()
+        for theme in panel.THEMES[1:]:
+            self.select_theme(view, theme["name"])
+            panel.preferences.put(panel.ANIMATE.key, False)
+            for workers in (0, 3):
+                panel.WORKING.update({a["name"]: workers for a in view.agents})
+                for i in range(len(view.agents)):
+                    self.assertEqual(panel.card(view, i, 50, 1.5, now), panel.card(view, i, 50, 2.5, now))
+                    self.assertEqual(panel.compact_row(view, i, 80, 1.5, now),
+                                     panel.compact_row(view, i, 80, 2.5, now))
+
+    def test_panel_title_and_theme_tag_follow_theme_and_animation_setting(self):
+        view = self.view()
+        view.toast_until = time.time() + 60
+        titles = []
+        for theme in panel.THEMES:
+            self.select_theme(view, theme["name"])
+            first = painted_cells(panel.render(view, 80, 30, 1.5)[0])
+            later = painted_cells(panel.render(view, 80, 30, 2.5)[0])
+            plain = "".join(ch for ch, _, _ in first)
+            start = plain.index("usage")
+            title = first[start:start + 5]
+            titles.append(title)
+            if theme["name"] == "brand":
+                self.assertTrue(all(color == panel.TEXT for _, color, _ in title))
+            else:
+                self.assertGreater(len({color for _, color, _ in title}), 1)
+                self.assertNotEqual(title, later[start:start + 5])
+                tag_start = plain.index(theme["name"])
+                tag = first[tag_start:tag_start + len(theme["name"])]
+                self.assertNotEqual(tag, later[tag_start:tag_start + len(theme["name"])])
+                panel.preferences.put(panel.ANIMATE.key, False)
+                self.assertEqual(panel.render(view, 80, 30, 1.5)[0], panel.render(view, 80, 30, 2.5)[0])
+        self.assertEqual(len({tuple(title) for title in titles}), len(panel.THEMES))
 
 
 if __name__ == "__main__":

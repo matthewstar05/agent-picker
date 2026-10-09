@@ -170,14 +170,19 @@ class UsagePanelTests(unittest.TestCase):
             view = panel.View([agent])
             for theme in ("brand", "sunset", "rainbow"):
                 preferences.put(panel.THEME.key, theme)
-                expected = (panel.WHITE if theme == "rainbow" or agent.get("pastel") == "rainbow"
+                expected = (panel.WHITE if agent.get("pastel") == "rainbow"
                             else tuple(agent.get("pastel") or agent["color"]))
                 waves = []
                 for workers in (1, 3, 12):
                     first_count, first_wave = header(view, workers, 0.4)
                     next_count, next_wave = header(view, workers, 0.8)
-                    self.assertTrue(all(color == expected for _, color in first_count))
-                    self.assertEqual(first_count, next_count)
+                    if theme == "brand":
+                        self.assertTrue(all(color == expected for _, color in first_count))
+                        self.assertEqual(first_count, next_count)
+                    else:
+                        self.assertNotEqual(first_count, next_count)
+                        self.assertEqual(first_count[0][1], first_wave[0][1] if theme == "rainbow"
+                                         else panel.title_color(view.style(0), 0, 0.4))
                     self.assertNotEqual(first_wave, next_wave)
                     self.assertGreater(len({color for _, color in first_wave}), 1)
                     if theme == "rainbow":

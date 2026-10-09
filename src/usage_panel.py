@@ -661,10 +661,21 @@ def _spark(name, n, now):
     return [None if d is None else d / scale for d in deltas]
 
 
-def put_name(line, agent, t, bold=True, panes=None, rainbow=False):
+def title_color(style, pos, t):
+    """One readable text gradient, shared by every provider in a theme."""
+    phase = pos / 11 - t * 0.24
+    if style.get("gradient") == "rainbow":
+        return ap.rainbow_rgb(phase, 0.2)
+    return mix(ap.grad(style, phase), WHITE, 0.2)
+
+
+def put_name(line, agent, t, bold=True, panes=None, style=None):
     name = agent["name"]
     suffix = f" ({panes})" if panes is not None and panes > 1 else ""
-    if rainbow or agent.get("pastel") == "rainbow":
+    if style is not None:
+        for k, ch in enumerate(name + suffix):
+            line.put(ch, title_color(style, k, t), bold=bold and k < len(name))
+    elif agent.get("pastel") == "rainbow":
         for k, ch in enumerate(name + suffix):
             line.put(ch, ap.rainbow_rgb(k / 11 - t * 0.24, 0.2), bold=bold and k < len(name))
     else:
@@ -735,6 +746,7 @@ def card(view, i, cw, t, now, rows=3):
 def _card(view, i, cw, t, now, entry, fetching, working, dots=None, rows=3, panes=None, held=0):
     agent = view.agents[i]
     name, st = agent["name"], view.style(i)
+    themed = THEMES[view.theme]["stops"] is not None
     rainbow = THEMES[view.theme]["name"] == "rainbow"
     live = working > 0
     dots = int(t * 3) % 3 if dots is None else dots
@@ -744,13 +756,14 @@ def _card(view, i, cw, t, now, entry, fetching, working, dots=None, rows=3, pane
             panes = PRESENT.get(name, 0)
 
     head = Line().put(" ")
-    dot_color = WHITE if rainbow else agent["color"]
+    clock = t if view.anim else 0.0
+    dot_color = WHITE if rainbow else title_color(st, 0, clock) if themed else agent["color"]
     if live:
         head.put(SPIN[int(t * 6) % len(SPIN)], dot_color, bold=True)
     else:
         head.put("●", dot_color)
     head.put(" ")
-    put_name(head, agent, t, panes=panes, rainbow=rainbow)
+    put_name(head, agent, clock if themed else t, panes=panes, style=st if themed else None)
     if live:
         status, scol = f"{working} working", TEXT
     elif fetching:
@@ -786,11 +799,13 @@ def _card(view, i, cw, t, now, entry, fetching, working, dots=None, rows=3, pane
         lead = len(str(working)) + 1
         for k, ch in enumerate(status):
             if ch.isdigit():
-                color = count_color
+                color = title_color(st, k, clock) if themed else count_color
             else:
                 pos = k - lead
-                if rainbow:
-                    color = ap.rainbow_rgb(pos / 11 - clock * 0.24, 0.2)
+                if themed:
+                    color = title_color(st, pos, clock)
+                    if not rainbow:
+                        color = mix(color, WHITE, 0.3 * wave(pos, clock))
                 else:
                     hue = ap.grad(st, pos / 7 * 0.7 - clock * 0.15)
                     color = mix(hue, WHITE, 0.2 + 0.3 * wave(pos, clock))
@@ -816,7 +831,8 @@ def _card(view, i, cw, t, now, entry, fetching, working, dots=None, rows=3, pane
             tail_w = 12 if cw - 6 - 5 - 12 >= 6 else 0
             bar = min(40, cw - 6 - 5 - tail_w - 1)
             if bar >= 3:
-                draw_bar(line, w, bar, st, t if view.anim else 0, live and view.anim, stale, now, i * 0.13,
+                draw_bar(line, w, bar, st, t if view.anim else 0, live and view.anim, stale, now,
+                         0 if themed else i * 0.13,
                          pulses=max(1, min(working, 4)), white=rainbow and not live)
             pcol = pct_color(w, st, now)
             pcol = WHITE if rainbow else (mix(pcol, SOFT, 0.5) if stale else pcol)
@@ -849,14 +865,15 @@ def compact_row(view, i, width, t, now):
     border_space = width >= 4
     if border_space:
         width -= 2
-    t = t if view.anim else 0.4
+    t = (t if view.anim else 0.4) if brand else (t if working and view.anim else 0.0)
     line = Line()
     dot = SPIN[int(t * 12) % len(SPIN)] if working else "●"
-    line.put(dot, WHITE if rainbow else agent["color"]).put(" ")
+    dot_color = WHITE if rainbow else agent["color"] if brand else title_color(st, 0, t)
+    line.put(dot, dot_color).put(" ")
     suffix = f" ({panes})" if panes > 1 else ""
     name_w = min(max(11, len(name) + len(suffix)), max(4, width // 2))
     start = len(line.cells)
-    put_name(line, agent, t, panes=panes, rainbow=rainbow)
+    put_name(line, agent, t, panes=panes, style=None if brand else st)
     del line.cells[start + name_w:]
     line.pad(start + name_w)
     if entry:
@@ -870,7 +887,8 @@ def compact_row(view, i, width, t, now):
             line.put(" " + w["label"].ljust(2) + " ", LABEL)
             bar = min(16, share - 9)
             if bar >= 2:
-                draw_bar(line, w, bar, st, t if view.anim else 0, False, False, now, i * 0.13,
+                draw_bar(line, w, bar, st, t if view.anim else 0, False, False, now,
+                         i * 0.13 if brand else 0,
                          white=rainbow and not working)
             line.put(f"{shown_pct(w['pct']):4.0f}%", WHITE if rainbow else pct_color(w, st, now), bold=True)
             line.pad(max(len(line.cells), seg_start + share))
@@ -905,10 +923,11 @@ def plan(n, width, height, heights=None):
     return None
 
 
-def overlay(cells, col, text, color, bold=False):
+def overlay(cells, col, text, color, bold=False, style=None, t=0.0):
     for k, ch in enumerate(text):
         if 0 <= col + k < len(cells):
-            cells[col + k] = f"{ap.fg(color)}{BOLD if bold else ''}{ch}{RESET}"
+            shade = title_color(style, k, t) if style is not None else color
+            cells[col + k] = f"{ap.fg(shade)}{BOLD if bold else ''}{ch}{RESET}"
 
 
 def working_card(view, i, width, t, now, lids=True, active=True, height=None):
@@ -1008,16 +1027,19 @@ def render(view, cols, rows, t):
     bottom = [ring[(rows - 1, c)] for c in range(cols)]
 
     # title, and the theme name (bright for a moment after switching)
+    themed = THEMES[view.theme]["stops"] is not None
+    text_style = view.frame_style() if themed else None
+    clock = t if view.anim else 0.0
     star = mix((225, 165, 40), (255, 222, 120), wave(0, t, speed=3.0)) if view.anim else (240, 195, 80)
     overlay(top, 2, " ", TEXT)
-    overlay(top, 3, "✦", star)
+    overlay(top, 3, "✦", star, style=text_style, t=clock)
     titles = (" usage · every provider ", " usage · all ") if view.peeking() else ()
     title = next((h for h in titles if 4 + len(h) + 2 <= cols), " usage ")
-    overlay(top, 4, title, TEXT, bold=True)
+    overlay(top, 4, title, TEXT, bold=True, style=text_style, t=clock)
     th = THEMES[view.theme]["name"]
     tag = f" ◂ {th} ▸ "
     if now < view.toast_until and cols >= 5 + len(title) + len(tag) + 3:
-        overlay(top, cols - 2 - len(tag), tag, TEXT, bold=True)
+        overlay(top, cols - 2 - len(tag), tag, TEXT, bold=True, style=text_style, t=clock)
 
     with LOCK:
         active = [WORKING.get(a["name"], 0) > 0 for a in view.agents]
