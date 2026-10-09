@@ -62,6 +62,31 @@ class UsagePanelTests(unittest.TestCase):
                     text = "".join(line) if isinstance(line, tuple) else line
                     self.assertLessEqual(len(ANSI.sub("", text)), cols, (cols, rows, text))
 
+    def test_bars_deplete_by_default_and_can_fill_instead(self):
+        now = time.time()
+        w = {"label": "5h", "pct": 25, "resets": now + 4 * 3600}
+        def bar():
+            line = panel.Line()
+            panel.draw_bar(line, w, 20, {"color": (200, 100, 50), "gradient": [(200, 100, 50)]}, 0, False,
+                           False, now, 0)
+            return ANSI.sub("", line.paint())
+        self.assertEqual(preferences.get(panel.BARS.key), "left")
+        self.assertEqual(bar(), "▰" * 15 + "▱" * 5)
+        self.assertEqual(panel.shown_pct(25), 75)
+        preferences.put(panel.BARS.key, "used")
+        self.assertEqual(bar(), "▰" * 5 + "▱" * 15)
+        self.assertEqual(panel.shown_pct(25), 25)
+
+    def test_card_shows_what_is_left_when_depleting(self):
+        view = self.view()
+        now = time.time()
+        entry = panel.USAGE["Claude"]
+        text = ANSI.sub("", "".join(panel._card(view, 0, 50, 0, now, entry, False, 0)))
+        self.assertIn("37%", text)
+        preferences.put(panel.BARS.key, "used")
+        text = ANSI.sub("", "".join(panel._card(view, 0, 50, 0, now, entry, False, 0)))
+        self.assertIn("63%", text)
+
     def test_every_framed_row_spans_the_pane(self):
         # the redraw puts each row's right edge at a fixed column, so a short row
         # (an incomplete last grid row) would leave last frame's cells frozen there
@@ -415,14 +440,47 @@ class CardScopeTests(unittest.TestCase):
                                         "OpenCode": {"panes": 1, "working": 0}, "Kiro": {"panes": 1, "working": 1}})
         self.assertEqual(working, {"Codex": {"w:p3"}, "Kiro": {"v:p6"}})
 
-    def test_card_settings_list_under_the_usage_panel_heading(self):
+    def test_card_settings_live_on_the_provider_cards_page(self):
         sections = [s.section for s in preferences.SETTINGS]
         usage = [i for i, s in enumerate(sections) if s == "Usage panel"]
         self.assertEqual(usage, list(range(usage[0], usage[-1] + 1)))
         keys = [preferences.SETTINGS[i].key for i in usage]
         self.assertEqual(keys[:2], [panel.THEME.key, panel.ANIMATE.key])
-        self.assertIn(panel.CARD_KEY + "Codex", keys)
+        self.assertIn(panel.CARDS_PAGE.key, keys)
+        self.assertNotIn(panel.CARD_KEY + "Codex", keys)
+        self.assertIn(panel.CARD_KEY + "Codex", [c.key for c in panel.CARDS_PAGE.children])
         self.assertEqual(preferences.get(panel.CARD_KEY + "Codex"), "all")
+
+    def test_turning_a_card_off_hides_it_until_tab_is_held(self):
+        preferences.put(panel.UNIVERSAL.key, True)
+        preferences.put(panel.CARD_KEY + "Codex", "off")
+        panel.rescope()
+        self.assertEqual(self.names(), ["Claude", "Kiro"])
+        self.assertEqual(panel.CARDS_PAGE.show(), f"{len(panel.CARDS_PAGE.children) - 1} of "
+                                                  f"{len(panel.CARDS_PAGE.children)} on")
+        self.view.peek_until = time.time() + 60
+        self.assertIn("Codex", self.names())
+
+    def test_provider_cards_page_opens_toggles_and_closes(self):
+        menu = preferences.Menu()
+        menu.index = preferences.SETTINGS.index(panel.CARDS_PAGE)
+        menu.handle("\r")
+        self.assertIs(menu.page, panel.CARDS_PAGE)
+        self.assertEqual(menu.items, panel.CARDS_PAGE.children)
+        key = menu.items[0].key
+        menu.handle("right")
+        self.assertEqual(preferences.get(key), "workspace")
+        menu.handle(" ")
+        self.assertEqual(preferences.get(key), "off")
+        menu.handle(" ")
+        self.assertEqual(preferences.get(key), "workspace")   # back to what it was
+        text = ANSI.sub("", "\n".join(agent_picker.render_settings(menu, 80, 30, 0.5, panel.BRAND_FRAME)))
+        self.assertIn("settings › provider cards", text)
+        self.assertIn("on · this workspace", text)
+        self.assertIsNone(menu.handle("esc"))   # back to the top level, still open
+        self.assertIsNone(menu.page)
+        self.assertIs(menu.items[menu.index], panel.CARDS_PAGE)
+        self.assertEqual(menu.handle("esc"), "close")
 
 
 @unittest.skipIf(os.name == "nt", "POSIX input decoding; Windows reads keys through msvcrt")

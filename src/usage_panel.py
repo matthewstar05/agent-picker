@@ -9,15 +9,18 @@ agent is re-read often, and a provider is re-read a few seconds after one of its
 agents finishes a turn (that is when the numbers move). Idle providers are read
 rarely, so the usage endpoints are never hammered.
 
-Each bar is lit up to what's been used. The track behind it is brighter up to
-where an even pace through the window would be by now, and any part of the bar
-past that point is drawn as is. A limit turns a muted red only when it is 70%
-used with its reset still far off (see concerning()).
+By default each bar depletes: it starts full and empties as the limit is used,
+and the percentage is what's left. The track behind it is brighter down to where
+an even pace through the window would have left it by now, so the gap shows how
+far ahead of pace the usage is. The Bars setting switches to filling bars, lit up
+to what's been used. A limit turns a muted red only when it is 70% used with its
+reset still far off (see concerning()).
 
-Which agents count toward a card is a setting per provider: every Herdr
-workspace (the default), this workspace, this tab, or always shown, even with
-none open. A card appears once its provider is open in this tab, or wider with
-universal display.
+Provider cards (a settings page) lists every provider found on this computer.
+Each one's card is off, or counts its agents in every Herdr workspace (the
+default), this workspace or this tab, or is always shown, even with none open.
+A card appears once its provider is open in this tab, or wider with universal
+display. Off cards still show while Tab is held.
 
 Keys: t / → next theme, T / ← previous, r refresh now, a toggle animation,
 hold Tab to see every connected provider until it's let go, s settings,
@@ -88,6 +91,21 @@ ANIMATE = preferences.register(preferences.Setting(
     hint="Off redraws once a second and uses almost no CPU. a toggles it there too.",
     names={True: "on", False: "off"}))
 
+BARS = preferences.register(preferences.Setting(
+    "usage.bars", "Usage panel", "Bars", ["left", "used"], "left",
+    hint="Depleting bars start full and empty as a limit is used; filling bars grow toward 100%.",
+    names={"left": "depleting", "used": "filling"}))
+
+
+def depleting():
+    return preferences.get(BARS.key) == "left"
+
+
+def shown_pct(pct):
+    """The number beside a bar: what's left of the limit, or what's been used."""
+    return max(0.0, 100 - pct) if depleting() else pct
+
+
 # Scopes, narrowest first: this pane's Herdr tab, its workspace, every workspace.
 SCOPE_ORDER = ["tab", "workspace", "all"]
 
@@ -102,20 +120,30 @@ COUNT = preferences.register(preferences.Setting(
     names={"all": "all workspaces", "workspace": "this workspace", "tab": "single tab"}))
 
 CARD_KEY = "usage.card."
-CARD_NAMES = {"all": "all workspaces", "workspace": "this workspace", "tab": "this tab",
-              "always": "always shown"}
+CARD_NAMES = {"all": "on · all workspaces", "workspace": "on · this workspace", "tab": "on · this tab",
+              "always": "on · always shown", "off": "off"}
+
+
+def cards_summary(children):
+    on = sum(preferences.get(s.key) != "off" for s in children)
+    return f"{on} of {len(children)} on"
+
+
+CARDS_PAGE = preferences.register(preferences.Page(
+    "usage.cards", "Usage panel", "Provider cards",
+    hint="Turn each provider found on this computer on or off. ⏎ opens.", summary=cards_summary))
 
 
 def card_setting(name):
-    """The settings row for which agents a provider's card counts."""
+    """The Provider cards row: off, or which agents a provider's card counts."""
     return preferences.register(preferences.Setting(
-        CARD_KEY + name, "Usage panel", f"{name} card", list(CARD_NAMES), "all",
-        hint=f"Count {name} agents anywhere, in this workspace or this tab, or always show its card.",
-        names=CARD_NAMES))
+        CARD_KEY + name, "Provider cards", name, list(CARD_NAMES), "all",
+        hint=f"⏎ turns {name}'s card on or off. ←→ picks where its agents count.",
+        names=CARD_NAMES, off="off"), parent=CARDS_PAGE)
 
 
 def card_mode(name):
-    """A scope or "always"; a provider without a settings row counts every workspace."""
+    """A scope, "always" or "off"; a provider without a settings row counts every workspace."""
     return preferences.get(CARD_KEY + name) if preferences.find(CARD_KEY + name) else "all"
 
 
@@ -331,14 +359,17 @@ def rescope():
         WORKING.clear()
         for name in SESSIONS["all"]:
             mode = card_mode(name)
+            if mode == "off":
+                continue
             slot = SESSIONS["all" if mode == "always" else mode].get(name)
             if slot and (mode == "always" or name in SESSIONS[reach]):
                 PRESENT[name] = counted.get(name, {}).get("panes", 0)
                 if slot["working"]:
                     WORKING[name] = slot["working"]
         # A card needs its provider both within reach and within its own scope.
-        modes = [preferences.get(s.key) for s in preferences.SETTINGS if s.key.startswith(CARD_KEY)]
-        widest = max((min(SCOPE_ORDER.index(reach), SCOPE_ORDER.index(m)) for m in modes if m != "always"),
+        modes = [preferences.get(s.key) for s in CARDS_PAGE.children]
+        widest = max((min(SCOPE_ORDER.index(reach), SCOPE_ORDER.index(m)) for m in modes
+                      if m in SCOPE_ORDER),
                      default=SCOPE_ORDER.index(reach))
         SCOPE = SCOPES[SCOPE_ORDER[widest]]
 
@@ -646,6 +677,10 @@ def draw_bar(line, w, bar, st, t, live, stale, now, offset, pulses=1, white=Fals
     pct = min(100.0, w["pct"])
     concern = concerning(w, now)
     frac, _ = pace(w, now)
+    if depleting():
+        # Lit for what's left; the brighter track runs on to where an even pace
+        # would have left the bar by now, so it shows only when ahead of pace.
+        pct, frac = 100 - pct, None if frac is None else 1 - frac
     filled = round(pct / 100 * bar)
     if pct >= 0.5 and filled == 0:
         filled = 1
@@ -689,11 +724,11 @@ def card(view, i, cw, t, now, rows=3):
     # Working cards share the border's continuous 60 fps clock. Idle cards
     # still reuse their cached contents between countdown updates.
     step = t if working and view.anim else 0.0
-    key = (i, name, cw, rows, view.theme, view.anim, int(now), entry and entry["fetched"], fetching,
+    key = (i, name, cw, rows, view.theme, view.anim, depleting(), int(now), entry and entry["fetched"], fetching,
            int(t * 3) % 3 if fetching else 0, working, len(HISTORY.get(name) or ()), step, panes, held)
     if CARDS.get(i, (None,))[0] != key:
         CARDS[i] = (key, _card(view, i, cw, step, now, entry, fetching, working,
-                             dots=key[9], rows=rows, panes=panes, held=held))
+                             dots=key[10], rows=rows, panes=panes, held=held))
     return CARDS[i][1]
 
 
@@ -785,7 +820,7 @@ def _card(view, i, cw, t, now, entry, fetching, working, dots=None, rows=3, pane
                          pulses=max(1, min(working, 4)), white=rainbow and not live)
             pcol = pct_color(w, st, now)
             pcol = WHITE if rainbow else (mix(pcol, SOFT, 0.5) if stale else pcol)
-            line.put(f" {pct:3.0f}%", pcol, bold=True)
+            line.put(f" {shown_pct(pct):3.0f}%", pcol, bold=True)
             if tail_w and tail:
                 line.put("  " + tail, CONCERN if concerning(w, now) else (TEXT if live else SOFT))
             lines.append(line.pad(cw))
@@ -837,7 +872,7 @@ def compact_row(view, i, width, t, now):
             if bar >= 2:
                 draw_bar(line, w, bar, st, t if view.anim else 0, False, False, now, i * 0.13,
                          white=rainbow and not working)
-            line.put(f"{w['pct']:4.0f}%", WHITE if rainbow else pct_color(w, st, now), bold=True)
+            line.put(f"{shown_pct(w['pct']):4.0f}%", WHITE if rainbow else pct_color(w, st, now), bold=True)
             line.pad(max(len(line.cells), seg_start + share))
     else:
         line.put(" ··", SOFT)

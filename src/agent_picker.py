@@ -466,6 +466,7 @@ def usage_block(name, now_t, bar, reset):
         dots = "·" * (1 + int(now_t * 3) % 3) if pending else "-"
         return [[(dots.ljust(3), SOFT, False)], []]
     stale = time.time() - entry.get("fetched", 0) > 3600 and not pending
+    left = preferences.get("usage.bars") != "used"   # the usage panel's Bars setting
     for w in entry["windows"][:2]:
         pct = w["pct"]
         if w.get("resets") and w["resets"] < time.time():
@@ -473,12 +474,12 @@ def usage_block(name, now_t, bar, reset):
         color = mix(heat(pct), SOFT, 0.5) if stale else heat(pct)
         parts = [(w["label"] + " ", LABEL, False)]
         if bar and w["label"] != "mo":
-            filled = round(min(100, pct) / 100 * bar)
+            filled = round((100 - min(100, pct) if left else min(100, pct)) / 100 * bar)
             parts.append(("▰" * filled, color, False))
             parts.append(("▱" * (bar - filled) + " ", TRACK, False))
         elif bar:
             parts.append((" " * (bar + 1), None, False))
-        parts.append((f"{pct:3.0f}%", color, True))
+        parts.append((f"{max(0, 100 - pct) if left else pct:3.0f}%", color, True))
         if reset:
             parts.append((f"  ↻ {until(w.get('resets')):<7}", SOFT, False))
         lines.append(parts)
@@ -883,9 +884,12 @@ def render_back_confirmation(menu, choice, cols, rows, t=0):
 
 
 def render_settings(menu, cols, rows, t, accent):
-    """The settings screen: every registered setting, grouped by section."""
+    """The settings screen: every registered setting, grouped by section, or
+    the page opened from it."""
     items = menu.items
     index = min(menu.index, len(items) - 1)
+    page = getattr(menu, "page", None)
+    title = "settings" + (f" › {page.label.lower()}" if page else "")
     iw = min(MAX_IW, cols - 2)
     if iw < 26 or rows < 5:
         lines = []
@@ -903,7 +907,8 @@ def render_settings(menu, cols, rows, t, accent):
         return f"{edge}│{RESET}{content}{' ' * max(0, iw - visible)}{edge}│{RESET}"
 
     star = fg(mix((225, 165, 40), (255, 222, 120), wave(0, t, speed=3.0))) + "✦" + RESET
-    top = f"{edge}╭─{RESET} {star} {BOLD}settings{RESET} {edge}{'─' * (iw - 13)}╮{RESET}"
+    title = clip(title, iw - 8)
+    top = f"{edge}╭─{RESET} {star} {BOLD}{title}{RESET} {edge}{'─' * (iw - 5 - len(title))}╮{RESET}"
 
     body = []   # (kind, line); kinds let short terminals drop the extras first
     section = None
@@ -915,14 +920,15 @@ def render_settings(menu, cols, rows, t, accent):
             body.append(("head", framed("  " + fg(LABEL) + clip(section.upper(), bw) + RESET, 2 + min(len(section), bw))))
         value = setting.show(preferences.get(setting.key))
         line = Line()
+        opens = isinstance(setting, preferences.Page)
         if i == index:
             line.put(" ❯ ", (255, 255, 255)).put(clip(setting.label, bw - 8), (245, 245, 245), bold=True)
-            shown = f"◂ {value} ▸ "
+            shown = f"{value} ▸ " if opens else f"◂ {value} ▸ "
             line.at(max(len(line.cells) + 2, bw - len(shown)), clip(shown, bw // 2), (255, 255, 255), bold=True)
             painted = lit([line.pad(bw)], accent, t)[0]
         else:
             line.put("   ").put(clip(setting.label, bw - 8), (205, 205, 212))
-            shown = f"{value}   "
+            shown = f"{value} ▸ " if opens else f"{value}   "
             line.at(max(len(line.cells) + 2, bw - len(shown)), clip(shown, bw // 2), SOFT)
             painted = line.pad(bw).paint()
         body.append(("row" if i != index else "selected", framed("  " + painted, bw + 2)))
@@ -931,7 +937,13 @@ def render_settings(menu, cols, rows, t, accent):
         body.append(("gap", framed("", 0)))
         body.append(("hint", framed("  " + FAINT + clip(hint, bw) + RESET, 2 + min(len(hint), bw))))
 
-    hints = [" ↑↓ move · ←→ change · esc back ", " ←→ change · esc back ", " esc back ", ""]
+    if isinstance(items[index] if items else None, preferences.Page):
+        hints = [" ↑↓ move · ⏎ open · esc back ", " ⏎ open · esc back ", " esc back ", ""]
+    elif page:
+        hints = [" ↑↓ move · ⏎ on/off · ←→ change · esc back ", " ⏎ on/off · ←→ change · esc back ",
+                 " ←→ change · esc back ", " esc back ", ""]
+    else:
+        hints = [" ↑↓ move · ←→ change · esc back ", " ←→ change · esc back ", " esc back ", ""]
     hint_text = next(h for h in hints if len(h) <= iw - 2)
     bottom = f"{edge}╰─{RESET}{FAINT}{hint_text}{RESET}{edge}{'─' * (iw - 1 - len(hint_text))}╯{RESET}"
 
