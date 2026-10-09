@@ -75,7 +75,7 @@ Updates are explicit, use `git pull --ff-only`, and refuse a dirty checkout. If 
 
 ## herdr-ai, agent-route and herdr-reset
 
-Run `herdr-ai` in a herdr pane to lay out that tab as the workbench: Antigravity, Codex, Cursor or Kiro, the agent selector, Claude, the usage panel, and a terminal along the bottom. The pane you ran it from becomes that terminal. Nothing else on the tab is touched, and no new tab is created. Outside herdr it opens a new workspace and attaches. An optional label renames the tab; otherwise the tab is named after the directory.
+Run `herdr-ai` in a herdr pane to lay out that tab as the workbench: Antigravity, Codex, Cursor or Kiro, the agent selector, Claude, the usage panel, and a terminal along the bottom. The pane you ran it from becomes that terminal. Nothing else on the tab is touched, and no new tab is created. Outside herdr it opens a new workspace and attaches. An optional label renames the tab; otherwise the tab is named after the directory, unless you already renamed it in herdr (herdr names new tabs with a number).
 
 In the five Standard agent panes, quitting an agent (`/quit`, `/exit`, or Ctrl+C or Ctrl+D) reopens the agent selector in that pane, so you can switch the pane to another provider. Esc or q in that selector leaves you at the pane's shell. Rerouting keeps the provider you switched to. Teams and plain `agent` runs still exit to the shell.
 

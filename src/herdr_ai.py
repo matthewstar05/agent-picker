@@ -168,6 +168,20 @@ class Herdr:
         return self("pane", "process-info", "--pane", pane).get("process_info", {})
 
 
+def follow_directory(herdr, entry, label):
+    """Rename the tab to label unless someone renamed it in herdr.
+
+    Herdr numbers new tabs, so a number or the label herdr-ai last set
+    means the name is still ours to change.
+    """
+    tab = os.environ["HERDR_TAB_ID"]
+    current = str(herdr("tab", "get", tab).get("tab", {}).get("label", ""))
+    if current.isdigit() or current == (entry or {}).get("label"):
+        herdr("tab", "rename", tab, label)
+        if entry is not None:
+            entry["label"] = label
+
+
 def busy(info):
     """Foreground process group of a pane running something besides its shell."""
     pgid, shell = info.get("foreground_process_group_id"), info.get("shell_pid")
@@ -531,9 +545,12 @@ def main(argv=None, herdr=None, cwd=None):
         live = herdr.tab_panes(os.environ["HERDR_WORKSPACE_ID"], os.environ["HERDR_TAB_ID"])
         entry = state[key] = {"panes": panes, "auto_label": auto, "team": team,
                               "terminals": {p: live.get(p, {}).get("terminal_id") for p in panes.values()}}
-    # An explicit label sticks; otherwise the tab follows the directory.
-    if not auto or entry["auto_label"]:
+    # An explicit label sticks; otherwise the tab follows the directory
+    # unless it was renamed in herdr.
+    if not auto:
         herdr("tab", "rename", os.environ["HERDR_TAB_ID"], label)
+    elif entry["auto_label"]:
+        follow_directory(herdr, entry, label)
     save_state(state)
     sidebar_update(lambda: herdr_sidebar.sync(state))
     return 0
@@ -567,7 +584,8 @@ def route_main(argv, herdr=None, cwd=None):
     report("agent-route", route(herdr, cwd, recorded, everything=True,
                                 commands=entry_commands(entry, recorded)), cwd)
     if entry and entry.get("auto_label", True):
-        herdr("tab", "rename", os.environ["HERDR_TAB_ID"], Path(cwd).name or "home")
+        follow_directory(herdr, entry, Path(cwd).name or "home")
+        save_state(state)
     return 0
 
 
@@ -592,7 +610,7 @@ def reset_main(argv, herdr=None, cwd=None):
     if entry is not None:
         save_state(state)
     if entry is None or entry.get("auto_label", True):
-        herdr("tab", "rename", os.environ["HERDR_TAB_ID"], Path(cwd).name or "home")
+        follow_directory(herdr, entry, Path(cwd).name or "home")
     print(f"herdr-reset: closed {len(others)} pane{'s' * (len(others) != 1)}")
     return 0
 

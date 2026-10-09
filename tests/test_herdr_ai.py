@@ -23,12 +23,18 @@ class FakeHerdr:
         self.next_id = 1
         # pane id -> {"agent": ..., "argv": [...]} for panes on the tab; None argv = idle shell.
         self.panes = {"w9:p1": {}}
+        self.label = "1"   # herdr numbers new tabs
 
     def __call__(self, argv, **kwargs):
         args = argv[1:]
         self.calls.append(args)
         if args[:2] in (["workspace", "create"], ["tab", "create"]):
             result = {"root_pane": {"pane_id": "w9:p1"}}
+        elif args[:2] == ["tab", "get"]:
+            result = {"tab": {"tab_id": args[2], "label": self.label}}
+        elif args[:2] == ["tab", "rename"]:
+            self.label = args[3]
+            result = {}
         elif args[:2] == ["pane", "split"]:
             self.next_id += 1
             pane = f"w9:p{self.next_id}"
@@ -282,6 +288,27 @@ class HerdrAiTests(unittest.TestCase):
         self.fake.start_agents()
         self.run_cli(INSIDE, cwd=ROOT / "src")
         self.assertFalse([c for c in self.fake.calls if c[:2] == ["tab", "rename"]])
+
+    def test_tab_renamed_in_herdr_keeps_its_name(self):
+        self.fake.label = "api work"
+        self.run_cli(INSIDE, cwd=ROOT)
+        self.assertFalse([c for c in self.fake.calls if c[:2] == ["tab", "rename"]])
+
+    def test_tab_renamed_in_herdr_after_layout_keeps_its_name(self):
+        self.run_cli(INSIDE, cwd=ROOT)
+        self.fake.start_agents()
+        self.fake.label = "api work"
+        self.run_cli(INSIDE, cwd=ROOT / "src")
+        self.run_cli(INSIDE, cwd=ROOT, entry=herdr_ai.route_main)
+        self.run_cli(INSIDE, cwd=ROOT, entry=herdr_ai.reset_main)
+        self.assertFalse([c for c in self.fake.calls if c[:2] == ["tab", "rename"]])
+        self.assertEqual(self.fake.label, "api work")
+
+    def test_agent_route_follows_the_directory_it_named(self):
+        self.run_cli(INSIDE, cwd=ROOT)
+        self.fake.start_agents()
+        self.run_cli(INSIDE, cwd=ROOT / "src", entry=herdr_ai.route_main)
+        self.assertEqual(self.fake.label, "src")
 
     def test_agent_route_restarts_every_agent_on_the_tab_only(self):
         self.fake.panes.update({
