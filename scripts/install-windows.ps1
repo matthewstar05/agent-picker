@@ -93,7 +93,7 @@ Remove-Item Alias:agent -ErrorAction SilentlyContinue
 Remove-Item Alias:agent-picker -ErrorAction SilentlyContinue
 function global:agent { & '$escapedPython' '$escapedEntry' @args }
 function global:agent-picker { & '$escapedPython' '$escapedEntry' @args }
-function global:usage { & '$escapedPython' '$escapedEntry' @args }
+function global:usage { & '$escapedPython' '$escapedEntry' --picker-usage @args }
 function global:herdr-ai { & '$escapedPython' '$escapedHerdrAi' @args }
 function global:agent-route { & '$escapedPython' '$escapedAgentRoute' @args }
 function global:herdr-reset { & '$escapedPython' '$escapedHerdrReset' @args }

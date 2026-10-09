@@ -138,6 +138,8 @@ class DefaultsTests(unittest.TestCase):
                 return next(keys)
             def write(self, text):
                 frames.append(text)
+            def keyboard(self, enhanced):
+                pass
         with tempfile.TemporaryDirectory() as folder, ExitStack() as stack:
             path = Path(folder) / "config.json"
             agents = list(self.agents().values())[:5]
@@ -180,6 +182,8 @@ class DefaultsTests(unittest.TestCase):
                 return next(keys)
             def write(self, text):
                 frames.append(text)
+            def keyboard(self, enhanced):
+                pass
         with tempfile.TemporaryDirectory() as folder, ExitStack() as stack:
             path = Path(folder) / "config.json"
             stack.enter_context(patch.dict(os.environ, AGENT_PICKER_CONFIG=str(path)))

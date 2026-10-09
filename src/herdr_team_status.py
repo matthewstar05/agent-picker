@@ -270,7 +270,7 @@ def run():
                 if selected != previous_settings:
                     sidebar.sync(socket_path=path, call=call, migrate=False)
                     previous_settings = selected
-            except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
+            except Exception as exc:   # an odd herdr reply must not stop the watcher
                 print(f"herdr-ai status: {exc}", file=sys.stderr, flush=True)
                 refreshed.clear()
                 spaces_refreshed.clear()

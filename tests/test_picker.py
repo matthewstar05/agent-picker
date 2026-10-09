@@ -4,6 +4,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -128,6 +129,51 @@ class PickerTests(unittest.TestCase):
             self.assertEqual(Path(data["cwd"]).resolve(), folder.resolve())
             self.assertEqual((folder / "state/last").read_text(), "Claude")
 
+    @unittest.skipIf(os.name == "nt", "needs a POSIX pty")
+    def test_return_mode_reopens_selector_after_agent_quits(self):
+        import fcntl, pty, select, struct, termios
+        with tempfile.TemporaryDirectory(prefix="picker test ") as folder:
+            folder = Path(folder)
+            marker = folder / "ran"
+            script = folder / "fake cli.py"
+            script.write_text("import sys\nfrom pathlib import Path\nPath(sys.argv[1]).write_text('yes')\n")
+            config = folder / "config.json"
+            config.write_text(json.dumps({"agents": {"Claude": {"argv": [sys.executable, str(script), str(marker)]}}}))
+            env = dict(os.environ, AGENT_PICKER_CONFIG=str(config), AGENT_PICKER_STATE_HOME=str(folder / "state"),
+                       AGENT_PICKER_NO_PRETRUST="1", TERM="xterm-256color")
+            pid, fd = pty.fork()
+            if pid == 0:
+                os.chdir(folder)
+                os.execve(sys.executable, [sys.executable, str(ROOT / "src/agent_picker.py"),
+                                           "--picker-return", "--picker-launch", "Claude"], env)
+            fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))
+            screen, deadline = b"", time.monotonic() + 15
+            try:
+                while b"launch" not in screen and time.monotonic() < deadline:
+                    if select.select([fd], [], [], 0.2)[0]:
+                        screen += os.read(fd, 65536)
+                self.assertEqual(marker.read_text(), "yes")
+                self.assertIn(b"launch", screen)   # the selector's footer
+                os.write(fd, b"\x1b")   # Esc leaves for the shell
+                while time.monotonic() < deadline:
+                    done, status = os.waitpid(pid, os.WNOHANG)
+                    if done:
+                        break
+                    if select.select([fd], [], [], 0.2)[0]:
+                        try:
+                            os.read(fd, 65536)
+                        except OSError:
+                            pass
+                self.assertEqual(done, pid)
+                self.assertEqual(os.waitstatus_to_exitcode(status), 0)
+            finally:
+                try:
+                    os.kill(pid, 9)
+                    os.waitpid(pid, 0)
+                except (ProcessLookupError, ChildProcessError):
+                    pass
+                os.close(fd)
+
     @unittest.skipUnless(os.name == "nt", "Windows batch shims")
     def test_windows_batch_provider(self):
         with tempfile.TemporaryDirectory(prefix="picker batch ") as folder:
@@ -216,6 +262,7 @@ class PickerTests(unittest.TestCase):
             self.assertEqual(text.count("# >>> agent-picker managed >>>"), 1)
             self.assertIn("export KEEP=1", text)
             self.assertTrue(text.endswith("# keep-bottom\n"))
+            self.assertIn(f"alias usage='{home}/.local/bin/agent-picker --picker-usage'", text)
             wrapper = home / ".local/bin/agent-picker"
             self.assertIn(str(ROOT / "src/agent_picker.py"), wrapper.read_text())
             result = subprocess.run([str(wrapper), "--picker-doctor"], env=env, capture_output=True, text=True)

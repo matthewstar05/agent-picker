@@ -44,7 +44,7 @@ STATE = state_dir()
 
 START = preferences.register(preferences.Setting(
     "start", "General", "Opens on", ["agents", "usage"], "agents",
-    hint="The screen agent and usage open on. u switches between them anytime.",
+    hint="The screen agent opens on; usage always opens the usage panel. u switches anytime.",
     names={"agents": "agent selector", "usage": "usage panel"}))
 
 ESC = "\x1b"
@@ -327,9 +327,14 @@ def load_usage():
         pass
 
 
+def numeric_windows(windows):
+    """Drop limits a provider reported without a number (a null utilization)."""
+    return [w for w in windows or [] if isinstance(w.get("pct"), (int, float))]
+
+
 def _fetch(name):
     try:
-        windows = FETCHERS[name]()
+        windows = numeric_windows(FETCHERS[name]())
     except Exception:
         windows = None
     with USAGE_LOCK:
@@ -975,6 +980,8 @@ class Screen:
                 # Erase first: with autowrap off, a trailing erase would wipe a
                 # row's last cell when that row fills the width.
                 out.append(f"{ESC}[{y + 1};1H{ESC}[2K{row}")
+        # A shorter frame (a card closed in a compact pane) leaves rows behind.
+        out += [f"{ESC}[{y + 1};1H{ESC}[2K" for y in range(len(frame), min(len(self.rows), rows))]
         self.rows = frame
         if out or clear:
             self.terminal.write(f"{ESC}[?2026h{clear}{''.join(out)}{ESC}[?2026l")
@@ -1040,6 +1047,7 @@ def choose(screen=None, only=None):
         # can never wrap and smear.
         cols, rows = shutil.get_terminal_size((80, 24))
         t = time.monotonic() - start
+        terminal.keyboard(screen == "usage")   # key releases, for holding Tab there
         if screen == "usage":
             frame = usage_panel.render(usage, cols, rows, t)
         elif screen == "settings":
@@ -1090,15 +1098,20 @@ def choose(screen=None, only=None):
                 draw()  # next animation frame
                 continue
             key = terminal.read_key()
+            if not key or (key.startswith("release:") and screen != "usage"):
+                continue
             if screen == "usage":
-                action = usage_panel.handle(usage, key, providers)
+                action = usage_panel.handle(usage, key, providers, getattr(terminal, "releases", False))
                 if action == "quit":
                     return None
                 if action:
                     go(action)
             elif screen == "settings":
+                if key in ("\x03", "\x04"):
+                    return None
                 if menu.handle(key) == "close":
                     relist()
+                    usage_panel.rescope()   # card settings may have changed
                     go(came_from)
             elif screen == "defaults":
                 if key in ("\x03", "\x04"):
@@ -1149,6 +1162,7 @@ def choose(screen=None, only=None):
                 return None
             draw()
     finally:
+        terminal.keyboard(False)
         if hasattr(terminal, "old") or hasattr(terminal, "modes"):
             terminal.__exit__()
         out.write(f"{ESC}[?7h{ESC}[?25h{ESC}[?1049l")
@@ -1228,6 +1242,11 @@ def main():
         sys.stdout.reconfigure(encoding="utf-8")
         sys.stderr.reconfigure(encoding="utf-8")
     args = sys.argv[1:]
+    # herdr-ai's workbench panes: quitting the agent reopens the selector, and
+    # Esc there drops to the shell.
+    returning = args[:1] == ["--picker-return"]
+    if returning:
+        args = args[1:]
     if args[:1] == ["--picker-update"]:
         update_checkout()
         return 0
@@ -1242,13 +1261,15 @@ def main():
         print("agent --picker-launch NAME [args]     launch a provider directly")
         print("agent --picker-launch NAME --picker-lead PANES|--picker-crew PANE")
         print("                                      launch as a herdr-ai team lead or worker")
+        print("agent --picker-return [--picker-launch NAME]")
+        print("                                      reopen the selector when the agent quits")
         print("agent --picker-usage --picker-only NAME  the usage panel for one provider")
         print("agent --picker-priority               explain the Cursor/Kiro workbench choice")
         print("agent --picker-update                 fast-forward this Git checkout")
         print("agent --picker-doctor                 show paths and launch profiles")
         print("agent --picker-catalog                every known CLI, its colors, and whether it is installed")
         print("agent --picker-help                   show this help")
-        print("usage                                 the same command; u switches to the usage panel")
+        print("usage                                 opens on the usage panel; u switches screens")
         print("Prefix CLI args with -- to escape picker management commands.")
         return 0
     if args[:1] in (["--picker-launch-priority"], ["--picker-priority"]):
@@ -1258,7 +1279,8 @@ def main():
         if args[0] == "--picker-priority":
             return 0
         args = ["--picker-launch", name, *args[1:]]
-    if args[:1] == ["--picker-launch"]:
+    launching = args[:1] == ["--picker-launch"]
+    if launching:
         if len(args) < 2:
             raise ValueError("--picker-launch needs a provider name")
         index = next((i for i, a in enumerate(AGENTS) if a["name"].lower() == args[1].lower()), None)
@@ -1269,8 +1291,13 @@ def main():
         start, only = None, None
         if args[:1] == ["--picker-usage"]:
             start, args = "usage", args[1:]
-        if args[:1] == ["--picker-only"] and len(args) > 1:
-            only, args = args[1], args[2:]
+        if args[:1] == ["--picker-only"]:
+            if len(args) < 2:
+                raise ValueError("--picker-only needs a provider name")
+            match = next((a for a in AGENTS if a["name"].lower() == args[1].lower()), None)
+            if match is None:
+                raise ValueError(f"Unknown provider: {args[1]}")
+            only, args = match["name"], args[2:]
         if not (sys.stdin.isatty() and sys.stdout.isatty()):
             raise RuntimeError("agent needs an interactive terminal; try --picker-doctor")
         try:
@@ -1279,6 +1306,11 @@ def main():
             index = None
     if index is None:
         return 0
+    if returning and not launching and not WINDOWS:
+        # Re-exec so the pane's command line names the agent, which herdr-ai's
+        # reroute restarts.
+        os.execv(sys.executable, [sys.executable, str(Path(__file__).resolve()),
+                                  "--picker-return", "--picker-launch", AGENTS[index]["name"], *args])
     agent = AGENTS[index]
     if args[:1] in (["--picker-lead"], ["--picker-crew"]):
         import team
@@ -1293,7 +1325,38 @@ def main():
     if os.environ.get("AGENT_PICKER_NO_PRETRUST") != "1" and (defaults is None or defaults["bypass_permissions"]):
         pretrust(agent)
     print_launch_banner(agent)
+    if returning:
+        return launch_and_return(argv + args)
     return launch(argv + args)
+
+
+def launch_and_return(argv):
+    """Run the agent, then reopen the selector in return mode once it quits."""
+    import signal
+    stopped = []
+    # The agent handles Ctrl+C itself; a no-op handler (unlike SIG_IGN) is not inherited.
+    handlers = {signal.SIGINT: lambda *_: None}
+    if not WINDOWS:
+        # herdr-ai's reroute and a closing pane signal the whole process group.
+        # Wait for the agent instead of dying first: the shell takes the terminal
+        # back as soon as this process exits, and an agent still restoring its
+        # tty modes after that leaves the shell's line editor unable to read Enter.
+        # Ctrl+\ (SIGQUIT) reaches the group too; the agent decides what it means.
+        handlers[signal.SIGTERM] = handlers[signal.SIGHUP] = handlers[signal.SIGQUIT] = \
+            lambda sig, _: stopped.append(sig)
+    previous = {sig: signal.signal(sig, handler) for sig, handler in handlers.items()}
+    try:
+        subprocess.call(argv)
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+    if stopped:
+        return 128 + stopped[0]
+    if not WINDOWS:
+        os.execv(sys.executable, [sys.executable, str(Path(__file__).resolve()), "--picker-return"])
+    # Windows cannot exec; one level of recursion per agent switch.
+    sys.argv = [sys.argv[0], "--picker-return"]
+    return main()
 
 
 if __name__ == "__main__":

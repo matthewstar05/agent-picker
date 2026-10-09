@@ -1,8 +1,11 @@
+import io
+import json
 import re
 import sys
 import tempfile
 import time
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest.mock import patch
 
@@ -57,6 +60,18 @@ class UsagePanelTests(unittest.TestCase):
                 for line in lines:
                     text = "".join(line) if isinstance(line, tuple) else line
                     self.assertLessEqual(len(ANSI.sub("", text)), cols, (cols, rows, text))
+
+    def test_every_framed_row_spans_the_pane(self):
+        # the redraw puts each row's right edge at a fixed column, so a short row
+        # (an incomplete last grid row) would leave last frame's cells frozen there
+        view = self.view()
+        view.peek_until = time.time() + 60
+        panel.WORKING["Antigravity"] = 1
+        for cols in range(26, 200, 7):
+            for rows in range(6, 40, 3):
+                for line in panel.render(view, cols, rows, 1.5):
+                    if isinstance(line, tuple):
+                        self.assertEqual(len(ANSI.sub("", "".join(line))), cols, (cols, rows))
 
     def test_wide_short_panes_put_cards_side_by_side(self):
         self.assertEqual(panel.plan(5, 156, 6)[0], 3)
@@ -297,6 +312,157 @@ class UsagePanelTests(unittest.TestCase):
         self.assertEqual(panel.handle(view, "q", []), "quit")
 
 
+class CardScopeTests(unittest.TestCase):
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        for patcher in (patch.object(preferences, "PATH", Path(folder.name) / "preferences.json"),
+                        patch.object(preferences, "_values", {}),
+                        patch.dict(panel.PRESENT, clear=True), patch.dict(panel.WORKING, clear=True),
+                        patch.dict(panel.SESSIONS, {s: {} for s in panel.SCOPE_ORDER}, clear=True)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.view = panel.View([a for a in panel.ap.AGENTS if a["name"] in panel.ap.FETCHERS])
+        # Claude: 1 here, 2 in this workspace, 3 anywhere. Kiro: a team in another
+        # tab of this workspace. Codex: only in another workspace.
+        panel.SESSIONS.update({
+            "tab": {"Claude": {"panes": 1, "working": 0}},
+            "workspace": {"Claude": {"panes": 2, "working": 1}, "Kiro": {"panes": 5, "working": 3}},
+            "all": {"Claude": {"panes": 3, "working": 2}, "Kiro": {"panes": 5, "working": 3},
+                    "Codex": {"panes": 4, "working": 1}}})
+
+    def names(self):
+        return [a["name"] for a in self.view.present()]
+
+    def test_cards_appear_for_this_tab_and_count_everywhere_by_default(self):
+        panel.rescope()
+        self.assertEqual(self.names(), ["Claude"])
+        self.assertEqual(panel.PRESENT, {"Claude": 3})
+        self.assertEqual(panel.WORKING, {"Claude": 2})
+        self.assertEqual(panel.SCOPE, panel.SCOPES["tab"])
+
+    def test_universal_display_reaches_this_workspace_or_everywhere(self):
+        preferences.put(panel.UNIVERSAL.key, "workspace")
+        panel.rescope()
+        self.assertEqual(self.names(), ["Claude", "Kiro"])
+        self.assertEqual(panel.SCOPE, panel.SCOPES["workspace"])
+        preferences.put(panel.UNIVERSAL.key, True)
+        panel.rescope()
+        self.assertEqual(self.names(), ["Claude", "Codex", "Kiro"])
+        self.assertEqual(panel.PRESENT, {"Claude": 3, "Kiro": 5, "Codex": 4})
+        self.assertEqual(panel.WORKING, {"Claude": 2, "Kiro": 3, "Codex": 1})
+        self.assertEqual(panel.SCOPE, panel.SCOPES["all"])
+
+    def test_agent_count_setting_picks_everywhere_this_workspace_or_this_tab(self):
+        for count, panes in (("all", 3), ("workspace", 2), ("tab", 1)):
+            preferences.put(panel.COUNT.key, count)
+            panel.rescope()
+            self.assertEqual(panel.PRESENT, {"Claude": panes}, count)
+            self.assertEqual(panel.WORKING, {"Claude": 2}, count)   # working follows the card setting
+
+    def test_card_scopes_and_always_shown(self):
+        preferences.put(panel.UNIVERSAL.key, True)
+        preferences.put(panel.CARD_KEY + "Claude", "workspace")
+        preferences.put(panel.CARD_KEY + "Codex", "workspace")
+        preferences.put(panel.CARD_KEY + "Kiro", "tab")
+        preferences.put(panel.CARD_KEY + "Cursor", "always")
+        panel.rescope()
+        self.assertEqual(panel.WORKING, {"Claude": 1})
+        self.assertEqual(self.names(), ["Claude", "Cursor"])
+        for name in panel.ap.FETCHERS:
+            preferences.put(panel.CARD_KEY + name, "tab")
+        panel.rescope()
+        self.assertEqual(panel.SCOPE, panel.SCOPES["tab"])
+
+    def test_holding_tab_shows_every_connected_provider_until_released(self):
+        self.assertEqual(self.names(), [])
+        panel.handle(self.view, "\t", [], releases=True)
+        self.assertEqual(set(self.names()), set(panel.ap.FETCHERS))
+        lines = panel.render(self.view, 80, 30, 1.0)
+        self.assertIn("usage · every provider", ANSI.sub("", lines[0]))
+        panel.handle(self.view, "release:\tx", [], releases=True)   # some other key's release
+        self.assertTrue(self.view.peeking())
+        panel.handle(self.view, "release:\t", [], releases=True)
+        self.assertEqual(self.names(), [])
+
+    def test_without_release_events_key_repeat_keeps_the_peek_open(self):
+        with patch.object(panel.time, "time", return_value=1000.0):
+            panel.handle(self.view, "\t", [])
+        with patch.object(panel.time, "time", return_value=1000.5):   # before the first repeat
+            self.assertTrue(self.view.peeking())
+            panel.handle(self.view, "\t", [])
+        with patch.object(panel.time, "time", return_value=1000.7):
+            self.assertTrue(self.view.peeking())
+        with patch.object(panel.time, "time", return_value=1000.8):   # repeats stopped: let go
+            self.assertFalse(self.view.peeking())
+
+    def test_herdr_counts_this_tab_this_workspace_and_every_workspace(self):
+        panes = [{"pane_id": "w:p1", "tab_id": "w:t1", "workspace_id": "w"},
+                 {"pane_id": "w:p2", "tab_id": "w:t1", "workspace_id": "w", "agent": "claude", "agent_status": "idle"},
+                 {"pane_id": "w:p3", "tab_id": "w:t2", "workspace_id": "w", "agent": "codex", "agent_status": "working"},
+                 {"pane_id": "w:p4", "tab_id": "w:t2", "workspace_id": "w", "agent": "codex", "agent_status": "idle"},
+                 {"pane_id": "v:p5", "tab_id": "v:t1", "workspace_id": "v"},
+                 {"pane_id": "v:p6", "tab_id": "v:t1", "workspace_id": "v", "agent": "kiro", "agent_status": "working"}]
+        out = type("Out", (), {"stdout": panel.json.dumps({"result": {"panes": panes}})})
+        with patch.object(panel.subprocess, "run", return_value=out), \
+                patch.object(panel, "pane_agent", side_effect=lambda p: "OpenCode" if p == "v:p5" else None):
+            found, working = panel.herdr_sessions("w:p1")
+        self.assertEqual(found["tab"], {"Claude": {"panes": 1, "working": 0}})
+        self.assertEqual(found["workspace"], {"Claude": {"panes": 1, "working": 0},
+                                              "Codex": {"panes": 2, "working": 1}})
+        self.assertEqual(found["all"], {"Claude": {"panes": 1, "working": 0}, "Codex": {"panes": 2, "working": 1},
+                                        "OpenCode": {"panes": 1, "working": 0}, "Kiro": {"panes": 1, "working": 1}})
+        self.assertEqual(working, {"Codex": {"w:p3"}, "Kiro": {"v:p6"}})
+
+    def test_card_settings_list_under_the_usage_panel_heading(self):
+        sections = [s.section for s in preferences.SETTINGS]
+        usage = [i for i, s in enumerate(sections) if s == "Usage panel"]
+        self.assertEqual(usage, list(range(usage[0], usage[-1] + 1)))
+        keys = [preferences.SETTINGS[i].key for i in usage]
+        self.assertEqual(keys[:2], [panel.THEME.key, panel.ANIMATE.key])
+        self.assertIn(panel.CARD_KEY + "Codex", keys)
+        self.assertEqual(preferences.get(panel.CARD_KEY + "Codex"), "all")
+
+
+class KeyTests(unittest.TestCase):
+    def keys(self, data):
+        import os
+        from platform_runtime import Terminal
+        read, write = os.pipe()   # the write end stays open, so a drained pipe isn't readable
+        self.addCleanup(os.close, read)
+        self.addCleanup(os.close, write)
+        os.write(write, data)
+        terminal = Terminal()
+        terminal.fd = read
+        keys = []
+        while terminal.wait(0):
+            keys.append(terminal.read_key())
+        return keys, getattr(terminal, "releases", False)
+
+    def test_kitty_keys_read_as_plain_keys(self):
+        # What Herdr sends with the protocol on: Tab, T, ctrl+c, Enter, Esc, up, 2, q.
+        keys, releases = self.keys(b"\x1b[9u\x1b[116;2:1u\x1b[99;5:1u\x1b[13u\x1b[27u"
+                                   b"\x1b[1;1:1A\x1b[50;1:1u\x1b[113;1:1u\x1b[57441u")
+        self.assertEqual(keys, ["\t", "T", "\x03", "\r", "esc", "up", "2", "q", ""])
+        self.assertFalse(releases)
+
+    def test_kitty_release_and_repeat(self):
+        keys, releases = self.keys(b"\x1b[9u\x1b[9;1:2u\x1b[9;1:3u\x1b[1;1:3B")
+        self.assertEqual(keys, ["\t", "\t", "release:\t", "release:down"])
+        self.assertTrue(releases)
+
+    def test_plain_keys_and_arrows_still_read(self):
+        keys, _ = self.keys(b"\tq\x1b[A\x1bOB\x1b[1;2C\x1b[15~2")
+        self.assertEqual(keys, ["\t", "q", "up", "down", "right", "", "2"])
+
+    def test_unbound_sequences_are_ignored_instead_of_quitting(self):
+        # Home, PgUp, Shift+Tab both ways, focus, SGR and X10 mouse, an overlong
+        # sequence, Alt+q, and kitty codes outside ASCII (once crashes) then a real key.
+        keys, _ = self.keys(b"\x1b[H\x1b[5~\x1b[Z\x1b[9;2u\x1b[I\x1b[<35;10;5M\x1b[M#qs"
+                            b"\x1b[" + b"1" * 40 + b"u\x1b[113;3u\x1b[99999999u\x1b[304;5u\x1b[178uj")
+        self.assertEqual(keys, [""] * 12 + ["j"])
+
+
 class SettingsTests(unittest.TestCase):
     def setUp(self):
         folder = tempfile.TemporaryDirectory()
@@ -334,6 +500,62 @@ class SettingsTests(unittest.TestCase):
                 self.assertLessEqual(len(lines), rows)
                 for line in lines:
                     self.assertLessEqual(agent_picker.visible_len(line), cols, (cols, rows, line))
+
+
+class RateLimitTests(unittest.TestCase):
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.file = Path(folder.name) / "usage-holds.json"
+        for patcher in (patch.object(panel, "HOLDS_FILE", self.file),
+                        patch.object(panel.ap, "STATE", Path(folder.name)),
+                        patch.object(panel, "merge_cache", lambda: None),
+                        patch.object(panel, "record", lambda name, windows: None)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        for state in (panel.HOLDS, panel.FORCED, panel.LAST_TRY, panel.FAILS, panel.USAGE):
+            saved = patch.dict(state, {}, clear=True)
+            saved.start()
+            self.addCleanup(saved.stop)
+
+    def too_many(self, retry="44"):
+        def fetcher():
+            raise urllib.error.HTTPError("https://example", 429, "Too Many Requests",
+                                         {"Retry-After": retry}, io.BytesIO(b""))
+        return patch.dict(panel.ap.FETCHERS, {"Claude": fetcher})
+
+    def test_429_holds_every_reader_for_retry_after(self):
+        with self.too_many("44"):
+            panel.fetch("Claude")
+        now = time.time()
+        self.assertAlmostEqual(panel.HOLDS["Claude"], now + 44, delta=2)
+        self.assertAlmostEqual(json.loads(self.file.read_text())["Claude"], now + 44, delta=2)
+
+    def test_refresh_waits_out_a_hold_another_process_wrote(self):
+        now = time.time()
+        self.file.write_text(json.dumps({"Claude": now + 40}))
+        panel.force_all(["Claude"])
+        with panel.LOCK:
+            self.assertAlmostEqual(panel.next_read("Claude", now), now + 40, delta=1)
+            self.assertLessEqual(panel.next_read("Codex", now), now)
+
+    def test_a_fresh_read_from_another_process_counts_as_this_ones(self):
+        now = time.time()
+        panel.USAGE["Claude"] = {"windows": [{"label": "5h", "pct": 1, "resets": now + 3600}], "fetched": now - 5}
+        with panel.LOCK:
+            self.assertGreater(panel.next_read("Claude", now), now)
+
+    def test_held_card_says_limited_instead_of_a_stale_age(self):
+        now = time.time()
+        panel.USAGE["Claude"] = {"windows": [{"label": "5h", "pct": 1, "resets": now + 3600}], "fetched": now - 2640}
+        panel.HOLDS["Claude"] = now + 40
+        present = patch.dict(panel.PRESENT, {"Claude": 1}, clear=True)
+        present.start()
+        self.addCleanup(present.stop)
+        view = panel.View([a for a in panel.ap.AGENTS if a["name"] == "Claude"])
+        text = re.sub(r"\x1b\[[0-9;]*m", "", "".join(panel.card(view, 0, 60, 0.0, now)))
+        self.assertIn("limited 40s", text)
+        self.assertNotIn("ago", text)
 
 
 if __name__ == "__main__":

@@ -48,10 +48,13 @@ class FakeHerdr:
         return SimpleNamespace(returncode=0, stdout=json.dumps({"result": result}), stderr="")
 
     def runs(self):
+        """pane -> command lines started in it, by pane run or typed and submitted."""
         out = {}
         for c in self.calls:
             if c[:2] == ["pane", "run"]:
                 out.setdefault(c[2], []).append(c[3])
+            elif c[:2] == ["pane", "send-text"] and c[3].endswith("\n"):
+                out.setdefault(c[2], []).append(c[3].lstrip("\x15")[:-1])
         return out
 
     def start_agents(self):
@@ -68,6 +71,18 @@ class HerdrAiTests(unittest.TestCase):
                              "stty sane && printf '\\033c' && cd '/a b'")
         with patch.object(herdr_ai, "WINDOWS", True):
             self.assertEqual(herdr_ai.route_directory_command("C:/a b"), 'cd "C:/a b"')
+
+    def test_reroute_types_control_bytes_as_raw_text(self):
+        """send-keys would come out as CSI u sequences while a killed agent's
+        kitty keyboard mode is still on, so nothing goes through send-keys."""
+        self.run_cli(INSIDE, cwd=ROOT)
+        codex = self.team_panes()["panes"]["codex"]
+        self.fake.start_agents()
+        with patch.object(herdr_ai, "WINDOWS", False):
+            self.run_cli(INSIDE, cwd=ROOT / "src")
+        typed = [c[3:] for c in self.fake.calls if c[:2] in (["pane", "send-keys"], ["pane", "send-text"]) and c[2] == codex]
+        self.assertEqual(typed, [["\x03\x15"], ["\x15" + herdr_ai.route_directory_command(str(ROOT / "src")) + "\n"],
+                                 ["\x15" + self.fake.runs()[codex][-1] + "\n"]])
 
     def test_stop_waits_for_children_after_wrapper_returns_to_shell(self):
         herdr = SimpleNamespace(process_info=lambda pane: {
@@ -195,6 +210,63 @@ class HerdrAiTests(unittest.TestCase):
             self.assertTrue(any(c.endswith("--picker-launch " + name) for c in launched), name)
         self.assertTrue(any(c.endswith("--picker-launch-priority") for c in launched))
         self.assertIn(["tab", "rename", "w9:t1", "src"], self.fake.calls)
+
+    def test_reroute_keeps_a_provider_switched_through_the_selector(self):
+        self.run_cli(INSIDE, cwd=ROOT)
+        panes = self.team_panes()["panes"]
+        self.fake.start_agents()
+        switched = [sys.executable, str(herdr_ai.ENTRY), "--picker-return", "--picker-launch", "Claude"]
+        self.fake.panes[panes["codex"]] = {"agent": "claude", "argv": switched}
+        self.run_cli(INSIDE, cwd=ROOT / "src")
+        self.assertEqual(self.fake.runs()[panes["codex"]][1], shlex.join(switched))
+
+    def test_reroute_keeps_a_switched_provider_herdr_does_not_recognize(self):
+        self.run_cli(INSIDE, cwd=ROOT)
+        panes = self.team_panes()["panes"]
+        self.fake.start_agents()
+        switched = [sys.executable, str(herdr_ai.ENTRY), "--picker-return", "--picker-launch", "Kiro"]
+        self.fake.panes[panes["claude"]] = {"argv": switched}   # no "agent"
+        self.run_cli(INSIDE, cwd=ROOT / "src")
+        self.assertEqual(self.fake.runs()[panes["claude"]][1], shlex.join(switched))
+
+    def test_relayout_closes_the_old_usage_pane(self):
+        self.run_cli(INSIDE, cwd=ROOT)
+        panes = self.team_panes()["panes"]
+        for role, pane in panes.items():
+            if role not in ("terminal", "usage"):
+                del self.fake.panes[pane]
+        self.fake.calls.clear()
+        self.run_cli(INSIDE, cwd=ROOT)
+        self.assertIn(["pane", "close", panes["usage"]], self.fake.calls)
+        self.assertNotEqual(self.team_panes()["panes"]["usage"], panes["usage"])
+
+    def test_malformed_state_is_ignored(self):
+        for text in ("[]", "null", '{"default|w9:t1": {"panes": {"claude": "w9:p1"}}}', '{"x": 3}'):
+            with self.subTest(text=text):
+                self.setUp()
+                (Path(self.state.name) / "herdr-ai-tabs.json").write_text(text)
+                self.run_cli(INSIDE, cwd=ROOT)
+                self.assertIn("usage", self.team_panes()["panes"])
+
+    def test_reroute_restores_a_usage_pane_that_left_the_usage_panel(self):
+        selector = [sys.executable, str(herdr_ai.ENTRY)]
+        for argv in (None, selector):   # quit to its shell, or a stale `usage` alias opened the selector
+            with self.subTest(argv=argv):
+                self.setUp()
+                self.run_cli(INSIDE, cwd=ROOT)
+                usage = self.team_panes()["panes"]["usage"]
+                self.fake.start_agents()
+                self.fake.panes[usage] = {"argv": argv}
+                self.run_cli(INSIDE, cwd=ROOT / "src")
+                self.assertTrue(self.fake.runs()[usage][-1].endswith("--picker-usage"))
+
+    def test_reroute_leaves_other_programs_in_the_usage_pane_alone(self):
+        self.run_cli(INSIDE, cwd=ROOT)
+        usage = self.team_panes()["panes"]["usage"]
+        self.fake.start_agents()
+        self.fake.panes[usage] = {"argv": ["htop"]}
+        self.run_cli(INSIDE, cwd=ROOT / "src")
+        self.assertNotIn(usage, self.fake.runs())
 
     def test_explicit_label_survives_a_reroute(self):
         self.run_cli(INSIDE, ["demo"])

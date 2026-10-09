@@ -115,11 +115,21 @@ def fetch(agent):
     return rows
 
 
+def cached_entry(name):
+    """name's entry in the refresh cache, or {} when the cache is stale or malformed."""
+    stored = read(PATH)
+    cached = stored.get(name) if stored.get("schema_version") == SCHEMA_VERSION else None
+    if not isinstance(cached, dict):
+        return {}
+    return {"models": cached["models"] if isinstance(cached.get("models"), list) else [],
+            "fetched": cached["fetched"] if isinstance(cached.get("fetched"), (int, float)) else 0}
+
+
 def load_rows(agent):
     name = agent["name"]
-    stored = read(PATH)
-    cached = stored.get(name, {}) if stored.get("schema_version") == SCHEMA_VERSION else {}
-    rows = _live.get(name) or cached.get("models") or read(ROOT / "models.json").get(name, [])
+    rows = _live.get(name) or cached_entry(name).get("models") or read(ROOT / "models.json").get(name)
+    if not isinstance(rows, list):
+        rows = []
     return [dict(row) for row in rows if isinstance(row, dict) and isinstance(row.get("id"), str)]
 
 
@@ -131,8 +141,9 @@ def expand_gemini(rows):
     """List each Gemini effort as its own model. The id already carries the level."""
     expanded = []
     for row in rows:
-        variants = row.get("variants") or {}
-        levels = [level for level in (row.get("efforts") or []) if isinstance(variants.get(level), str)]
+        variants = row.get("variants") if isinstance(row.get("variants"), dict) else {}
+        efforts = row.get("efforts") if isinstance(row.get("efforts"), list) else []
+        levels = [level for level in efforts if isinstance(level, str) and isinstance(variants.get(level), str)]
         if not str(row.get("id", "")).startswith("gemini") or not levels:
             expanded.append(row)
             continue
@@ -166,9 +177,7 @@ def request(agent):
         return
     name = agent["name"]
     with LOCK:
-        stored = read(PATH)
-        cached = stored.get(name, {}) if stored.get("schema_version") == SCHEMA_VERSION else {}
-        if name in PENDING or time.time() - cached.get("fetched", 0) < 3600:
+        if name in PENDING or time.time() - cached_entry(name).get("fetched", 0) < 3600:
             return
         PENDING.add(name)
     def worker():
@@ -191,7 +200,7 @@ def request(agent):
                 finally:
                     if os.path.exists(temp):
                         os.unlink(temp)
-        except (OSError, ValueError, KeyError, subprocess.SubprocessError):
+        except Exception:   # a malformed CLI cache must not print over the picker
             pass
         finally:
             with LOCK:

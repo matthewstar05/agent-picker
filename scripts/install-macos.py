@@ -63,7 +63,7 @@ def main():
         old_usage.unlink()
     alias = shlex.quote(str(wrapper))
     block = (START + "\n" + 'export PATH="$HOME/.local/bin:$PATH"\n'
-             + "alias agent=" + alias + "\n" + "alias usage=" + alias + "\n" + END + "\n")
+             + "alias agent=" + alias + "\n" + "alias usage=" + shlex.quote(str(wrapper) + " --picker-usage") + "\n" + END + "\n")
     for rc in (Path.home() / ".zshrc", Path.home() / ".bashrc"):
         original = rc.read_text() if rc.exists() else ""
         text = re.sub(re.escape(START) + r".*?" + re.escape(END) + r"\n?", "", original, flags=re.S)
@@ -78,7 +78,7 @@ def main():
         if text != original:
             backup(rc)
             rc.write_text(text)
-    print("Installed. Open a new terminal, then run agent --picker-doctor. usage runs the same command.")
+    print("Installed. Open a new terminal, then run agent --picker-doctor. usage opens on the usage panel.")
     print(f"Updates are read directly from: {ROOT}")
 
 

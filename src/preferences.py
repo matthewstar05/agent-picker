@@ -31,9 +31,14 @@ class Setting:
 
 
 def register(setting):
-    """Add a setting (once); returns it so a module can keep a handle."""
-    if not any(s.key == setting.key for s in SETTINGS):
-        SETTINGS.append(setting)
+    """Add a setting (once), after the rest of its section; returns it so a
+    module can keep a handle. Settings registered later still list under their
+    section's heading instead of starting a second one."""
+    existing = next((s for s in SETTINGS if s.key == setting.key), None)
+    if existing:
+        return existing
+    last = max((i for i, s in enumerate(SETTINGS) if s.section == setting.section), default=len(SETTINGS) - 1)
+    SETTINGS.insert(last + 1, setting)
     return setting
 
 

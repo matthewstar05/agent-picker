@@ -40,8 +40,10 @@ def load_agents():
         argv = agent.get("argv")
         if not isinstance(argv, list) or not argv or not all(isinstance(a, str) and a for a in argv):
             raise ValueError(f"{agent['name']}: argv must be a nonempty array of strings")
-        if Path(argv[0]).stem.lower() == "agent" and not Path(argv[0]).is_absolute():
-            raise ValueError("Cursor's generic 'agent' must be an absolute vendor path to prevent recursion")
+        # Both the argv and the PATH search names: a bare "agent" could resolve to this picker.
+        for name in [argv[0], *(agent.get("executables") or [])]:
+            if isinstance(name, str) and Path(name).stem.lower() == "agent" and not Path(name).is_absolute():
+                raise ValueError("Cursor's generic 'agent' must be an absolute vendor path to prevent recursion")
         if "defaults" in agent:
             provider_defaults.apply(agent, agent["defaults"])
         # Names it appears under in Herdr and in process lists, for the usage screen.

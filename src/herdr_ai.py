@@ -72,18 +72,20 @@ import herdr_sidebar
 WINDOWS = os.name == "nt"
 ENTRY = Path(__file__).resolve().parent / "agent_picker.py"
 
-# pane -> picker arguments; panes not listed stay plain shells.
+# pane -> picker arguments; panes not listed stay plain shells. --picker-return
+# reopens the selector when an agent quits, so /quit switches providers in place.
 PANES = {
-    "agy": ["--picker-launch", "Antigravity"],
-    "codex": ["--picker-launch", "Codex"],
-    "claude": ["--picker-launch", "Claude"],
-    "cursor": ["--picker-launch-priority"],  # keep the role for saved-layout compatibility
-    "picker": [],
+    "agy": ["--picker-return", "--picker-launch", "Antigravity"],
+    "codex": ["--picker-return", "--picker-launch", "Codex"],
+    "claude": ["--picker-return", "--picker-launch", "Claude"],
+    "cursor": ["--picker-return", "--picker-launch-priority"],  # keep the role for saved-layout compatibility
+    "picker": ["--picker-return"],
     "usage": ["--picker-usage"],
 }
 # A team's panes: the lead, four crew, usage for that provider, and the terminal.
 CREW = ("crew1", "crew2", "crew3", "crew4")
-# The usage panel does not depend on the directory, so rerouting leaves it running.
+# The usage panel does not depend on the directory, so rerouting leaves it running
+# (it restarts only if it was quit or swapped for the selector).
 KEPT = "usage"
 
 
@@ -127,9 +129,14 @@ def state_file():
 
 def load_state():
     try:
-        return json.loads(state_file().read_text(encoding="utf-8"))
+        state = json.loads(state_file().read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
+    # Drop entries a hand edit or an older version left without the expected shape.
+    if not isinstance(state, dict):
+        return {}
+    return {key: entry for key, entry in state.items()
+            if isinstance(entry, dict) and isinstance(entry.get("panes"), dict)}
 
 
 def save_state(state):
@@ -176,6 +183,16 @@ def relaunch_line(info):
     if leader.get("argv"):
         return shlex.join(leader["argv"]) if not WINDOWS else " ".join(leader["argv"])
     return leader.get("cmdline")
+
+
+def usage_running(info):
+    """Whether the pane's foreground job is the usage panel, or something
+    besides the picker that a reroute should not interrupt."""
+    pgid = busy(info)
+    if not pgid:
+        return False
+    line = relaunch_line(info) or ""
+    return ENTRY.name not in line or "--picker-usage" in line
 
 
 def layout_commands(team, panes):
@@ -239,11 +256,21 @@ def route(herdr, cwd, recorded, everything, commands=PANES):
             continue
         role = by_pane.get(pane)
         if role == KEPT:
+            # Left running, unless it was quit or swapped for the selector.
+            if role not in commands or usage_running(herdr.process_info(pane)):
+                continue
+            plan[pane] = (role, picker_command(commands[role]))
             continue
         agent = info.get("agent")
         if role in commands:
-            # A selector that already launched an agent keeps that agent.
-            line = (relaunch_line(herdr.process_info(pane)) if role == "picker" and agent else None)
+            # A selector that already launched an agent keeps that agent, as does
+            # a pane switched to another provider through --picker-return.
+            # herdr does not recognize every provider, so a switched pane is
+            # known by its command line too.
+            line = relaunch_line(herdr.process_info(pane))
+            switched = line and "--picker-return" in line and "--picker-launch" in line
+            if not (switched or (role == "picker" and agent)):
+                line = None
             plan[pane] = (role, line or picker_command(commands[role]))
         elif everything and agent:
             line = relaunch_line(herdr.process_info(pane))
@@ -255,10 +282,32 @@ def route(herdr, cwd, recorded, everything, commands=PANES):
     if os.environ.get("HERDR_AI_DRY", "0") == "1":
         plan = {pane: (name, None) for pane, (name, _) in plan.items()}
     for pane, (_, line) in plan.items():
-        herdr("pane", "run", pane, route_directory_command(cwd))
+        clear_prompt(herdr, pane)
+        type_line(herdr, pane, route_directory_command(cwd))
         if line:
-            herdr("pane", "run", pane, line)
+            type_line(herdr, pane, line)
     return [name for name, _ in plan.values()]
+
+
+def clear_prompt(herdr, pane):
+    """Drop whatever a stopped agent left on the shell's input line: late replies
+    to its terminal queries, and mouse reports until the reset turns them off.
+    Ctrl+U erases the line both in the line editor and in a tty left in cooked mode."""
+    if not WINDOWS:
+        herdr("pane", "send-text", pane, "\x03\x15")
+
+
+def type_line(herdr, pane, line):
+    """Type line at the pane's shell and submit it. The control bytes go out
+    as raw text, not as send-keys: a killed agent can leave the kitty keyboard
+    protocol on in herdr's copy of the pane, and herdr then encodes Ctrl+C,
+    Ctrl+U and Enter as CSI u sequences the shell prints instead of acting on.
+    The reset in route_directory_command turns the protocol off again. A
+    newline submits even when the tty no longer translates CR."""
+    if WINDOWS:
+        herdr("pane", "run", pane, line)
+        return
+    herdr("pane", "send-text", pane, "\x15" + line + "\n")
 
 
 def build(herdr, root, cwd, team=None):
@@ -340,8 +389,20 @@ def recorded_panes(herdr, state, key):
         return {}
     live = herdr.tab_panes(os.environ["HERDR_WORKSPACE_ID"], os.environ["HERDR_TAB_ID"])
     panes = {role: pane for role, pane in entry["panes"].items()
-             if pane in live and live[pane].get("terminal_id") == entry["terminals"].get(pane)}
+             if pane in live and live[pane].get("terminal_id") == (entry.get("terminals") or {}).get(pane)}
     return panes if any(role not in ("terminal", KEPT) for role in panes) else {}
+
+
+def close_leftovers(herdr, entry):
+    """Close a previous layout's usage pane before laying the tab out again;
+    it outlives the agents, and would otherwise sit beside the new one."""
+    if not entry:
+        return
+    live = herdr.tab_panes(os.environ["HERDR_WORKSPACE_ID"], os.environ["HERDR_TAB_ID"])
+    pane = entry["panes"].get(KEPT)
+    if (pane and pane != os.environ.get("HERDR_PANE_ID") and pane in live
+            and live[pane].get("terminal_id") == (entry.get("terminals") or {}).get(pane)):
+        herdr("pane", "close", pane)
 
 
 def layout_problem(entry, recorded, setup):
@@ -392,8 +453,11 @@ def main(argv=None, herdr=None, cwd=None):
         herdr_team_status.run()
         return 0
     if argv[:1] == ["--open-settings"]:
-        herdr_sidebar.request("plugin.pane.open", {
-            "plugin_id": "local.herdr-ai", "entrypoint": "settings"})
+        try:
+            herdr_sidebar.request("plugin.pane.open", {
+                "plugin_id": "local.herdr-ai", "entrypoint": "settings"})
+        except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
+            sys.exit(f"herdr-ai: {exc}")
         return 0
     if argv[:1] == ["--settings"]:
         if not (sys.stdin.isatty() and sys.stdout.isatty()):
@@ -410,6 +474,10 @@ def main(argv=None, herdr=None, cwd=None):
         if argv[0] == "--setup" and len(argv) < 2:
             sys.exit("herdr-ai: --setup needs a name: standard, claude, codex, ...")
         setup, argv = (argv[1], argv[2:]) if argv[0] == "--setup" else (argv[0].split("=", 1)[1], argv[1:])
+    if argv and argv[0].startswith("-"):
+        sys.exit(f"herdr-ai: unknown option {argv[0]}; see herdr-ai --help")
+    if len(argv) > 1:
+        sys.exit("herdr-ai: takes one label; quote it if it has spaces")
     herdr = Herdr(herdr or require_herdr("herdr-ai"), "herdr-ai")
     cwd = cwd or os.getcwd()
     auto = not argv
@@ -458,6 +526,7 @@ def main(argv=None, herdr=None, cwd=None):
         team = choose()
         if team is False:
             return 0
+        close_leftovers(herdr, state.get(key))
         panes = build(herdr, os.environ["HERDR_PANE_ID"], cwd, team)
         live = herdr.tab_panes(os.environ["HERDR_WORKSPACE_ID"], os.environ["HERDR_TAB_ID"])
         entry = state[key] = {"panes": panes, "auto_label": auto, "team": team,
@@ -476,7 +545,7 @@ def sidebar_update(action):
         return
     try:
         return action()
-    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
+    except Exception as exc:   # herdr's replies vary by version; never block a layout on them
         print(f"herdr-ai: sidebar update unavailable: {exc}", file=sys.stderr)
 
 

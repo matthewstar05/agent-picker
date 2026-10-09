@@ -14,8 +14,14 @@ where an even pace through the window would be by now, and any part of the bar
 past that point is drawn as is. A limit turns a muted red only when it is 70%
 used with its reset still far off (see concerning()).
 
+Which agents count toward a card is a setting per provider: every Herdr
+workspace (the default), this workspace, this tab, or always shown, even with
+none open. A card appears once its provider is open in this tab, or wider with
+universal display.
+
 Keys: t / → next theme, T / ← previous, r refresh now, a toggle animation,
-s settings, u or Esc back to the agents, q quit.
+hold Tab to see every connected provider until it's let go, s settings,
+u or Esc back to the agents, q quit.
 """
 
 import json
@@ -24,6 +30,7 @@ import os
 import subprocess
 import threading
 import time
+import urllib.error
 
 import agent_picker as ap
 import preferences
@@ -81,20 +88,54 @@ ANIMATE = preferences.register(preferences.Setting(
     hint="Off redraws once a second and uses almost no CPU. a toggles it there too.",
     names={True: "on", False: "off"}))
 
+# Scopes, narrowest first: this pane's Herdr tab, its workspace, every workspace.
+SCOPE_ORDER = ["tab", "workspace", "all"]
+
+UNIVERSAL = preferences.register(preferences.Setting(
+    "usage.universal", "Usage panel", "Universal display", [False, "workspace", True], False,
+    hint="Which providers get a card: open in this tab (off), in this workspace, or anywhere (on).",
+    names={False: "off", "workspace": "this workspace", True: "on"}))
+UNIVERSAL_SCOPE = {False: "tab", "workspace": "workspace", True: "all"}
+COUNT = preferences.register(preferences.Setting(
+    "usage.count", "Usage panel", "Agent count", ["all", "workspace", "tab"], "all",
+    hint="The number beside a provider's name: its agents open anywhere, in this workspace, or in this tab.",
+    names={"all": "all workspaces", "workspace": "this workspace", "tab": "single tab"}))
+
+CARD_KEY = "usage.card."
+CARD_NAMES = {"all": "all workspaces", "workspace": "this workspace", "tab": "this tab",
+              "always": "always shown"}
+
+
+def card_setting(name):
+    """The settings row for which agents a provider's card counts."""
+    return preferences.register(preferences.Setting(
+        CARD_KEY + name, "Usage panel", f"{name} card", list(CARD_NAMES), "all",
+        hint=f"Count {name} agents anywhere, in this workspace or this tab, or always show its card.",
+        names=CARD_NAMES))
+
+
+def card_mode(name):
+    """A scope or "always"; a provider without a settings row counts every workspace."""
+    return preferences.get(CARD_KEY + name) if preferences.find(CARD_KEY + name) else "all"
+
 
 # ---- live data --------------------------------------------------------------
 
 LOCK = ap.USAGE_LOCK  # the picker's own cache, so both screens show the same numbers
 USAGE = ap.USAGE     # provider -> {"windows": [...], "fetched": epoch}
 INFLIGHT = ap.PENDING  # providers being read right now
-PRESENT = {}         # provider -> its panes beside this pane: the cards drawn
+PRESENT = {}         # provider -> its panes under the agent count setting: the cards drawn
 WORKING = {}         # provider -> those panes that are working (drawn as working)
 BUSY = {}            # provider -> its panes working anywhere (paces the reads)
-SCOPE = "this tab"   # where PRESENT looks: this Herdr tab, this tmux window, or this computer
+SESSIONS = {s: {} for s in SCOPE_ORDER}  # scope -> provider -> {"panes", "working"}
+SCOPES = {"tab": "this tab", "workspace": "this workspace", "all": "any workspace"}  # for the empty state
+SCOPE = "this tab"   # where a card can appear from, given the settings
 HERDR_OK = False     # whether Herdr answered the last poll
 FORCED = {}          # provider -> epoch it should be re-read at, regardless of its interval
 LAST_TRY = {}        # provider -> epoch of the last read
 FAILS = {}           # provider -> consecutive failed reads (backs the interval off)
+HOLDS = {}           # provider -> epoch its endpoint asked every reader to wait until (HTTP 429)
+HOLDS_FILE = ap.STATE / "usage-holds.json"  # shared, since every picker and panel polls on its own
 HISTORY = {}         # provider -> [[epoch, pct of its first window], ...]
 HISTORY_FILE = STATE / "history.json"
 
@@ -128,13 +169,20 @@ def provider_of(agent):
     return None
 
 
+LAUNCHERS = ("node", "bun", "bunx", "deno", "npx", "python", "uv", "uvx")
+
+
 def from_argv(argv):
-    """The profile a command line runs, looking past node/bun/python launchers."""
-    for token in argv[:3]:
-        name = provider_of(os.path.basename(token))
-        if name:
-            return name
-    return None
+    """The profile a command line runs, looking past node/bun/python launchers.
+    Only the program counts, so `vim codex-plan.md` is not a Codex agent."""
+    if not argv:
+        return None
+    program = os.path.basename(argv[0])
+    name = provider_of(program)
+    if name or not program.lower().startswith(LAUNCHERS):
+        return name
+    script = next((t for t in argv[1:3] if not t.startswith("-")), "")
+    return provider_of(os.path.basename(script))
 
 
 def processes():
@@ -187,34 +235,44 @@ def pane_agent(pane_id):
 
 
 def herdr_sessions(me):
-    """(agents in this pane's tab, working pane ids per profile anywhere)."""
+    """({scope: agents in this pane's tab, its workspace, every workspace},
+    working pane ids per profile). Herdr lists every workspace's panes."""
     out = subprocess.run([HERDR, "pane", "list"], capture_output=True, text=True, encoding="utf-8",
                          errors="replace", timeout=5)
     panes = json.loads(out.stdout)["result"]["panes"]
-    tab = next((p.get("tab_id") for p in panes if p.get("pane_id") == me), os.environ.get("HERDR_TAB_ID"))
-    here, working = {}, {}
+    mine = next((p for p in panes if p.get("pane_id") == me), {})
+    tab = mine.get("tab_id") or os.environ.get("HERDR_TAB_ID")
+    space = mine.get("workspace_id") or os.environ.get("HERDR_WORKSPACE_ID")
+    found, working = {s: {} for s in SCOPE_ORDER}, {}
     for pane in panes:
-        in_tab = pane.get("tab_id") == tab and pane.get("pane_id") != me
-        name = provider_of(pane.get("agent"))
-        if not name and in_tab:
-            name = pane_agent(pane["pane_id"])
+        if pane.get("pane_id") == me:
+            continue
+        name = provider_of(pane.get("agent")) or pane_agent(pane["pane_id"])
         if not name:
             continue
         busy = pane.get("agent_status") == "working"
         if busy:
             working.setdefault(name, set()).add(pane["pane_id"])
-        if in_tab:
-            slot = here.setdefault(name, {"panes": 0, "working": 0})
+        scopes = ["all"] + ["workspace"] * (pane.get("workspace_id") == space) + ["tab"] * (pane.get("tab_id") == tab)
+        for scope in scopes:
+            slot = found[scope].setdefault(name, {"panes": 0, "working": 0})
             slot["panes"] += 1
             slot["working"] += busy
-    return here, working
+    return found, working
 
 
 def tmux_sessions():
-    """Agents in this tmux window (tmux can't say which are working)."""
-    out = subprocess.run(["tmux", "list-panes", "-F", "#{pane_pid}"], capture_output=True, text=True, timeout=5)
-    roots = [int(p) for p in out.stdout.split() if p.isdigit()]
-    return {name: {"panes": n, "working": 0} for name, n in agents_under(roots, processes()).items()}
+    """{scope: agents in this tmux window, its session, every session}; tmux
+    can't say which are working."""
+    procs = processes()
+
+    def agents(*scope):
+        out = subprocess.run(["tmux", "list-panes", *scope, "-F", "#{pane_pid}"],
+                             capture_output=True, text=True, timeout=5)
+        roots = [int(p) for p in out.stdout.split() if p.isdigit()]
+        return {name: {"panes": n, "working": 0} for name, n in agents_under(roots, procs).items()}
+
+    return {"tab": agents(), "workspace": agents("-s"), "all": agents("-a")}
 
 
 def local_sessions():
@@ -225,36 +283,97 @@ def local_sessions():
 
 
 def watch_sessions(stop):
-    """Every two seconds: which agents run beside this pane (drawn) and which are
-    working anywhere (read more often). A pane leaving "working" queues a re-read."""
-    global HERDR_OK, SCOPE
+    """Every two seconds: which agents run in this pane's tab, its workspace and
+    every workspace (what the cards count) and which are working anywhere (read
+    more often). A pane leaving "working" queues a re-read."""
+    global HERDR_OK, SCOPES
     seen = {}  # provider -> set of working pane ids
     me = os.environ.get("HERDR_PANE_ID")
     while not stop.is_set():
         now_working, herdr = {}, False
         try:
             if me:
-                here, now_working = herdr_sessions(me)
-                scope, herdr = "this tab", True
+                found, now_working = herdr_sessions(me)
+                scopes, herdr = {"tab": "this tab", "workspace": "this workspace", "all": "any workspace"}, True
             elif os.environ.get("TMUX"):
-                here, scope = tmux_sessions(), "this window"
+                found = tmux_sessions()
+                scopes = {"tab": "this window", "workspace": "this session", "all": "any session"}
             else:
-                here, scope = local_sessions(), "this computer"
+                found = dict.fromkeys(SCOPE_ORDER, local_sessions())
+                scopes = dict.fromkeys(SCOPE_ORDER, "this computer")
         except Exception:
-            here, scope = {}, SCOPE
+            found, scopes = {s: {} for s in SCOPE_ORDER}, SCOPES
         with LOCK:
             for name, before in seen.items():
                 if before - now_working.get(name, set()):  # a turn just ended
                     FORCED[name] = min(FORCED.get(name, math.inf), time.time() + SETTLE)
             BUSY.clear()
             BUSY.update({k: len(v) for k, v in now_working.items()})
-            PRESENT.clear()
-            PRESENT.update({k: v["panes"] for k, v in here.items()})
-            WORKING.clear()
-            WORKING.update({k: v["working"] for k, v in here.items() if v["working"]})
-            HERDR_OK, SCOPE = herdr, scope
+            for scope in SCOPE_ORDER:
+                SESSIONS[scope].clear()
+                SESSIONS[scope].update(found[scope])
+            HERDR_OK, SCOPES = herdr, scopes
+        rescope()
         seen = now_working
         stop.wait(2)
+
+
+def rescope():
+    """Count each card's working agents where its setting says. A provider gets a
+    card when it is open where universal display reaches (this tab, workspace,
+    or anywhere); the agent count beside its name follows its own setting.
+    Run after every poll and when the settings screen closes."""
+    global SCOPE
+    reach = UNIVERSAL_SCOPE[preferences.get(UNIVERSAL.key)]
+    counted = SESSIONS[preferences.get(COUNT.key)]
+    with LOCK:
+        PRESENT.clear()
+        WORKING.clear()
+        for name in SESSIONS["all"]:
+            mode = card_mode(name)
+            slot = SESSIONS["all" if mode == "always" else mode].get(name)
+            if slot and (mode == "always" or name in SESSIONS[reach]):
+                PRESENT[name] = counted.get(name, {}).get("panes", 0)
+                if slot["working"]:
+                    WORKING[name] = slot["working"]
+        # A card needs its provider both within reach and within its own scope.
+        modes = [preferences.get(s.key) for s in preferences.SETTINGS if s.key.startswith(CARD_KEY)]
+        widest = max((min(SCOPE_ORDER.index(reach), SCOPE_ORDER.index(m)) for m in modes if m != "always"),
+                     default=SCOPE_ORDER.index(reach))
+        SCOPE = SCOPES[SCOPE_ORDER[widest]]
+
+
+def load_holds():
+    try:
+        holds = json.loads(HOLDS_FILE.read_text())
+    except Exception:
+        return
+    with LOCK:
+        for name, until in holds.items():
+            HOLDS[name] = max(HOLDS.get(name, 0), until)
+
+
+def hold(name, seconds):
+    """Make every reader of this provider wait, here and in the other pickers and panels."""
+    load_holds()
+    with LOCK:
+        HOLDS[name] = max(HOLDS.get(name, 0), time.time() + seconds)
+        holds = {n: u for n, u in HOLDS.items() if u > time.time()}
+    try:
+        ap.STATE.mkdir(parents=True, exist_ok=True)
+        tmp = HOLDS_FILE.with_name(f".holds.{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(holds))
+        os.replace(tmp, HOLDS_FILE)
+    except Exception:
+        pass
+
+
+def retry_after(error):
+    try:
+        seconds = int(error.headers.get("Retry-After") or 60)
+    except (TypeError, ValueError):
+        seconds = 60
+    return min(900, max(30, seconds))
 
 
 def merge_cache():
@@ -304,7 +423,11 @@ def record(name, windows):
 
 def fetch(name):
     try:
-        windows = ap.FETCHERS[name]()
+        windows = ap.numeric_windows(ap.FETCHERS[name]())
+    except urllib.error.HTTPError as error:
+        if error.code == 429:
+            hold(name, retry_after(error))
+        windows = None
     except Exception:
         windows = None
     with LOCK:
@@ -325,6 +448,20 @@ def interval(name):
     return min(900, base * 2 ** min(FAILS.get(name, 0), 4))
 
 
+def next_read(name, now):
+    """When this provider's next read is due. Call with LOCK held."""
+    entry = USAGE.get(name)
+    # Another picker or panel's read counts too: the cache is shared.
+    last = max(LAST_TRY.get(name, 0), entry["fetched"] if entry else 0)
+    if entry and any(w.get("resets") and entry["fetched"] < w["resets"] < now for w in entry["windows"]):
+        # a window rolled over since the last read: read it soon, once
+        FORCED[name] = min(FORCED.get(name, math.inf), max(now, entry["fetched"] + 30))
+    due = last + interval(name)
+    if name in FORCED:
+        due = min(due, max(FORCED[name], last + MIN_GAP[name]))
+    return max(due, HOLDS.get(name, 0))  # a forced read waits out a 429 too
+
+
 def schedule(providers, stop):
     """Start each provider's read once it's due; never two at once per provider."""
     tick = 0
@@ -332,17 +469,7 @@ def schedule(providers, stop):
         now = time.time()
         with LOCK:
             for name in providers:
-                if name in INFLIGHT:
-                    continue
-                last = LAST_TRY.get(name, 0)
-                entry = USAGE.get(name)
-                if entry and any(w.get("resets") and w["resets"] < now for w in entry["windows"]):
-                    # a window rolled over: read it soon, once
-                    FORCED[name] = min(FORCED.get(name, math.inf), max(now, entry["fetched"] + 30))
-                due = last + interval(name)
-                if name in FORCED:
-                    due = min(due, max(FORCED[name], last + MIN_GAP[name]))
-                if now >= due:
+                if name not in INFLIGHT and now >= next_read(name, now):
                     FORCED.pop(name, None)
                     LAST_TRY[name] = now
                     INFLIGHT.add(name)
@@ -350,10 +477,12 @@ def schedule(providers, stop):
         tick += 1
         if tick % 30 == 0:
             merge_cache()
+            load_holds()
         stop.wait(0.5)
 
 
 def force_all(providers):
+    load_holds()
     with LOCK:
         for name in providers:
             FORCED[name] = 0
@@ -367,13 +496,29 @@ class View:
         self.installed = agents   # every listed profile, in picker order
         self.pinned = pinned      # draw every listed profile, even ones not beside this pane
         self.toast_until = 0
-        self.agents = self.present()  # the ones beside this pane; refreshed each frame
+        self.peek_until = 0       # while Tab is held: every connected provider gets a card
+        for agent in agents:
+            card_setting(agent["name"])
+        self.agents = self.present()  # the ones with a card; refreshed each frame
 
     def present(self):
         if self.pinned:
             return list(self.installed)
+        peek = self.peeking()
         with LOCK:
-            return [a for a in self.installed if a["name"] in PRESENT]
+            return [a for a in self.installed if a["name"] in PRESENT
+                    or (peek and a["name"] in ap.FETCHERS) or card_mode(a["name"]) == "always"]
+
+    def peeking(self):
+        return time.time() < self.peek_until
+
+    def hold(self, releases):
+        """Tab is down. With release events the peek lasts until Tab comes up; the
+        deadline only covers a release that never arrives. Without them, key
+        repeat keeps it alive: the first repeat comes after the keyboard's
+        initial delay, the rest close together."""
+        gap = 1.0 if releases else 0.25 if self.peeking() else 0.6
+        self.peek_until = time.time() + gap
 
     @property
     def theme(self):
@@ -539,18 +684,20 @@ def card(view, i, cw, t, now, rows=3):
         fetching = name in INFLIGHT
         working = WORKING.get(name, 0)
         panes = PRESENT.get(name, 0)
+        held = HOLDS.get(name, 0)
+    held = held if held > now else 0
     # Working cards share the border's continuous 60 fps clock. Idle cards
     # still reuse their cached contents between countdown updates.
     step = t if working and view.anim else 0.0
     key = (i, name, cw, rows, view.theme, view.anim, int(now), entry and entry["fetched"], fetching,
-           int(t * 3) % 3 if fetching else 0, working, len(HISTORY.get(name) or ()), step, panes)
+           int(t * 3) % 3 if fetching else 0, working, len(HISTORY.get(name) or ()), step, panes, held)
     if CARDS.get(i, (None,))[0] != key:
         CARDS[i] = (key, _card(view, i, cw, step, now, entry, fetching, working,
-                             dots=key[9], rows=rows, panes=panes))
+                             dots=key[9], rows=rows, panes=panes, held=held))
     return CARDS[i][1]
 
 
-def _card(view, i, cw, t, now, entry, fetching, working, dots=None, rows=3, panes=None):
+def _card(view, i, cw, t, now, entry, fetching, working, dots=None, rows=3, panes=None, held=0):
     agent = view.agents[i]
     name, st = agent["name"], view.style(i)
     rainbow = THEMES[view.theme]["name"] == "rainbow"
@@ -573,6 +720,8 @@ def _card(view, i, cw, t, now, entry, fetching, working, dots=None, rows=3, pane
         status, scol = f"{working} working", TEXT
     elif fetching:
         status, scol = "syncing" + "·" * (1 + dots), SOFT
+    elif held:
+        status, scol = f"limited {math.ceil(held - now)}s", WARN
     elif entry:
         status, scol = ago(entry["fetched"]), (WARN if stale else SOFT)
     else:
@@ -827,10 +976,12 @@ def render(view, cols, rows, t):
     star = mix((225, 165, 40), (255, 222, 120), wave(0, t, speed=3.0)) if view.anim else (240, 195, 80)
     overlay(top, 2, " ", TEXT)
     overlay(top, 3, "✦", star)
-    overlay(top, 4, " usage ", TEXT, bold=True)
+    titles = (" usage · every provider ", " usage · all ") if view.peeking() else ()
+    title = next((h for h in titles if 4 + len(h) + 2 <= cols), " usage ")
+    overlay(top, 4, title, TEXT, bold=True)
     th = THEMES[view.theme]["name"]
     tag = f" ◂ {th} ▸ "
-    if now < view.toast_until and cols >= 12 + len(tag) + 3:
+    if now < view.toast_until and cols >= 5 + len(title) + len(tag) + 3:
         overlay(top, cols - 2 - len(tag), tag, TEXT, bold=True)
 
     with LOCK:
@@ -838,7 +989,8 @@ def render(view, cols, rows, t):
         working = sum(WORKING.values())
         herdr = HERDR_OK
     status = f" {working} working " if working else " idle " if herdr else " live "
-    hints = next((h for h in (" t theme · r refresh · s settings · u agents · q quit ",
+    hints = next((h for h in (" hold tab all · t theme · r refresh · s settings · u agents · q quit ",
+                              " t theme · r refresh · s settings · u agents · q quit ",
                               " t theme · s settings · u agents · q ", " t theme · s · u · q ", "")
                   if len(h) + max(13, len(status)) + 6 <= cols), "")
     overlay(bottom, 2, status, TEXT if working else SOFT)
@@ -872,8 +1024,11 @@ def render(view, cols, rows, t):
         left = (inner_w - grid_w) // 2
         gap = 0 if lids else min(gap, 1)
         def join(segs):
+            # an incomplete last row still spans the grid, so no cell keeps
+            # whatever the previous frame drew there
+            segs = list(segs) + [" " * cw] * (ncols - len(segs))
             text = (" " * gap_x).join(segs)
-            return " " * left + text + " " * (inner_w - left - len(text))
+            return " " * left + text + " " * (inner_w - left - ap.visible_len(text))
 
         if mode == "fitted":
             body, pad_top = fitted_rows(view, ncols, cw, nr, active, inner_h, t, now), 0
@@ -912,6 +1067,9 @@ def render(view, cols, rows, t):
         content = content or blank
         if not content.strip():
             content = blank
+        # The redraw puts the right edge at a fixed column, so a short row would
+        # leave the previous frame's cells frozen between them.
+        content += " " * (inner_w - ap.visible_len(content))
         lines.append((ring[(r + 1, 0)] + RESET, " " + content + " ", ring[(r + 1, cols - 1)] + RESET))
     lines.append("".join(bottom) + RESET)
     return lines
@@ -941,12 +1099,22 @@ def start(providers):
 
 
 def frame_time(view):
+    if view.peeking():
+        return ap.FRAME_TIME   # the peek ends on a deadline when the terminal can't report Tab's release
     return ap.FRAME_TIME if view.anim else 1.0   # once a second keeps the countdowns current
 
 
-def handle(view, key, providers):
-    """Apply a key on the usage screen. Returns "agents", "settings", "quit", or None."""
-    if key in ("t", "right", "l", "T", "left", "h"):
+def handle(view, key, providers, releases=False):
+    """Apply a key on the usage screen. Returns "agents", "settings", "quit", or None.
+
+    releases: the terminal reports key releases, so Tab's comes as "release:\\t"."""
+    if key == "\t":
+        view.hold(releases)
+    elif key == "release:\t":
+        view.peek_until = 0
+    elif key.startswith("release:"):
+        pass
+    elif key in ("t", "right", "l", "T", "left", "h"):
         preferences.cycle(THEME.key, -1 if key in ("T", "left", "h") else 1)
         view.toast_until = time.time() + 2.5
     elif key == "r":

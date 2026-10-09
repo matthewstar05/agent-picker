@@ -15,8 +15,8 @@ import usage_panel as panel
 class UsageBorderTests(unittest.TestCase):
     def test_usage_frame_clock_includes_render_time(self):
         if hasattr(panel, "frame_time"):
-            self.assertEqual(panel.frame_time(SimpleNamespace(anim=True)), 1 / 60)
-            self.assertEqual(panel.frame_time(SimpleNamespace(anim=False)), 1.0)
+            self.assertEqual(panel.frame_time(SimpleNamespace(anim=True, peeking=lambda: False)), 1 / 60)
+            self.assertEqual(panel.frame_time(SimpleNamespace(anim=False, peeking=lambda: False)), 1.0)
             return
         clock, waits = [0.0], []
         class Terminal:
