@@ -114,6 +114,13 @@ def cd_command(path):
     return f'cd "{path}"' if WINDOWS else "cd " + shlex.quote(path)
 
 
+def route_directory_command(path):
+    # A killed TUI can leave mouse reporting, keyboard protocols, and raw tty
+    # flags behind. Reset before the replacement agent starts negotiating them.
+    prefix = "" if WINDOWS else "stty sane && printf '\\033c' && "
+    return prefix + cd_command(path)
+
+
 def state_file():
     return state_dir() / "herdr-ai-tabs.json"
 
@@ -189,22 +196,34 @@ def stop_panes(herdr, panes):
             herdr("pane", "send-keys", pane, "ctrl+c", "ctrl+c")
         time.sleep(1.5)
         return
+    pending = {pane: busy(herdr.process_info(pane)) for pane in panes}
+    pending = {pane: pgid for pane, pgid in pending.items() if pgid}
+    if os.getpgrp() in pending.values():
+        sys.exit("herdr-ai: refusing to restart the caller's process group")
+
+    def group_alive(pgid):
+        try:
+            os.killpg(pgid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+
     for sig, wait in ((signal.SIGTERM, 4.0), (signal.SIGKILL, 2.0)):
-        pending = {}
-        for pane in panes:
-            pgid = busy(herdr.process_info(pane))
-            if pgid and pgid != os.getpgrp():
-                pending[pane] = pgid
-                try:
-                    os.killpg(pgid, sig)
-                except ProcessLookupError:
-                    pass
+        for pgid in pending.values():
+            try:
+                os.killpg(pgid, sig)
+            except ProcessLookupError:
+                pass
         deadline = time.monotonic() + wait
         while pending and time.monotonic() < deadline:
             time.sleep(0.15)
-            pending = {p: g for p, g in pending.items() if busy(herdr.process_info(p))}
+            # The wrapper can exit before its agent and MCP children. They must
+            # finish cleanup before a new agent touches the same terminal.
+            pending = {p: g for p, g in pending.items() if group_alive(g)}
         if not pending:
-            return
+            break
+    if pending or any(busy(herdr.process_info(pane)) for pane in panes):
+        sys.exit("herdr-ai: panes did not stop; no restart commands were sent")
 
 
 def route(herdr, cwd, recorded, everything, commands=PANES):
@@ -236,7 +255,7 @@ def route(herdr, cwd, recorded, everything, commands=PANES):
     if os.environ.get("HERDR_AI_DRY", "0") == "1":
         plan = {pane: (name, None) for pane, (name, _) in plan.items()}
     for pane, (_, line) in plan.items():
-        herdr("pane", "run", pane, cd_command(cwd))
+        herdr("pane", "run", pane, route_directory_command(cwd))
         if line:
             herdr("pane", "run", pane, line)
     return [name for name, _ in plan.values()]

@@ -62,6 +62,40 @@ class FakeHerdr:
 
 
 class HerdrAiTests(unittest.TestCase):
+    def test_reroute_resets_terminal_modes_before_changing_directory(self):
+        with patch.object(herdr_ai, "WINDOWS", False):
+            self.assertEqual(herdr_ai.route_directory_command("/a b"),
+                             "stty sane && printf '\\033c' && cd '/a b'")
+        with patch.object(herdr_ai, "WINDOWS", True):
+            self.assertEqual(herdr_ai.route_directory_command("C:/a b"), 'cd "C:/a b"')
+
+    def test_stop_waits_for_children_after_wrapper_returns_to_shell(self):
+        herdr = SimpleNamespace(process_info=lambda pane: {
+            "shell_pid": 10, "foreground_process_group_id": 20 if not signals else 10})
+        signals = []
+
+        def killpg(pgid, sig):
+            signals.append(sig)
+            if sig == 0 and signals.count(0) == 2:
+                raise ProcessLookupError
+
+        with patch.object(herdr_ai, "WINDOWS", False), \
+             patch.object(herdr_ai.os, "getpgrp", return_value=99), \
+             patch.object(herdr_ai.os, "killpg", side_effect=killpg), \
+             patch.object(herdr_ai.time, "sleep"):
+            herdr_ai.stop_panes(herdr, ["pane"])
+        self.assertEqual(signals, [herdr_ai.signal.SIGTERM, 0, 0])
+
+    def test_stop_aborts_if_pane_stays_busy(self):
+        herdr = SimpleNamespace(process_info=lambda pane: {
+            "shell_pid": 10, "foreground_process_group_id": 20})
+        with patch.object(herdr_ai, "WINDOWS", False), \
+             patch.object(herdr_ai.os, "getpgrp", return_value=99), \
+             patch.object(herdr_ai.os, "killpg", side_effect=ProcessLookupError), \
+             patch.object(herdr_ai.time, "sleep"), \
+             self.assertRaisesRegex(SystemExit, "no restart commands"):
+            herdr_ai.stop_panes(herdr, ["pane"])
+
     def setUp(self):
         self.state = tempfile.TemporaryDirectory()
         self.addCleanup(self.state.cleanup)
@@ -155,7 +189,7 @@ class HerdrAiTests(unittest.TestCase):
         self.assertEqual(len(runs), 5)   # four agents and the selector; usage keeps running
         self.assertEqual(len(self.stopped), 5)
         for lines in runs.values():
-            self.assertEqual(lines[0], herdr_ai.cd_command(str(ROOT / "src")))
+            self.assertEqual(lines[0], herdr_ai.route_directory_command(str(ROOT / "src")))
         launched = [lines[1] for lines in runs.values()]
         for name in ("Antigravity", "Codex", "Claude"):
             self.assertTrue(any(c.endswith("--picker-launch " + name) for c in launched), name)
@@ -175,7 +209,7 @@ class HerdrAiTests(unittest.TestCase):
             "w9:p4": {"agent": "codex"},                         # agent pane already at its shell
         })
         self.run_cli(INSIDE, cwd=ROOT / "src", entry=herdr_ai.route_main)
-        self.assertEqual(self.fake.runs(), {"w9:p2": [herdr_ai.cd_command(str(ROOT / "src")),
+        self.assertEqual(self.fake.runs(), {"w9:p2": [herdr_ai.route_directory_command(str(ROOT / "src")),
                                                       "claude --resume abc"]})
         self.assertEqual(self.stopped, ["w9:p2"])
 
