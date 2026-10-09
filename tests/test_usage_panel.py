@@ -1,5 +1,6 @@
 import io
 import json
+import os
 import re
 import sys
 import tempfile
@@ -424,6 +425,7 @@ class CardScopeTests(unittest.TestCase):
         self.assertEqual(preferences.get(panel.CARD_KEY + "Codex"), "all")
 
 
+@unittest.skipIf(os.name == "nt", "POSIX input decoding; Windows reads keys through msvcrt")
 class KeyTests(unittest.TestCase):
     def keys(self, data):
         import os

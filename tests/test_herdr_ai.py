@@ -60,7 +60,8 @@ class FakeHerdr:
     def start_agents(self):
         """Pretend every pane the layout launched is running, so a reroute has work to do."""
         for pane, lines in self.runs().items():
-            self.panes[pane]["argv"] = shlex.split(lines[-1])
+            # Windows lines are bare words joined with spaces; see picker_command.
+            self.panes[pane]["argv"] = lines[-1].split() if herdr_ai.WINDOWS else shlex.split(lines[-1])
         self.calls.clear()
 
 
@@ -75,15 +76,17 @@ class HerdrAiTests(unittest.TestCase):
     def test_reroute_types_control_bytes_as_raw_text(self):
         """send-keys would come out as CSI u sequences while a killed agent's
         kitty keyboard mode is still on, so nothing goes through send-keys."""
-        self.run_cli(INSIDE, cwd=ROOT)
-        codex = self.team_panes()["panes"]["codex"]
-        self.fake.start_agents()
         with patch.object(herdr_ai, "WINDOWS", False):
+            self.run_cli(INSIDE, cwd=ROOT)
+            codex = self.team_panes()["panes"]["codex"]
+            self.fake.start_agents()
             self.run_cli(INSIDE, cwd=ROOT / "src")
+            route = herdr_ai.route_directory_command(str(ROOT / "src"))
         typed = [c[3:] for c in self.fake.calls if c[:2] in (["pane", "send-keys"], ["pane", "send-text"]) and c[2] == codex]
-        self.assertEqual(typed, [["\x03\x15"], ["\x15" + herdr_ai.route_directory_command(str(ROOT / "src")) + "\n"],
+        self.assertEqual(typed, [["\x03\x15"], ["\x15" + route + "\n"],
                                  ["\x15" + self.fake.runs()[codex][-1] + "\n"]])
 
+    @unittest.skipIf(os.name == "nt", "POSIX process groups")
     def test_stop_waits_for_children_after_wrapper_returns_to_shell(self):
         herdr = SimpleNamespace(process_info=lambda pane: {
             "shell_pid": 10, "foreground_process_group_id": 20 if not signals else 10})
@@ -101,6 +104,7 @@ class HerdrAiTests(unittest.TestCase):
             herdr_ai.stop_panes(herdr, ["pane"])
         self.assertEqual(signals, [herdr_ai.signal.SIGTERM, 0, 0])
 
+    @unittest.skipIf(os.name == "nt", "POSIX process groups")
     def test_stop_aborts_if_pane_stays_busy(self):
         herdr = SimpleNamespace(process_info=lambda pane: {
             "shell_pid": 10, "foreground_process_group_id": 20})
@@ -110,6 +114,11 @@ class HerdrAiTests(unittest.TestCase):
              patch.object(herdr_ai.time, "sleep"), \
              self.assertRaisesRegex(SystemExit, "no restart commands"):
             herdr_ai.stop_panes(herdr, ["pane"])
+
+    @staticmethod
+    def joined(argv):
+        """A relaunch line the way relaunch_line writes it on this platform."""
+        return " ".join(argv) if herdr_ai.WINDOWS else shlex.join(argv)
 
     def setUp(self):
         self.state = tempfile.TemporaryDirectory()
@@ -218,7 +227,7 @@ class HerdrAiTests(unittest.TestCase):
         switched = [sys.executable, str(herdr_ai.ENTRY), "--picker-return", "--picker-launch", "Claude"]
         self.fake.panes[panes["codex"]] = {"agent": "claude", "argv": switched}
         self.run_cli(INSIDE, cwd=ROOT / "src")
-        self.assertEqual(self.fake.runs()[panes["codex"]][1], shlex.join(switched))
+        self.assertEqual(self.fake.runs()[panes["codex"]][1], self.joined(switched))
 
     def test_reroute_keeps_a_switched_provider_herdr_does_not_recognize(self):
         self.run_cli(INSIDE, cwd=ROOT)
@@ -227,7 +236,7 @@ class HerdrAiTests(unittest.TestCase):
         switched = [sys.executable, str(herdr_ai.ENTRY), "--picker-return", "--picker-launch", "Kiro"]
         self.fake.panes[panes["claude"]] = {"argv": switched}   # no "agent"
         self.run_cli(INSIDE, cwd=ROOT / "src")
-        self.assertEqual(self.fake.runs()[panes["claude"]][1], shlex.join(switched))
+        self.assertEqual(self.fake.runs()[panes["claude"]][1], self.joined(switched))
 
     def test_relayout_closes_the_old_usage_pane(self):
         self.run_cli(INSIDE, cwd=ROOT)
