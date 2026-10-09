@@ -2,6 +2,7 @@
 
 import sys
 import io
+import math
 import time
 import unittest
 from pathlib import Path
@@ -13,6 +14,28 @@ import usage_panel as panel
 
 
 class UsageBorderTests(unittest.TestCase):
+    def test_filled_bar_colors_and_pulses_follow_the_bar_mode_direction(self):
+        now, width = 2000, 40
+        window = {"label": "5h", "pct": 50, "resets": now + 3600}
+        styles = [({"color": (40, 150, 190)}, True, 2 * math.pi / (12 * 7)),
+                  ({"gradient": [(40, 150, 190), (200, 80, 100)]}, False, 0.5 / width / 0.08)]
+        for style, live, step in styles:
+            for pulses in (1, 3):
+                for left in (False, True):
+                    def frame(t):
+                        line = panel.Line()
+                        with patch.object(panel, "depleting", return_value=left):
+                            panel.draw_bar(line, window, width, style, t, live, False, now, 0, pulses=pulses)
+                        return line.cells
+                    before, after = frame(0.4), frame(0.4 + step)
+                    filled = width // 2
+                    if left:
+                        self.assertEqual(after[:filled - 1], before[1:filled])
+                    else:
+                        self.assertEqual(after[1:filled], before[:filled - 1])
+                    self.assertNotEqual(before[:filled], after[:filled])
+                    self.assertEqual(before[filled:], after[filled:])
+
     def test_usage_frame_clock_includes_render_time(self):
         if hasattr(panel, "frame_time"):
             self.assertEqual(panel.frame_time(SimpleNamespace(anim=True, peeking=lambda: False)), 1 / 60)

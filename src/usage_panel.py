@@ -688,7 +688,9 @@ def draw_bar(line, w, bar, st, t, live, stale, now, offset, pulses=1, white=Fals
     pct = min(100.0, w["pct"])
     concern = concerning(w, now)
     frac, _ = pace(w, now)
-    if depleting():
+    left = depleting()
+    bar_t = -t if left else t
+    if left:
         # Lit for what's left; the brighter track runs on to where an even pace
         # would have left the bar by now, so it shows only when ahead of pace.
         pct, frac = 100 - pct, None if frac is None else 1 - frac
@@ -701,11 +703,11 @@ def draw_bar(line, w, bar, st, t, live, stale, now, offset, pulses=1, white=Fals
             if white:
                 line.put("▰", WHITE)
                 continue
-            c = ap.grad(st, x / max(1, bar) * st.get("bar_span", 0.5) + offset - t * 0.08)
+            c = ap.grad(st, x / max(1, bar) * st.get("bar_span", 0.5) + offset - bar_t * 0.08)
             if concern:
                 c = mix(c, CONCERN, 0.45)
             if live:
-                glint = max(wave(x + k * 12.0 / pulses, t, 12.0, 7.0) for k in range(pulses)) ** 6
+                glint = max(wave(x + k * 12.0 / pulses, bar_t, 12.0, 7.0) for k in range(pulses)) ** 6
                 c = mix(c, WHITE, 0.5 * glint)
             if stale:
                 c = mix(c, SOFT, 0.55)
