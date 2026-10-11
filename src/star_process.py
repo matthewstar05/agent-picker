@@ -157,7 +157,8 @@ def main():
         if folder:
             lease.claim(ident)
         print('{"star_guard":"ready"}', flush=True)
-        if sys.stdin.buffer.readline() != b"go\n":
+        # Star writes in text mode, so Windows sends "go\r\n".
+        if sys.stdin.buffer.readline().strip() != b"go":
             return 130
         return own(config["argv"])
 

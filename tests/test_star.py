@@ -1064,6 +1064,17 @@ class MeshTests(unittest.TestCase):
         env = patch.dict(os.environ, {"HERDR_TAB_ID": "w1:t1", "HERDR_WORKSPACE_ID": "w1", "HERDR_PANE_ID": "w1:p2"})
         env.start()
         self.addCleanup(env.stop)
+        # Release every member's name lock before the folder goes: Windows
+        # cannot delete a file that is still open.
+        created, original = [], star_mesh.Member.__init__
+
+        def track(member, *args, **kwargs):
+            original(member, *args, **kwargs)
+            created.append(member)
+        p = patch.object(star_mesh.Member, "__init__", track)
+        p.start()
+        self.addCleanup(p.stop)
+        self.addCleanup(lambda: [m.release_name() for m in created])
 
     def test_members_see_each_other_and_exchange_a_task(self):
         lead = self.mesh.Member("lead", "lead")
@@ -1624,7 +1635,10 @@ class RoutingMemoryTests(unittest.TestCase):
                 self.assertEqual(fresh.pinned, "Cursor")
                 self.assertTrue(fresh.plan)
 
-                starcli.Commands(fresh).do_resume(loaded.id)
+                try:
+                    starcli.Commands(fresh).do_resume(loaded.id)
+                finally:
+                    os.chdir(origin)   # /resume moved here; Windows cannot delete a current directory
                 self.assertEqual(fresh.pinned, "Claude")
                 self.assertEqual(fresh.tier, "heavy")
                 self.assertFalse(fresh.plan)

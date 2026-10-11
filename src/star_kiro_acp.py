@@ -12,6 +12,7 @@ import base64
 import json
 import mimetypes
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -80,9 +81,15 @@ class Session:
     def permission(self, params):
         call = params.get("toolCall") or {}
         options = params.get("options") or []
-        title = call.get("title") or "a tool"
-        tool = ((call.get("_meta") or {}).get("kiro") or {}).get("toolName") or call.get("kind") or "tool"
+        raw = call.get("title") or "a tool"
+        title = re.sub(r"^Running: ", "", raw)
         details = call.get("rawInput") if isinstance(call.get("rawInput"), dict) else {}
+        if raw.startswith("Running: ") and "command" not in details:
+            details = {**details, "command": title}   # Kiro's title for a shell command
+        # Kiro may name neither the tool nor its kind; a command is its shell tool,
+        # so "always allow" never covers every unnamed tool at once.
+        tool = (((call.get("_meta") or {}).get("kiro") or {}).get("toolName") or call.get("kind")
+                or ("shell" if "command" in details else "tool"))
         details = {**details, "description": title}
         self.asked += 1
         decision = star_approve.ask(self.folder, f"kiro-{self.asked}", {"tool_name": tool, "input": details})

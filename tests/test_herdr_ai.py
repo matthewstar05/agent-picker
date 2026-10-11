@@ -742,8 +742,8 @@ class HerdrAiTests(unittest.TestCase):
         self.assertEqual(waits[0][2], "w9:p3")
         self.assertIn("idle", waits[0])
         self.assertIn(["agent", "prompt", "w9:p3", "/goal finish it"], self.fake.calls)
-        typed = [c[3] for c in self.fake.calls if c[:2] == ["pane", "send-text"] and c[2] == "w9:p3"]
-        self.assertTrue(any("agent --picker-launch Codex" in t for t in typed))
+        # Typed and submitted on Unix, `pane run` on Windows.
+        self.assertTrue(any("agent --picker-launch Codex" in t for t in self.fake.runs().get("w9:p3", [])))
 
     def test_a_codex_config_error_stops_the_layout_before_any_pane(self):
         self.codex_check.return_value = "unknown variant `never` in mcp_servers.iMCP.tools.x.approval_mode"

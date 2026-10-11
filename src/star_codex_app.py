@@ -17,6 +17,7 @@ from pathlib import Path
 
 import star_approve
 from platform_runtime import direct_argv
+from star_engines import unwrap_shell
 
 CLIENT = {"name": "starcli", "title": "StarCLI", "version": "1"}
 UNSUPPORTED = -32601
@@ -98,7 +99,8 @@ class Session:
             command = params.get("command")
             if isinstance(command, list):
                 command = " ".join(command)
-            allowed = self.ask("Bash", {"command": command or "a command", "description": params.get("reason") or ""})
+            command = unwrap_shell(command or "") or "a command"
+            allowed = self.ask("Bash", {"command": command, "description": params.get("reason") or ""})
             if method == "execCommandApproval":
                 result = {"decision": "approved" if allowed else "denied"}
             else:

@@ -21,7 +21,8 @@ class SessionRefreshTests(unittest.TestCase):
             (claude / "abc.jsonl").write_text("{}")
             import hashlib
             Path(home, ".cursor", "chats", hashlib.md5(b"/work/my.app").hexdigest(), "xyz").mkdir(parents=True)
-            with patch.dict(os.environ, {"HOME": home}), patch.dict(os.environ, {}, clear=False):
+            # Windows finds the home folder through USERPROFILE.
+            with patch.dict(os.environ, {"HOME": home, "USERPROFILE": home}), patch.dict(os.environ, {}, clear=False):
                 os.environ.pop("CLAUDE_CONFIG_DIR", None)
                 self.assertTrue(session_refresh.stored("Claude", "abc", "/work/my.app"))
                 self.assertFalse(session_refresh.stored("Claude", "abc", "/elsewhere"))
