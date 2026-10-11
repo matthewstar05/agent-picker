@@ -96,7 +96,11 @@ def own(argv):
     job = windows_job() if os.name == "nt" else None
     # Windows: closing the job at exit also ends leftover tools and their pipes.
     group = {} if job else {"start_new_session": True, "stdout": subprocess.PIPE, "stderr": subprocess.PIPE}
-    proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, **group)
+    try:
+        proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, **group)
+    except OSError as exc:
+        # Windows' message does not name the program it could not start.
+        raise OSError(f"{argv[0]}: {exc.strerror or exc}") from exc
     exited = threading.Event()
     pumps = [] if job else [threading.Thread(target=pump, args=(stream.fileno(), fd, exited), daemon=True)
                             for stream, fd in ((proc.stdout, 1), (proc.stderr, 2))]

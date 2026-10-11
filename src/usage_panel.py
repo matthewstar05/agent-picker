@@ -305,17 +305,15 @@ def star_turns():
             pid = int(data["pid"])
         except (OSError, ValueError, KeyError, TypeError):
             continue
-        if not ap.WINDOWS:   # a stale file from a StarCLI that died mid-turn
+        # A stale file from a StarCLI that died mid-turn. star_mesh.alive waits
+        # on a Windows process handle, where os.kill(pid, 0) is not a probe.
+        from star_mesh import alive
+        if not alive(pid):
             try:
-                os.kill(pid, 0)
-            except ProcessLookupError:
-                try:
-                    path.unlink()
-                except OSError:
-                    pass
-                continue
-            except PermissionError:
+                path.unlink()
+            except OSError:
                 pass
+            continue
         turns.append((data.get("provider"), data.get("pane"), pid))
     return turns
 
