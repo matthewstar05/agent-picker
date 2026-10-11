@@ -139,7 +139,14 @@ class TeamTests(unittest.TestCase):
         agent, args = team.prepare(star, ["--picker-solo", "--extra"])
         self.assertEqual((agent["argv"], args), (["starcli"], ["--extra"]))
 
-    def test_antigravity_solo_uses_interactive_flag(self):
+    def test_solo_takes_no_brief_while_handoff_is_off(self):
+        with patch.object(team.handoff, "enabled", return_value=False):
+            agent, args = team.prepare(self.agents["Claude"], ["--picker-solo", "--extra"])
+        self.assertNotIn("--append-system-prompt", agent["argv"])
+        self.assertEqual(args, ["--extra"])
+
+    @patch.object(team.handoff, "enabled", return_value=True)
+    def test_antigravity_solo_uses_interactive_flag(self, _):
         _, args = team.prepare(self.agents["Antigravity"], ["--picker-solo", "--extra"])
         self.assertEqual(args[:2], ["--extra", "-i"])
         self.assertIn("herdr-ai", args[2])

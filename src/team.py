@@ -160,7 +160,7 @@ How:
 - A worker that reports a usage limit is done for now: move its work to another worker or do it yourself.
 - Tell the user what you delegated in a line, not the full task.
 
-{handoff.rules(agent['name'], 'lead', usage_pane)}"""
+{handoff.rules(agent['name'], 'lead', usage_pane)}""".rstrip()
 
 
 def crew_brief(agent, lead, usage_pane=None):
@@ -219,8 +219,9 @@ def prepare(agent, args):
     --picker-lead PANES [--picker-crew-of NAME] [--picker-gemini PANE] [--picker-usage-pane PANE],
     --picker-crew PANE [--picker-usage-pane PANE], or --picker-solo (a Standard pane)."""
     solo = args[:1] == ["--picker-solo"]
-    if solo and agent["name"] == "Star":
-        return agent, list(args[1:])   # StarCLI routes its own turns; a brief would read as a prompt
+    if solo and (agent["name"] == "Star" or not handoff.enabled()):
+        # StarCLI routes its own turns, and with handoff off a solo pane has no brief.
+        return agent, list(args[1:])
     if not solo and len(args) < 2:
         raise ValueError(f"{args[0]} needs pane ids")
     lead = args[0] == "--picker-lead"
@@ -306,7 +307,7 @@ def choose(settings_only=False):
     writer = ap.Screen(terminal)
     out = sys.stdout
     start = time.monotonic()
-    menu = preferences.Menu([preferences.register(s) for s in (*herdr_sidebar.SETTINGS, ap.BARS)])
+    menu = preferences.Menu([preferences.register(s) for s in (*herdr_sidebar.SETTINGS, ap.BARS, handoff.AUTO)])
     settings_open = settings_only
     notices = []
 

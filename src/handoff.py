@@ -1,8 +1,8 @@
 """Usage limits for herdr-ai agents, and handing a goal to another provider.
 
-Every agent herdr-ai starts is told how to check its provider's usage and, when
-a limit is near and the goal is unfinished, to hand the goal to the next
-provider with quota: Codex, then Claude, then whichever of Cursor and Kiro
+With the "Hand off at 90%" setting on (off by default), every lead or solo agent
+herdr-ai starts is told how to check its provider's usage and, when a limit is
+near and the goal is unfinished, to hand the goal to the next provider with quota: Codex, then Claude, then whichever of Cursor and Kiro
 resets sooner. Antigravity's Gemini Flash is never handed a goal or a team to
 lead; teams spend it on trivial crew work instead.
 """
@@ -13,6 +13,7 @@ import threading
 import time
 
 import agent_picker as ap
+import preferences
 import provider_priority
 
 NEAR = 90          # percent of any window used: hand off before the hard stop
@@ -20,6 +21,15 @@ FRESH = 5 * 60     # older meters are re-read before deciding
 REFRESH_WAIT = 3.0
 ORDER = ("Codex", "Claude", "Cursor|Kiro")   # handoff and orchestrator priority
 GEMINI = "Antigravity"
+AUTO = preferences.Setting(
+    "herdr_ai.handoff", "Herdr AI", f"Hand off at {NEAR}%", [False, True], False,
+    hint="Tell lead and solo agents to pass an unfinished goal to the next provider near a usage limit.",
+    names={False: "off", True: "on"})
+
+
+def enabled():
+    preferences.register(AUTO)
+    return preferences.get(AUTO.key) is True
 
 
 def command():
@@ -137,7 +147,9 @@ def report(me=None, usage=None, now=None):
     names = [a["name"] for a in ap.AGENTS if ap.installed(a) and a["name"] in ap.FETCHERS]
     usage = read_usage(names) if usage is None else usage
     width = max([len(n) for n in names] + [8])
-    lines = [f"Usage by provider (percent used, time to reset). Hand off at {NEAR}%."]
+    on = enabled()
+    lines = ["Usage by provider (percent used, time to reset). " +
+             (f"Hand off at {NEAR}%." if on else "Handoff is off (herdr-ai --settings).")]
     for name in names:
         found = windows(usage.get(name), now)
         meters = "   ".join(f"{label} {pct:3.0f}% {ap.until(resets)}" for label, pct, resets in found) or "unknown"
@@ -152,13 +164,18 @@ def report(me=None, usage=None, now=None):
     elif me:
         mine = usable(me, usage, now)
         nxt, why = target(me, usage, now=now)
-        verdict = {True: "below the limit", False: "AT THE LIMIT: hand off now", None: "unknown"}[mine]
-        lines.append(f"You (*) are {me}: {verdict}. Next provider: {nxt or 'none'} ({why}).")
+        verdict = {True: "below the limit", False: "AT THE LIMIT" + (": hand off now" if on else ""),
+                   None: "unknown"}[mine]
+        lines.append(f"You (*) are {me}: {verdict}." +
+                     (f" Next provider: {nxt or 'none'} ({why})." if on else ""))
     return "\n".join(lines)
 
 
 def rules(name, role, usage_pane=None):
-    """The usage paragraph for an agent's instructions. role: lead, crew, or solo."""
+    """The usage paragraph for an agent's instructions. role: lead, crew, or solo.
+    Empty for a lead or solo agent while handoff is off; crew still stop near a limit."""
+    if role != "crew" and not enabled():
+        return ""
     cmd = command()
     pane = (f" The usage pane {usage_pane}, at the bottom right of this tab, shows the same meters as bars;"
             f" read it with `herdr pane read {usage_pane} --source visible`.") if usage_pane else ""

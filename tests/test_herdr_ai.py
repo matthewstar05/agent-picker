@@ -239,6 +239,10 @@ class HerdrAiTests(unittest.TestCase):
         self.codex_patch = patch.object(herdr_ai, "codex_problem", return_value=None)
         self.codex_check = self.codex_patch.start()
         self.addCleanup(self.codex_patch.stop)
+        # Handoff is off by default; the handoff tests run with it on.
+        on = patch("handoff.enabled", return_value=True)
+        self.handoff_on = on.start()
+        self.addCleanup(on.stop)
 
     def run_cli(self, env, argv=(), cwd=ROOT, entry=herdr_ai.main, setup=None):
         """setup is what the menu answers: None for Standard, a provider name, or False to quit."""
@@ -704,6 +708,15 @@ class HerdrAiTests(unittest.TestCase):
             self.run_cli({**INSIDE, "HERDR_PANE_ID": panes["lead"]}, ["--handoff", "g", str(notes)])
         spawn.assert_not_called()
         self.assertIn("Tell the user", out[-1])
+
+    def test_handoff_is_refused_while_the_setting_is_off(self):
+        self.run_cli(INSIDE)
+        panes = self.team_panes()["panes"]
+        self.fake.start_agents()
+        self.handoff_on.return_value = False
+        error, jobs = self.handoff(panes["claude"])
+        self.assertIn("handoff is off", error)
+        self.assertEqual(jobs, [])
 
     def test_handoff_needs_its_notes_file(self):
         self.run_cli(INSIDE)

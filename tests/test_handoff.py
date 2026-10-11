@@ -79,7 +79,19 @@ class HandoffTests(unittest.TestCase):
         usage = {"Codex": {"fetched": NOW, "windows": [{"label": "5h", "pct": 100, "resets": NOW - 1}]}}
         self.assertTrue(handoff.usable("Codex", usage, NOW))
 
-    def test_rules_tell_leads_to_hand_off_and_crew_not_to(self):
+    def test_handoff_is_off_by_default_and_leaves_leads_and_solo_without_rules(self):
+        with patch.object(handoff.preferences, "_load", return_value={}):
+            self.assertFalse(handoff.enabled())
+        with patch.object(handoff, "enabled", return_value=False):
+            self.assertEqual(handoff.rules("Claude", "lead", "w:p9"), "")
+            self.assertEqual(handoff.rules("Kiro", "solo"), "")
+            self.assertIn("--usage", handoff.rules("Claude", "crew"))
+            text = handoff.report("Codex", meters(Codex=95, Claude=20), NOW)
+        self.assertIn("Handoff is off", text)
+        self.assertNotIn("hand off now", text)
+
+    @patch.object(handoff, "enabled", return_value=True)
+    def test_rules_tell_leads_to_hand_off_and_crew_not_to(self, _):
         lead = handoff.rules("Claude", "lead", "w:p9")
         self.assertIn("--usage", lead)
         self.assertIn("--handoff", lead)
@@ -91,7 +103,8 @@ class HandoffTests(unittest.TestCase):
         self.assertIn("Never run", crew)
         self.assertIn("--handoff", handoff.rules("Kiro", "solo"))
 
-    def test_report_marks_the_caller_and_names_the_next_provider(self):
+    @patch.object(handoff, "enabled", return_value=True)
+    def test_report_marks_the_caller_and_names_the_next_provider(self, _):
         usage = meters(Codex=95, Claude=20, Antigravity=0)
         with patch.object(handoff.ap, "installed", side_effect=lambda a: a["name"] in ("Codex", "Claude", "Antigravity")):
             text = handoff.report("Codex", usage, NOW)

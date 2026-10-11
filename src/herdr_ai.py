@@ -49,9 +49,10 @@ herdr-reset closes every other pane on the current tab, leaving the terminal you
 run it from, with its history, so herdr-ai can lay the tab out again.
 
 Agents launch through this checkout's picker (--picker-launch), so models,
-effort and permission flags follow your picker defaults. Every agent is told to
-check its usage (herdr-ai --usage) and, at 90% of a limit with its goal
-unfinished, to hand the goal off (herdr-ai --handoff): herdr-ai restarts the pane
+effort and permission flags follow your picker defaults. With "Hand off at 90%"
+on in --settings (off by default), lead and solo agents are told to check their
+usage (herdr-ai --usage) and, at 90% of a limit with the goal unfinished, to
+hand the goal off (herdr-ai --handoff): herdr-ai restarts the pane
 on the next provider with quota, Codex, then Claude, then Cursor or Kiro
 (whichever resets sooner), and starts it with /goal. A team lead on a provider
 its crew share hands off the whole team.
@@ -60,7 +61,7 @@ The middle-bottom pane chooses Cursor or Kiro by remaining quota and reset date.
 Usage: herdr-ai [--setup NAME] [label]
                               (label defaults to the directory name; --setup
                               skips the menu: standard, star, claude, codex, ...)
-       herdr-ai --settings    change crew visibility and usage bars without rerouting
+       herdr-ai --settings    change crew visibility, handoff and usage bars without rerouting
        herdr-ai --open-settings    open those settings in a Herdr popup
        herdr-ai --usage       every provider's usage, and who a handoff would pick
        herdr-ai --handoff GOAL NOTES
@@ -731,6 +732,8 @@ def handoff_main(argv, herdr=None, spawn=None):
     if not inside_herdr():
         sys.exit("herdr-ai: --handoff runs from an agent's pane inside herdr")
     import handoff
+    if not handoff.enabled():
+        sys.exit("herdr-ai: handoff is off. Turn on \"Hand off at 90%\" in herdr-ai --settings to use it.")
     herdr = Herdr(herdr or require_herdr("herdr-ai"), "herdr-ai")
     me = os.environ["HERDR_PANE_ID"]
     live = herdr.tab_panes(os.environ["HERDR_WORKSPACE_ID"], os.environ["HERDR_TAB_ID"])
