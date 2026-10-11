@@ -1,5 +1,70 @@
 [
   {
+    "name": "Star",
+    "pastel": [
+      255,
+      232,
+      170
+    ],
+    "gradient": [
+      [
+        255,
+        206,
+        96
+      ],
+      [
+        255,
+        234,
+        168
+      ],
+      [
+        196,
+        230,
+        255
+      ],
+      [
+        255,
+        220,
+        128
+      ]
+    ],
+    "bar_gradient": [
+      [
+        255,
+        214,
+        110
+      ],
+      [
+        255,
+        240,
+        190
+      ],
+      [
+        200,
+        232,
+        255
+      ]
+    ],
+    "model": "auto routing",
+    "short": "auto",
+    "color": [
+      255,
+      212,
+      110
+    ],
+    "detail": "routes each prompt to the best provider with quota",
+    "argv": [
+      "starcli"
+    ],
+    "executables": [
+      "star"
+    ],
+    "detect": [
+      "star",
+      "starcli"
+    ]
+  },
+  {
     "name": "Claude",
     "pastel": [
       255,
@@ -168,12 +233,8 @@
     ],
     "detail": "gemini-3.8-flash-high",
     "team": {
-      "lead": {
-        "model": "gemini-3.8-flash-high",
-        "effort": "provider default"
-      },
       "crew": {
-        "model": "gemini-3.8-flash-low",
+        "model": "gemini-3.8-flash-high",
         "effort": "provider default"
       }
     },

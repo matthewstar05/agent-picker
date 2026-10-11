@@ -26,10 +26,10 @@ def backup(path):
 
 
 def install_herdr_ai(bindir):
-    """herdr-ai, agent-route and herdr-reset live in this checkout too; herdr-ai replaces the old standalone bash script."""
+    """herdr-ai, agent-route, herdr-reset and StarCLI live in this checkout too; herdr-ai replaces the old standalone bash script."""
     bindir.mkdir(parents=True, exist_ok=True)
     for name, script in (("herdr-ai", "herdr_ai.py"), ("agent-route", "agent_route.py"),
-                         ("herdr-reset", "herdr_reset.py")):
+                         ("herdr-reset", "herdr_reset.py"), ("starcli", "starcli.py")):
         wrapper = bindir / name
         content = "#!/bin/sh\n# agent-picker managed launcher\nexec " + shlex.quote(sys.executable) + " " + shlex.quote(str(ROOT / "src" / script)) + ' "$@"\n'
         if not wrapper.exists() or wrapper.read_text(errors="ignore") != content:
@@ -63,7 +63,8 @@ def main():
         old_usage.unlink()
     alias = shlex.quote(str(wrapper))
     block = (START + "\n" + 'export PATH="$HOME/.local/bin:$PATH"\n'
-             + "alias agent=" + alias + "\n" + "alias usage=" + shlex.quote(str(wrapper) + " --picker-usage") + "\n" + END + "\n")
+             + "alias agent=" + alias + "\n" + "alias usage=" + shlex.quote(str(wrapper) + " --picker-usage") + "\n"
+             + "alias star=" + shlex.quote(str(bindir / "starcli")) + "\n" + END + "\n")
     for rc in (Path.home() / ".zshrc", Path.home() / ".bashrc"):
         original = rc.read_text() if rc.exists() else ""
         text = re.sub(re.escape(START) + r".*?" + re.escape(END) + r"\n?", "", original, flags=re.S)
@@ -78,7 +79,7 @@ def main():
         if text != original:
             backup(rc)
             rc.write_text(text)
-    print("Installed. Open a new terminal, then run agent --picker-doctor. usage opens on the usage panel.")
+    print("Installed. Open a new terminal, then run agent --picker-doctor. usage opens on the usage panel; star opens StarCLI.")
     print(f"Updates are read directly from: {ROOT}")
 
 

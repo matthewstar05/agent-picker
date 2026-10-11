@@ -1,6 +1,7 @@
 """Terminal and process differences, kept out of the shared renderer."""
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -229,6 +230,51 @@ def resolve_argv(agent):
             if found:
                 return [found] + argv[1:]
     return None
+
+
+# Windows runs a .cmd or .bat file through cmd.exe, which re-parses its command
+# line: it expands %VAR%, runs & | < > and ends the command at a newline. Python
+# quotes arguments for normal programs only, so a prompt cannot go to cmd.exe.
+BATCH_SUFFIXES = (".cmd", ".bat")
+CMD_UNSAFE = re.compile(r'[\r\n%^&|<>"]')
+# npm, pnpm and yarn shims end with: "<node>" "%~dp0\path\to\cli.js" %*
+SHIM_SCRIPT = re.compile(r'"%(?:~dp0|dp0%)\\?([^"%]+)"\s+%\*')
+
+
+class UnsafeLauncher(OSError):
+    pass
+
+
+def shim_target(path):
+    """[node, script] that an npm-style batch shim would run, or None."""
+    try:
+        text = Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    folder = Path(path).parent
+    for match in reversed(SHIM_SCRIPT.findall(text)):
+        script = folder / match.replace("\\", os.sep)
+        if script.name.lower() == "node.exe" or not script.is_file():
+            continue
+        node = folder / "node.exe"
+        node = str(node) if node.is_file() else shutil.which("node")
+        return [node, str(script)] if node else None
+    return None
+
+
+def direct_argv(argv, windows=WINDOWS):
+    """argv that passes every argument unchanged. A batch launcher is replaced
+    by the script it runs; one that cannot be unwrapped is refused when an
+    argument holds characters cmd.exe would interpret."""
+    if not windows or not argv or not str(argv[0]).lower().endswith(BATCH_SUFFIXES):
+        return list(argv)
+    target = shim_target(argv[0])
+    if target:
+        return target + list(argv[1:])
+    if any(CMD_UNSAFE.search(str(a)) for a in argv[1:]):
+        raise UnsafeLauncher(f"{Path(argv[0]).name} is a batch launcher, which cannot receive this prompt "
+                             "safely; point the local config at the provider's executable")
+    return list(argv)
 
 
 def launch(argv):

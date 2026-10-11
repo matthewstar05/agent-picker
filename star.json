@@ -1,0 +1,61 @@
+{
+  "_comment": "StarCLI routing defaults. Each provider runs one model per tier; quality is how well its strongest model handles each kind of task (0 to 1); cost is how precious its quota is (1 = a flagship subscription, lower = a cheap or separate pool), set per provider or per tier; capacity is how much work a full quota buys relative to the others, for Star's combined meter; pools marks windows that are separate allowances rather than limits that all bind; images marks providers that can look at attached images (Codex attaches them, Claude reads the file). The router weighs quality against remaining quota, so these are judgments to tune, not benchmarks.",
+  "providers": {
+    "Codex": {
+      "images": true,
+      "capacity": 1.0,
+      "cost": 1.0,
+      "tiers": {
+        "light": {"model": "gpt-6-luna", "effort": "medium"},
+        "standard": {"model": "gpt-6.1-sol", "effort": "medium"},
+        "heavy": {"model": "gpt-6.1-sol", "effort": "high"}
+      },
+      "quality": {"chat": 0.8, "search": 0.85, "mechanical": 0.9, "edit": 0.95, "build": 0.95,
+                  "debug": 0.96, "review": 0.88, "design": 0.86, "write": 0.75, "web": 0.8}
+    },
+    "Claude": {
+      "images": true,
+      "capacity": 1.0,
+      "cost": 1.0,
+      "tiers": {
+        "light": {"model": "claude-haiku-5-5", "effort": "low"},
+        "standard": {"model": "claude-sonnet-5-5", "effort": "medium"},
+        "heavy": {"model": "claude-opus-5-5", "effort": "high"}
+      },
+      "quality": {"chat": 0.92, "search": 0.85, "mechanical": 0.85, "edit": 0.92, "build": 0.93,
+                  "debug": 0.92, "review": 0.95, "design": 0.96, "write": 0.96, "web": 0.88}
+    },
+    "Kiro": {
+      "capacity": 0.5,
+      "cost": 0.7,
+      "tiers": {
+        "light": {"model": "claude-sonnet-5.5", "effort": "low"},
+        "standard": {"model": "claude-sonnet-5.5", "effort": "medium"},
+        "heavy": {"model": "claude-opus-5.5", "effort": "high"}
+      },
+      "quality": {"chat": 0.86, "search": 0.8, "mechanical": 0.82, "edit": 0.87, "build": 0.88,
+                  "debug": 0.86, "review": 0.88, "design": 0.89, "write": 0.88, "web": 0.7}
+    },
+    "Cursor": {
+      "capacity": 0.6,
+      "pools": true,
+      "cost": 0.8,
+      "tiers": {
+        "light": {"model": "auto", "pool": "cr", "cost": 0.4},
+        "standard": {"model": "grok-4.7-high", "pool": "ex"},
+        "heavy": {"model": "claude-opus-5-5-high", "pool": "ex"}
+      },
+      "quality": {"chat": 0.8, "search": 0.82, "mechanical": 0.85, "edit": 0.86, "build": 0.86,
+                  "debug": 0.84, "review": 0.8, "design": 0.8, "write": 0.76, "web": 0.72}
+    },
+    "Antigravity": {
+      "capacity": 0.3,
+      "cost": 0.3,
+      "tiers": {
+        "light": {"model": "gemini-3.8-flash-high"}
+      },
+      "only": ["chat", "search", "mechanical"],
+      "quality": {"chat": 0.72, "search": 0.78, "mechanical": 0.8}
+    }
+  }
+}

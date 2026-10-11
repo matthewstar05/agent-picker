@@ -91,14 +91,8 @@ ANIMATE = preferences.register(preferences.Setting(
     hint="Off redraws once a second and uses almost no CPU. a toggles it there too.",
     names={True: "on", False: "off"}))
 
-BARS = preferences.register(preferences.Setting(
-    "usage.bars", "Usage panel", "Bars", ["left", "used"], "left",
-    hint="Depleting bars start full and empty as a limit is used; filling bars grow toward 100%.",
-    names={"left": "depleting", "used": "filling"}))
-
-
-def depleting():
-    return preferences.get(BARS.key) == "left"
+BARS = preferences.register(ap.BARS)
+depleting = ap.depleting
 
 
 def shown_pct(pct):
@@ -132,6 +126,7 @@ def cards_summary(children):
 CARDS_PAGE = preferences.register(preferences.Page(
     "usage.cards", "Usage panel", "Provider cards",
     hint="Turn each provider found on this computer on or off. ⏎ opens.", summary=cards_summary))
+STAR_RESETS = preferences.register(ap.STAR_RESETS)
 
 
 def card_setting(name):
@@ -166,6 +161,9 @@ HOLDS = {}           # provider -> epoch its endpoint asked every reader to wait
 HOLDS_FILE = ap.STATE / "usage-holds.json"  # shared, since every picker and panel polls on its own
 HISTORY = {}         # provider -> [[epoch, pct of its first window], ...]
 HISTORY_FILE = STATE / "history.json"
+STAR = "Star"
+STAR_LIVE = ap.STATE / "star" / "live"   # one file per turn StarCLI is running
+STAR_DRIVING = set()  # providers StarCLI is running a turn on right now
 
 # Seconds between reads while one of its agents is working, when Herdr isn't
 # available to say, and while all of its agents are idle. Codex is a local file
@@ -185,7 +183,7 @@ WINDOW_LEN = {"5h": 5 * 3600, "wk": 7 * 86400}   # anything else is a month
 def provider_of(agent):
     """The profile a Herdr agent id or a process name belongs to (by its "detect" names)."""
     a = (agent or "").lower()
-    for ext in (".exe", ".cmd", ".js", ".mjs", ".ps1"):
+    for ext in (".exe", ".cmd", ".js", ".mjs", ".ps1", ".py"):
         if a.endswith(ext):
             a = a[:-len(ext)]
     if not a:
@@ -286,7 +284,63 @@ def herdr_sessions(me):
             slot = found[scope].setdefault(name, {"panes": 0, "working": 0})
             slot["panes"] += 1
             slot["working"] += busy
+
+    def reach(pane_id):
+        pane = next((p for p in panes if p.get("pane_id") == pane_id), None)
+        if pane is None:
+            return ["all"]
+        return (["all"] + ["workspace"] * (pane.get("workspace_id") == space)
+                + ["tab"] * (pane.get("tab_id") == tab))
+
+    add_star_turns(found, working, reach)
     return found, working
+
+
+def star_turns():
+    """[(provider, pane id, pid)] for each turn StarCLI is running right now."""
+    turns = []
+    for path in STAR_LIVE.glob("*.json") if STAR_LIVE.is_dir() else ():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            pid = int(data["pid"])
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+        if not ap.WINDOWS:   # a stale file from a StarCLI that died mid-turn
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
+                continue
+            except PermissionError:
+                pass
+        turns.append((data.get("provider"), data.get("pane"), pid))
+    return turns
+
+
+def add_star_turns(found, working, reach=lambda pane: list(SCOPE_ORDER)):
+    """Light up both StarCLI and the provider it is driving: each counts as working
+    where StarCLI's pane is. The provider gains an agent; Star keeps its own pane
+    count, or one when its pane wasn't seen (StarCLI outside Herdr)."""
+    driving = set()
+    for provider, pane, pid in star_turns():
+        for scope in reach(pane):
+            for name in filter(None, (provider, STAR)):
+                slot = found[scope].setdefault(name, {"panes": 0, "working": 0})
+                slot["working"] += 1
+                if name == STAR:
+                    slot["panes"] = max(slot["panes"], 1)
+                else:
+                    slot["panes"] += 1
+        for name in filter(None, (provider, STAR)):
+            working.setdefault(name, set()).add(f"star:{pid}")
+        if provider:
+            driving.add(provider)
+    with LOCK:
+        STAR_DRIVING.clear()
+        STAR_DRIVING.update(driving)
 
 
 def tmux_sessions():
@@ -326,9 +380,12 @@ def watch_sessions(stop):
             elif os.environ.get("TMUX"):
                 found = tmux_sessions()
                 scopes = {"tab": "this window", "workspace": "this session", "all": "any session"}
+                add_star_turns(found, now_working)
             else:
-                found = dict.fromkeys(SCOPE_ORDER, local_sessions())
+                local = local_sessions()
+                found = {scope: {k: dict(v) for k, v in local.items()} for scope in SCOPE_ORDER}
                 scopes = dict.fromkeys(SCOPE_ORDER, "this computer")
+                add_star_turns(found, now_working)
         except Exception:
             found, scopes = {s: {} for s in SCOPE_ORDER}, SCOPES
         with LOCK:
@@ -409,26 +466,11 @@ def retry_after(error):
 
 def merge_cache():
     """Adopt anything newer that agent-picker wrote, and write back what's newer here."""
-    try:
-        disk = json.loads(ap.USAGE_CACHE.read_text())
-    except Exception:
-        disk = {}
-    changed = False
     with LOCK:
-        for name, entry in disk.items():
-            if entry.get("fetched", 0) > USAGE.get(name, {}).get("fetched", 0):
-                USAGE[name] = entry
-        for name, entry in USAGE.items():
-            if entry.get("fetched", 0) > disk.get(name, {}).get("fetched", 0):
-                disk[name], changed = entry, True
-    if changed:
         try:
-            ap.STATE.mkdir(parents=True, exist_ok=True)
-            tmp = ap.USAGE_CACHE.with_name(f".usage.{os.getpid()}.tmp")
-            tmp.write_text(json.dumps(disk))
-            os.replace(tmp, ap.USAGE_CACHE)
-        except Exception:
-            pass
+            USAGE.update(ap.usage_cache.write(ap.USAGE_CACHE, USAGE))
+        except OSError:
+            USAGE.update(ap.usage_cache.merge(USAGE, ap.usage_cache.read(ap.USAGE_CACHE)))
 
 
 def load_history():
@@ -538,7 +580,8 @@ class View:
         peek = self.peeking()
         with LOCK:
             return [a for a in self.installed if a["name"] in PRESENT
-                    or (peek and a["name"] in ap.FETCHERS) or card_mode(a["name"]) == "always"]
+                    or (peek and (a["name"] in ap.FETCHERS or a["name"] == STAR))
+                    or card_mode(a["name"]) == "always"]
 
     def peeking(self):
         return time.time() < self.peek_until
@@ -733,12 +776,13 @@ def card(view, i, cw, t, now, rows=3):
         working = WORKING.get(name, 0)
         panes = PRESENT.get(name, 0)
         held = HOLDS.get(name, 0)
+        driving = frozenset(STAR_DRIVING) if name == STAR else None
     held = held if held > now else 0
     # Working cards share the border's continuous 60 fps clock. Idle cards
     # still reuse their cached contents between countdown updates.
     step = t if working and view.anim else 0.0
     key = (i, name, cw, rows, view.theme, view.anim, depleting(), int(now), entry and entry["fetched"], fetching,
-           int(t * 3) % 3 if fetching else 0, working, len(HISTORY.get(name) or ()), step, panes, held)
+           int(t * 3) % 3 if fetching else 0, working, len(HISTORY.get(name) or ()), step, panes, held, driving)
     if CARDS.get(i, (None,))[0] != key:
         CARDS[i] = (key, _card(view, i, cw, step, now, entry, fetching, working,
                              dots=key[10], rows=rows, panes=panes, held=held))
@@ -774,6 +818,8 @@ def _card(view, i, cw, t, now, entry, fetching, working, dots=None, rows=3, pane
         status, scol = f"limited {math.ceil(held - now)}s", WARN
     elif entry:
         status, scol = ago(entry["fetched"]), (WARN if stale else SOFT)
+    elif name == STAR:
+        status, scol = "estimated", SOFT
     else:
         status, scol = "", SOFT
     status = status.ljust(10) if fetching else status
@@ -816,7 +862,9 @@ def _card(view, i, cw, t, now, entry, fetching, working, dots=None, rows=3, pane
         head.at(right, status, scol)
     lines = [head.pad(cw)]
 
-    if not entry:
+    if name == STAR:
+        lines += star_lines(cw, t, now, live, view.anim, st if themed and not rainbow else None)
+    elif not entry:
         if name not in ap.FETCHERS:
             msg = "no usage reader for this CLI yet"
         else:
@@ -842,6 +890,10 @@ def _card(view, i, cw, t, now, entry, fetching, working, dots=None, rows=3, pane
             if tail_w and tail:
                 line.put("  " + tail, CONCERN if concerning(w, now) else (TEXT if live else SOFT))
             lines.append(line.pad(cw))
+        credits = ap.credits_text(entry["windows"][0]) if len(entry["windows"]) == 1 else None
+        if credits:
+            # a lone limit's spare row, lined up with the start of its bar
+            lines.append(Line().put("      ").put(clip(credits, cw - 7), SOFT).pad(cw))
     while len(lines) < 3:
         lines.append(Line().pad(cw))
     if rows >= 7:
@@ -852,6 +904,43 @@ def _card(view, i, cw, t, now, entry, fetching, working, dots=None, rows=3, pane
     if live and view.anim:
         return ap.lit(lines, st, t)
     return [line.paint() for line in lines]
+
+
+def star_info(now):
+    import star_meter
+    with LOCK:
+        usage, driving = dict(USAGE), set(STAR_DRIVING)
+    info = star_meter.summary(usage, {a["name"] for a in ap.AGENTS if ap.installed(a)},
+                              {a["name"]: a for a in ap.AGENTS}, now)
+    return star_meter, info, driving
+
+
+def star_lines(cw, t, now, live, anim, style=None):
+    """Star's card body: its estimated limit as one bar split by provider, in the
+    order their limits reset and in their own colors (the providers StarCLI is
+    driving shimmer), then, when that setting is on, each provider's countdown."""
+    meter, info, driving = star_info(now)
+    if not info:
+        return [Line().put("   ").put(clip("no provider readings yet", cw - 4), SOFT).pad(cw)]
+    left = depleting()
+    line = Line().put("   ").put("∑ ", LABEL).put(" ")
+    tail_w = 12 if cw - 6 - 5 - 12 >= 6 else 0
+    bar = min(40, cw - 6 - 5 - tail_w - 1)
+    sizes = None
+    if bar >= 3:
+        cells, sizes = meter.bar(info, bar, left, t if anim else 0.0, driving, live and anim, style=style)
+        for glyph, color in cells:
+            line.put(glyph, color)
+    shown = info["now"] if left else 100 - info["now"]
+    line.put(f" {shown:3.0f}%", meter.pct_color(-t * 0.1 if live and anim else 0.0), bold=True)
+    if tail_w and info["soonest"]:
+        line.put("  ↻ " + until(info["soonest"]["resets"]), TEXT if live else SOFT)
+    if not ap.star_resets():   # the cooldown dots are opt-in (settings, Star section)
+        return [line.pad(cw)]
+    second = Line().put("      ")
+    for ch, color in meter.resets_row(info, cw - 7, sizes, now):
+        second.put(ch, color)
+    return [line.pad(cw), second.pad(cw)]
 
 
 def compact_row(view, i, width, t, now):
@@ -878,9 +967,24 @@ def compact_row(view, i, width, t, now):
     put_name(line, agent, t, panes=panes, style=None if brand else st)
     del line.cells[start + name_w:]
     line.pad(start + name_w)
-    if entry:
+    meter, info, driving = star_info(now) if name == STAR else (None, None, None)
+    if info:
+        line.put(" ∑  ", LABEL)
+        bar = min(24, width - len(line.cells) - 6)
+        if bar >= 3:
+            cells, _ = meter.bar(info, bar, depleting(), t if view.anim else 0.0, driving, bool(working and view.anim),
+                                 style=None if brand or rainbow else st)
+            for glyph, color in cells:
+                line.put(glyph, color)
+        shown = info["now"] if depleting() else 100 - info["now"]
+        line.put(f"{shown:4.0f}%", meter.pct_color(), bold=True)
+    elif entry:
         windows = entry["windows"][:2]
+        credits = ap.credits_text(windows[0]) if len(windows) == 1 else None
         share = (width - len(line.cells)) // 2
+        if credits:
+            # the bar gives up whatever the credits need from the second half
+            share = min(share, width - len(line.cells) - len(credits) - 1)
         for w in windows:
             w = dict(w)
             if w.get("resets") and w["resets"] < now:
@@ -894,6 +998,8 @@ def compact_row(view, i, width, t, now):
                          white=rainbow and not working)
             line.put(f"{shown_pct(w['pct']):4.0f}%", WHITE if rainbow else pct_color(w, st, now), bold=True)
             line.pad(max(len(line.cells), seg_start + share))
+        if credits:
+            line.put(" " + clip(credits, width - len(line.cells) - 1), SOFT)
     else:
         line.put(" ··", SOFT)
     content = line.pad(width).paint()

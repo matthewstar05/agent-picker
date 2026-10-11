@@ -42,13 +42,14 @@ class FakeHerdr:
             result = {"pane": {"pane_id": pane}}
         elif args[:2] == ["pane", "list"]:
             result = {"panes": [{"pane_id": p, "tab_id": "w9:t1", "terminal_id": "term_" + p,
-                                 **({"agent": i["agent"]} if i.get("agent") else {})}
+                                 **{k: i[k] for k in ("agent", "agent_session", "agent_status", "cwd") if k in i}}
                                 for p, i in self.panes.items()] +
                                [{"pane_id": "w9:pX", "tab_id": "w9:t2", "agent": "codex"}]}
         elif args[:2] == ["pane", "process-info"]:
             argv_ = self.panes[args[3]].get("argv")
             result = {"process_info": {"shell_pid": 10, "foreground_process_group_id": 20 if argv_ else 10,
-                                       "foreground_processes": [{"pid": 20, "argv": argv_}] if argv_ else []}}
+                                       "foreground_processes": ([{"pid": 20, "argv": argv_}] +
+                                           self.panes[args[3]].get("children", [])) if argv_ else []}}
         else:
             result = {}
         return SimpleNamespace(returncode=0, stdout=json.dumps({"result": result}), stderr="")
@@ -67,11 +68,101 @@ class FakeHerdr:
         """Pretend every pane the layout launched is running, so a reroute has work to do."""
         for pane, lines in self.runs().items():
             # Windows lines are bare words joined with spaces; see picker_command.
-            self.panes[pane]["argv"] = lines[-1].split() if herdr_ai.WINDOWS else shlex.split(lines[-1])
+            argv = lines[-1].split() if herdr_ai.WINDOWS else shlex.split(lines[-1])
+            self.panes[pane]["argv"] = argv
+            if "--picker-launch" in argv:
+                name = argv[argv.index("--picker-launch") + 1]
+                self.start_agent(pane, argv, name)
+            elif "--picker-launch-priority" in argv:
+                self.start_agent(pane, argv, "Cursor")
+            elif "--picker-relaunch" in argv:
+                native = herdr_ai.session_refresh.decode(argv[argv.index("--picker-relaunch") + 1])
+                self.panes[pane]["children"][0]["argv"] = native
         self.calls.clear()
+
+    def start_agent(self, pane, wrapper, name):
+        if name == "Star":
+            role = wrapper[wrapper.index("--role") + 1] if "--role" in wrapper else "crew"
+            who = wrapper[wrapper.index("--name") + 1] if "--name" in wrapper else role
+            native = [sys.executable, str(ROOT / "src" / "starcli.py"), "--name", who, "--role", role]
+            self.panes[pane].update(argv=wrapper, agent="star", agent_status="idle",
+                agent_session={"agent": "star", "kind": "id", "value": "session-" + pane},
+                children=[{"pid": 21, "argv": native, "argv0": "starcli.py", "name": "python"}])
+            return
+        binary = {"Claude": "claude", "Codex": "codex", "Cursor": "cursor-agent",
+                  "Kiro": "kiro-cli", "Antigravity": "agy"}[name]
+        native = ["/vendor/" + binary] + (["chat"] if name == "Kiro" else []) + ["--model", "saved-model"]
+        if "--picker-lead" in wrapper or "--picker-crew" in wrapper:
+            if name == "Claude":
+                native += ["--append-system-prompt", "saved team instructions"]
+            elif name == "Codex":
+                native += ["-c", 'developer_instructions="saved team instructions"']
+            elif "--picker-lead" in wrapper:
+                native += ["-i", "old ready prompt"] if name == "Antigravity" else ["old ready prompt"]
+        self.panes[pane].update(argv=wrapper, agent=binary, agent_status="idle",
+            agent_session={"agent": binary, "kind": "id", "value": "session-" + pane},
+            children=[{"pid": 21, "argv": native, "argv0": binary, "name": binary}])
 
 
 class HerdrAiTests(unittest.TestCase):
+    def test_star_refresh_fallback_preserves_native_busy_states_and_session_refs(self):
+        receipt = {"agent_session": {"agent": "star", "kind": "id", "value": "local"},
+                   "agent_status": "idle"}
+        with patch.object(herdr_ai.session_refresh, "star_identity", return_value=receipt) as read:
+            for state in ("working", "blocked"):
+                result = herdr_ai.refresh_details("pane", {"agent_status": state}, {})
+                self.assertEqual(result["agent_status"], state)
+            native = {"agent_session": receipt["agent_session"], "agent_status": "idle"}
+            read.reset_mock()
+            self.assertEqual(herdr_ai.refresh_details("pane", native, {}), native)
+            read.assert_called_once()
+            receipt["agent_status"] = "working"
+            self.assertEqual(herdr_ai.refresh_details("pane", native, {})["agent_status"], "working")
+            receipt["agent_status"] = "idle"
+            other = {**native, "agent_session": {"agent": "star", "kind": "id", "value": "other"}}
+            result = herdr_ai.refresh_details("pane", other, {})
+            self.assertEqual(result["agent_session"], other["agent_session"])
+            self.assertEqual(result["agent_status"], "working")
+
+    def test_star_refresh_uses_exact_local_receipts_when_herdr_omits_session_refs(self):
+        import time
+        self.run_cli(INSIDE, setup="Star")
+        panes = self.team_panes()["panes"]
+        self.fake.start_agents()
+        members = Path(self.state.name) / "star/mesh/members"
+        members.mkdir(parents=True)
+        for role in ("lead", *herdr_ai.CREW):
+            pane = panes[role]
+            self.fake.panes[pane].pop("agent_session")
+            (members / (role + ".json")).write_text(json.dumps({
+                "pid": 21, "pane": pane, "tab": INSIDE["HERDR_TAB_ID"], "workspace": INSIDE["HERDR_WORKSPACE_ID"],
+                "socket": None, "conversation": "local-" + role, "cwd": str(ROOT),
+                "status": "idle", "updated": time.time()}))
+        with patch.object(herdr_ai.session_refresh, "stored", return_value=True):
+            self.run_cli(INSIDE, setup="Star")
+        for role in ("lead", *herdr_ai.CREW):
+            lines = self.fake.runs()[panes[role]]
+            wrapper = shlex.split(lines[-1])
+            native = herdr_ai.session_refresh.decode(wrapper[wrapper.index("--picker-relaunch") + 1])
+            self.assertEqual(native[-2:], ["--resume-id", "local-" + role])
+
+    def test_star_receipt_change_during_refresh_keeps_the_live_process(self):
+        self.run_cli(INSIDE, setup="Star")
+        panes = self.team_panes()["panes"]
+        self.fake.start_agents()
+        self.fake.panes[panes["lead"]].pop("agent_session")
+        calls = []
+        def identity(info, pane):
+            if pane != panes["lead"]:
+                return None
+            calls.append(pane)
+            return {"agent_session": {"agent": "star", "kind": "id", "value": "first" if len(calls) == 1 else "changed"},
+                    "agent_status": "idle"}
+        with patch.object(herdr_ai.session_refresh, "star_identity", side_effect=identity):
+            self.run_cli(INSIDE, setup="Star")
+        self.assertEqual(len(calls), 2)
+        self.assertNotIn(panes["lead"], self.fake.runs())
+
     def test_reroute_resets_terminal_modes_before_changing_directory(self):
         with patch.object(herdr_ai, "WINDOWS", False):
             self.assertEqual(herdr_ai.route_directory_command("/a b"),
@@ -111,6 +202,23 @@ class HerdrAiTests(unittest.TestCase):
         self.assertEqual(signals, [herdr_ai.signal.SIGTERM, 0, 0])
 
     @unittest.skipIf(os.name == "nt", "POSIX process groups")
+    def test_stop_treats_unreaped_group_as_stopped(self):
+        # macOS reports EPERM for a group whose members are all zombies.
+        polls = []
+        herdr = SimpleNamespace(process_info=lambda pane: polls.append(pane) or {
+            "shell_pid": 10, "foreground_process_group_id": 20 if len(polls) < 3 else 10})
+
+        def killpg(pgid, sig):
+            if sig == 0:
+                raise PermissionError(1, "Operation not permitted")
+
+        with patch.object(herdr_ai, "WINDOWS", False), \
+             patch.object(herdr_ai.os, "getpgrp", return_value=99), \
+             patch.object(herdr_ai.os, "killpg", side_effect=killpg), \
+             patch.object(herdr_ai.time, "sleep"):
+            herdr_ai.stop_panes(herdr, ["pane"])
+
+    @unittest.skipIf(os.name == "nt", "POSIX process groups")
     def test_stop_aborts_if_pane_stays_busy(self):
         herdr = SimpleNamespace(process_info=lambda pane: {
             "shell_pid": 10, "foreground_process_group_id": 20})
@@ -130,6 +238,18 @@ class HerdrAiTests(unittest.TestCase):
         self.state = tempfile.TemporaryDirectory()
         self.addCleanup(self.state.cleanup)
         self.fake = FakeHerdr()
+        # Teams lead themselves without Gemini unless a test asks; no live usage reads.
+        plan = patch.object(herdr_ai, "team_plan", side_effect=lambda team: {"lead": team, "gemini": False} if team else {})
+        self.team_plan = plan.start()
+        self.addCleanup(plan.stop)
+        # Fake sessions have no transcripts on disk; tests opt into that check.
+        stored = patch.object(herdr_ai.session_refresh, "stored", return_value=None)
+        self.stored_check = stored.start()
+        self.addCleanup(stored.stop)
+        # Codex's config check runs the real codex binary; tests opt into it.
+        self.codex_patch = patch.object(herdr_ai, "codex_problem", return_value=None)
+        self.codex_check = self.codex_patch.start()
+        self.addCleanup(self.codex_patch.stop)
 
     def run_cli(self, env, argv=(), cwd=ROOT, entry=herdr_ai.main, setup=None):
         """setup is what the menu answers: None for Standard, a provider name, or False to quit."""
@@ -202,47 +322,90 @@ class HerdrAiTests(unittest.TestCase):
         commands = [c for lines in self.fake.runs().values() for c in lines]
         self.assertEqual(len(commands), 6)
         for name in ("Antigravity", "Codex", "Claude"):
-            self.assertTrue(any(c.endswith("--picker-launch " + name) for c in commands), name)
-        self.assertTrue(any(c.endswith("--picker-launch-priority") for c in commands))
+            self.assertTrue(any(c.endswith("--picker-launch " + name + " --picker-solo") for c in commands), name)
+        self.assertTrue(any(c.endswith("--picker-launch-priority --picker-solo") for c in commands))
         self.assertTrue(any(c.endswith("--picker-usage") for c in commands))
 
     def test_dry_run_builds_layout_without_launching(self):
         self.run_cli({**INSIDE, "HERDR_AI_DRY": "1"})
         self.assertEqual(self.fake.runs(), {})
 
-    def test_rerun_in_a_laid_out_tab_reroutes_instead_of_splitting(self):
+    def test_dry_refresh_never_stops_existing_agents_or_clears_their_sessions(self):
+        self.run_cli(INSIDE)
+        self.fake.start_agents()
+        self.run_cli({**INSIDE, "HERDR_AI_DRY": "1"})
+        self.assertEqual(self.stopped, [])
+        self.assertEqual(self.fake.runs(), {})
+
+    def resumed_argv(self, pane):
+        line = self.fake.runs()[pane][-1]
+        args = line.split() if herdr_ai.WINDOWS else shlex.split(line)
+        return herdr_ai.session_refresh.decode(args[args.index("--picker-relaunch") + 1])
+
+    def test_rerun_in_a_laid_out_tab_resumes_exact_sessions_without_splitting(self):
         self.run_cli(INSIDE, cwd=ROOT)
         self.fake.start_agents()
         self.run_cli(INSIDE, cwd=ROOT / "src")
         self.assertFalse([c for c in self.fake.calls if c[:2] == ["pane", "split"]])
         runs = self.fake.runs()
-        self.assertEqual(len(runs), 5)   # four agents and the selector; usage keeps running
-        self.assertEqual(len(self.stopped), 5)
+        self.assertEqual(len(runs), 6)   # agents, selector, and refreshed usage panel
+        self.assertEqual(len(self.stopped), 6)
         for lines in runs.values():
             self.assertEqual(lines[0], herdr_ai.route_directory_command(str(ROOT / "src")))
-        launched = [lines[1] for lines in runs.values()]
-        for name in ("Antigravity", "Codex", "Claude"):
-            self.assertTrue(any(c.endswith("--picker-launch " + name) for c in launched), name)
-        self.assertTrue(any(c.endswith("--picker-launch-priority") for c in launched))
+        panes = self.team_panes()["panes"]
+        for role, flag in (("agy", "--conversation"), ("codex", "resume"),
+                           ("claude", "--resume"), ("cursor", "--resume")):
+            pane = panes[role]
+            native = self.resumed_argv(pane)
+            self.assertEqual(native[-2:], [flag, "session-" + pane])
+            self.assertIn("saved-model", native)
+            self.assertIn("--picker-return", runs[pane][-1])
+        self.assertTrue(runs[panes["usage"]][-1].endswith("--picker-usage"))
         self.assertIn(["tab", "rename", "w9:t1", "src"], self.fake.calls)
+
+    def test_moving_directory_starts_fresh_where_a_conversation_cannot_follow(self):
+        self.run_cli(INSIDE, cwd=ROOT)
+        self.fake.start_agents()
+        panes = self.team_panes()["panes"]
+        for pane in panes.values():
+            self.fake.panes[pane]["cwd"] = str(ROOT)
+        del self.fake.panes[panes["codex"]]["agent_session"]
+        self.stored_check.side_effect = lambda name, session, cwd: False if name == "Claude" else None
+        self.run_cli(INSIDE, cwd=ROOT / "src")
+        runs = self.fake.runs()
+        for role in ("claude", "codex"):
+            self.assertEqual(runs[panes[role]][-1], herdr_ai.picker_command(herdr_ai.PANES[role]))
+        self.assertEqual(self.resumed_argv(panes["cursor"])[-2:], ["--resume", "session-" + panes["cursor"]])
+
+    def test_same_directory_keeps_a_claude_pane_without_a_transcript(self):
+        self.run_cli(INSIDE, cwd=ROOT)
+        self.fake.start_agents()
+        panes = self.team_panes()["panes"]
+        for pane in panes.values():
+            self.fake.panes[pane]["cwd"] = str(ROOT)
+        self.stored_check.side_effect = lambda name, session, cwd: False if name == "Claude" else None
+        self.run_cli(INSIDE, cwd=ROOT)
+        self.assertNotIn(panes["claude"], self.fake.runs())
 
     def test_reroute_keeps_a_provider_switched_through_the_selector(self):
         self.run_cli(INSIDE, cwd=ROOT)
         panes = self.team_panes()["panes"]
         self.fake.start_agents()
         switched = [sys.executable, str(herdr_ai.ENTRY), "--picker-return", "--picker-launch", "Claude"]
-        self.fake.panes[panes["codex"]] = {"agent": "claude", "argv": switched}
+        self.fake.start_agent(panes["codex"], switched, "Claude")
         self.run_cli(INSIDE, cwd=ROOT / "src")
-        self.assertEqual(self.fake.runs()[panes["codex"]][1], self.joined(switched))
+        self.assertEqual(self.resumed_argv(panes["codex"])[0], "/vendor/claude")
+        self.assertEqual(self.resumed_argv(panes["codex"])[-2:], ["--resume", "session-" + panes["codex"]])
 
     def test_reroute_keeps_a_switched_provider_herdr_does_not_recognize(self):
         self.run_cli(INSIDE, cwd=ROOT)
         panes = self.team_panes()["panes"]
         self.fake.start_agents()
         switched = [sys.executable, str(herdr_ai.ENTRY), "--picker-return", "--picker-launch", "Kiro"]
-        self.fake.panes[panes["claude"]] = {"argv": switched}   # no "agent"
+        self.fake.start_agent(panes["claude"], switched, "Kiro")
+        self.fake.panes[panes["claude"]].pop("agent")  # detected through the process instead
         self.run_cli(INSIDE, cwd=ROOT / "src")
-        self.assertEqual(self.fake.runs()[panes["claude"]][1], self.joined(switched))
+        self.assertEqual(self.resumed_argv(panes["claude"])[-2:], ["--resume-id", "session-" + panes["claude"]])
 
     def test_relayout_closes_the_old_usage_pane(self):
         self.run_cli(INSIDE, cwd=ROOT)
@@ -358,10 +521,255 @@ class HerdrAiTests(unittest.TestCase):
         runs = self.fake.runs()
         self.assertNotIn("w9:p1", runs)
         crew = ",".join(panes[r] for r in herdr_ai.CREW)
-        self.assertTrue(runs[panes["lead"]][0].endswith("--picker-launch Claude --picker-lead " + crew))
+        usage = " --picker-usage-pane " + panes["usage"]
+        self.assertTrue(runs[panes["lead"]][0].endswith("--picker-launch Claude --picker-lead " + crew + usage))
         for role in herdr_ai.CREW:
-            self.assertTrue(runs[panes[role]][0].endswith("--picker-launch Claude --picker-crew " + panes["lead"]))
+            self.assertTrue(runs[panes[role]][0].endswith(
+                "--picker-launch Claude --picker-crew " + panes["lead"] + usage))
         self.assertTrue(runs[panes["usage"]][0].endswith("--picker-usage --picker-only Claude"))
+
+    def test_gemini_team_is_led_by_another_provider(self):
+        self.team_plan.side_effect = lambda team: {"lead": "Codex", "gemini": False}
+        self.run_cli(INSIDE, setup="Antigravity")
+        entry = self.team_panes()
+        panes, runs = entry["panes"], self.fake.runs()
+        self.assertEqual((entry["team"], entry["lead"]), ("Antigravity", "Codex"))
+        self.assertIn("--picker-launch Codex --picker-lead", runs[panes["lead"]][0])
+        self.assertIn("--picker-crew-of Antigravity", runs[panes["lead"]][0])
+        for role in herdr_ai.CREW:
+            self.assertIn("--picker-launch Antigravity --picker-crew", runs[panes[role]][0])
+        self.assertTrue(runs[panes["usage"]][0].endswith("--picker-only Codex,Antigravity"))
+
+    def test_refresh_resumes_idle_star_clis_and_leaves_a_working_one(self):
+        self.run_cli(INSIDE, setup="Star")
+        panes = self.team_panes()["panes"]
+        self.fake.start_agents()
+        self.fake.panes[panes["crew2"]]["agent_status"] = "working"
+        self.run_cli(INSIDE, setup="Star")
+        self.assertNotIn(panes["crew2"], self.stopped)
+        self.assertIn(panes["usage"], self.stopped)
+        for role in ("lead", "crew1", "crew3", "crew4"):
+            native = self.resumed_argv(panes[role])
+            self.assertTrue(str(native[1]).endswith("starcli.py"), native)
+            self.assertEqual(native[native.index("--name") + 1], role if role == "lead" else role)
+            self.assertIn("--role", native)
+            self.assertEqual(native[-2:], ["--resume-id", "session-" + panes[role]])
+            self.assertNotIn("--goal", native)
+
+    def test_agent_route_restarts_a_star_mesh_in_the_new_directory(self):
+        self.run_cli(INSIDE, setup="Star")
+        panes = self.team_panes()["panes"]
+        self.fake.start_agents()
+        self.run_cli(INSIDE, cwd=ROOT / "src", entry=herdr_ai.route_main)
+        runs = self.fake.runs()
+        for role in ("lead", "crew1", "crew2", "crew3", "crew4"):
+            cd, line = runs[panes[role]][-2:]
+            self.assertIn(str(ROOT / "src"), cd)
+            # A fresh member with its mesh name and role, not the old conversation.
+            self.assertIn("--picker-launch Star", line)
+            self.assertIn("--name " + role, line)
+            self.assertIn("--role " + ("lead" if role == "lead" else "crew"), line)
+            self.assertNotIn("--resume-id", line)
+        self.assertEqual(self.team_panes()["team"], "Star")
+
+    def test_windows_stop_clears_a_draft_before_quitting(self):
+        calls = []
+        with patch.object(herdr_ai, "WINDOWS", True), patch.object(herdr_ai.time, "sleep"):
+            herdr_ai.stop_panes(lambda *args: calls.append(args), ["w9:p1"])
+        self.assertEqual(calls, [("pane", "send-keys", "w9:p1", "ctrl+c", "ctrl+c", "ctrl+c")])
+
+    def test_handoff_from_a_star_mesh_keeps_the_panes(self):
+        self.run_cli(INSIDE, setup="Star")
+        panes = self.team_panes()["panes"]
+        self.fake.start_agents()
+        error, jobs = self.handoff(panes["lead"])
+        self.assertIn("Star mesh stays", error)
+        self.assertEqual(jobs, [])
+
+    def test_crew_command_panes_join_a_star_layout(self):
+        env = {**INSIDE, "HERDR_AI_DRY": "1", "HERDR_SOCKET_PATH": "",
+               "AGENT_PICKER_STATE_HOME": self.state.name}
+        with patch.dict(os.environ, env, clear=False):
+            reason = herdr_ai.note_star_panes("w9:p9", {"crew1": "w9:c1", "crew2": "w9:c2"},
+                                              {"w9:p9": "term_lead", "w9:c1": "term_c1", "w9:c2": "term_c2"})
+        self.assertIsNone(reason)
+        entry = self.team_panes()
+        self.assertEqual(entry["team"], "Star")
+        self.assertEqual(entry["panes"]["lead"], "w9:p9")
+        self.assertEqual(entry["panes"]["crew1"], "w9:c1")
+        self.assertEqual(entry["terminals"]["w9:c1"], "term_c1")
+        self.assertEqual(herdr_ai.star_member_args("crew1", "crew")[:3],
+                         ["--picker-return", "--picker-launch", "Star"])
+
+    def test_crew_command_does_not_replace_a_standard_layout(self):
+        self.run_cli(INSIDE)
+        env = {**INSIDE, "HERDR_AI_DRY": "1", "HERDR_SOCKET_PATH": "",
+               "AGENT_PICKER_STATE_HOME": self.state.name}
+        with patch.dict(os.environ, env, clear=False):
+            reason = herdr_ai.note_star_panes("w9:p9", {"crew1": "w9:c1"}, {"w9:p9": "term_lead", "w9:c1": "term_c1"})
+        self.assertIn("Standard", reason)
+        self.assertIsNone(self.team_panes()["team"])
+
+    def test_crew_command_keeps_an_existing_crew_slot(self):
+        self.run_cli(INSIDE, setup="Star")
+        entry = self.team_panes()
+        old = entry["panes"]["crew1"]
+        env = {**INSIDE, "HERDR_AI_DRY": "1", "HERDR_SOCKET_PATH": "",
+               "AGENT_PICKER_STATE_HOME": self.state.name}
+        with patch.dict(os.environ, env, clear=False):
+            reason = herdr_ai.note_star_panes(entry["panes"]["lead"], {"crew1": "w9:new", "crew5": "w9:extra"},
+                                              {entry["panes"]["lead"]: entry["terminals"][entry["panes"]["lead"]],
+                                               "w9:extra": "term_extra"})
+        self.assertIsNone(reason)
+        saved = self.team_panes()["panes"]
+        self.assertEqual(saved["crew1"], old)
+        self.assertEqual(saved["crew5"], "w9:extra")
+
+    def test_a_usage_pane_attaches_only_to_an_existing_star_layout(self):
+        env = {**INSIDE, "HERDR_AI_DRY": "1", "HERDR_SOCKET_PATH": "",
+               "AGENT_PICKER_STATE_HOME": self.state.name}
+        with patch.dict(os.environ, env, clear=False):
+            self.assertIsNone(herdr_ai.note_star_panes("w9:p9", {}, {"w9:p9": "term_lead"}, usage="w9:usage", create=False))
+        self.assertFalse((Path(self.state.name) / "herdr-ai-tabs.json").exists())
+        with patch.dict(os.environ, env, clear=False):
+            herdr_ai.note_star_panes("w9:p9", {"crew1": "w9:c1"}, {"w9:p9": "term_lead", "w9:c1": "term_c1"})
+            self.assertIsNone(herdr_ai.note_star_panes("w9:p9", {}, {"w9:usage": "term_usage"}, usage="w9:usage", create=False))
+        self.assertEqual(self.team_panes()["panes"]["usage"], "w9:usage")
+
+    def test_quitting_a_star_pane_reopens_the_selector(self):
+        panes = {"lead": "w:p2", "usage": "w:p3", **{r: f"w:c{i}" for i, r in enumerate(herdr_ai.CREW)}}
+        commands = herdr_ai.layout_commands(herdr_ai.STAR, panes)
+        for role in ("lead", *herdr_ai.CREW):
+            self.assertEqual(commands[role][:3], ["--picker-return", "--picker-launch", "Star"], role)
+
+    def test_other_teams_give_crew4_to_gemini(self):
+        self.team_plan.side_effect = lambda team: {"lead": team, "gemini": True}
+        self.run_cli(INSIDE, setup="Claude")
+        entry = self.team_panes()
+        panes, runs = entry["panes"], self.fake.runs()
+        self.assertTrue(entry["gemini"])
+        self.assertIn("--picker-gemini " + panes["crew4"], runs[panes["lead"]][0])
+        self.assertIn("--picker-launch Antigravity --picker-crew", runs[panes["crew4"]][0])
+        for role in ("crew1", "crew2", "crew3"):
+            self.assertIn("--picker-launch Claude --picker-crew", runs[panes[role]][0])
+        self.assertTrue(runs[panes["usage"]][0].endswith("--picker-only Claude,Antigravity"))
+
+    def handoff(self, pane, target=("Codex", "20% used"), argv=None):
+        notes = Path(self.state.name) / "notes.md"
+        notes.write_text("done: a\nleft: b\n")
+        jobs = []
+        env = {**INSIDE, "HERDR_PANE_ID": pane}
+        with patch("handoff.target", return_value=target), \
+             patch.object(herdr_ai, "spawn_runner", side_effect=lambda job, log: jobs.append(job)):
+            try:
+                self.run_cli(env, argv or ["--handoff", "Ship the parser\nfix", str(notes)])
+            except SystemExit as exc:
+                return str(exc), jobs
+        return None, jobs
+
+    def test_handoff_from_a_standard_pane_switches_only_that_pane(self):
+        self.run_cli(INSIDE)
+        panes = self.team_panes()["panes"]
+        self.fake.start_agents()
+        _, jobs = self.handoff(panes["claude"])
+        job = jobs[0]
+        self.assertEqual(list(job["lines"]), [panes["claude"]])
+        self.assertTrue(job["lines"][panes["claude"]].endswith("--picker-return --picker-launch Codex --picker-solo"))
+        self.assertTrue(job["goal"].startswith("/goal Ship the parser fix (Handed off from Claude"))
+        self.assertIn("notes.md", job["goal"])
+        self.assertFalse(job["opening"])
+
+    def test_team_lead_handoff_moves_a_team_that_shares_its_quota(self):
+        self.team_plan.side_effect = lambda team: {"lead": team, "gemini": True}
+        self.run_cli(INSIDE, setup="Claude")
+        panes = self.team_panes()["panes"]
+        self.fake.start_agents()
+        _, jobs = self.handoff(panes["lead"], ("Kiro", "resets sooner"))
+        job = jobs[0]
+        moved = {panes[r] for r in ("lead", "usage", "crew1", "crew2", "crew3")}
+        self.assertEqual(set(job["lines"]), moved)   # Gemini's crew4 keeps working
+        self.assertIn("--picker-launch Kiro --picker-lead", job["lines"][panes["lead"]])
+        self.assertIn("--picker-launch Kiro --picker-crew", job["lines"][panes["crew1"]])
+        self.assertEqual(job["update"], {"team": "Kiro", "lead": "Kiro"})
+        self.assertTrue(job["opening"])
+
+    def test_gemini_team_handoff_replaces_only_the_lead(self):
+        self.team_plan.side_effect = lambda team: {"lead": "Codex", "gemini": False}
+        self.run_cli(INSIDE, setup="Antigravity")
+        panes = self.team_panes()["panes"]
+        self.fake.start_agents()
+        _, jobs = self.handoff(panes["lead"], ("Claude", "ok"))
+        job = jobs[0]
+        self.assertEqual(set(job["lines"]), {panes["lead"], panes["usage"]})
+        self.assertIn("--picker-launch Claude --picker-lead", job["lines"][panes["lead"]])
+        self.assertIn("--picker-crew-of Antigravity", job["lines"][panes["lead"]])
+        self.assertEqual(job["update"], {"team": "Antigravity", "lead": "Claude"})
+
+    def test_crew_and_exhausted_handoffs_are_refused(self):
+        self.run_cli(INSIDE, setup="Claude")
+        panes = self.team_panes()["panes"]
+        self.fake.start_agents()
+        error, jobs = self.handoff(panes["crew2"])
+        self.assertIn("crew do not hand off", error)
+        self.assertEqual(jobs, [])
+        notes = Path(self.state.name) / "n.md"
+        notes.write_text("x")
+        out = []
+        with patch("handoff.target", return_value=(None, "every provider is at 90%")), \
+             patch.object(herdr_ai, "spawn_runner") as spawn, \
+             patch("builtins.print", side_effect=lambda *a, **k: out.append(" ".join(map(str, a)))):
+            self.run_cli({**INSIDE, "HERDR_PANE_ID": panes["lead"]}, ["--handoff", "g", str(notes)])
+        spawn.assert_not_called()
+        self.assertIn("Tell the user", out[-1])
+
+    def test_handoff_needs_its_notes_file(self):
+        self.run_cli(INSIDE)
+        error, jobs = self.handoff("w9:p2", argv=["--handoff", "goal", "/nonexistent/notes.md"])
+        self.assertIn("notes not found", error)
+
+    def test_handoff_runner_waits_switches_and_sends_the_goal(self):
+        self.run_cli(INSIDE)
+        job = {"herdr": "herdr", "caller": "w9:p3", "lead": "w9:p3", "cwd": "/repo",
+               "lines": {"w9:p3": "agent --picker-launch Codex"}, "key": "default|w9:t1",
+               "update": {}, "goal": "/goal finish it", "opening": False}
+        with patch.dict(os.environ, {"AGENT_PICKER_STATE_HOME": self.state.name}), \
+             patch.object(herdr_ai.subprocess, "run", self.fake), \
+             patch.object(herdr_ai, "stop_panes") as stop:
+            self.assertEqual(herdr_ai.handoff_run(job, sleep=lambda s: None), 0)
+        stop.assert_called_once()
+        self.assertEqual(stop.call_args[0][1], ["w9:p3"])
+        waits = [c for c in self.fake.calls if c[:2] == ["agent", "wait"]]
+        self.assertEqual(waits[0][2], "w9:p3")
+        self.assertIn("idle", waits[0])
+        self.assertIn(["agent", "prompt", "w9:p3", "/goal finish it"], self.fake.calls)
+        typed = [c[3] for c in self.fake.calls if c[:2] == ["pane", "send-text"] and c[2] == "w9:p3"]
+        self.assertTrue(any("agent --picker-launch Codex" in t for t in typed))
+
+    def test_a_codex_config_error_stops_the_layout_before_any_pane(self):
+        self.codex_check.return_value = "unknown variant `never` in mcp_servers.iMCP.tools.x.approval_mode"
+        with self.assertRaises(SystemExit) as exit:
+            self.run_cli(INSIDE, setup="Codex")
+        self.assertIn("unknown variant `never`", str(exit.exception))
+        self.assertFalse([c for c in self.fake.calls if c[:2] == ["pane", "split"]])
+        self.codex_check.assert_called_with("Codex", "Codex")
+
+    def test_teams_without_codex_skip_the_codex_check(self):
+        with patch.object(herdr_ai.subprocess, "run") as run:
+            self.assertIsNone(herdr_ai.codex_problem("Claude", "Claude"))
+        run.assert_not_called()
+
+    def test_codex_check_reports_codex_stderr(self):
+        failed = SimpleNamespace(returncode=1, stdout="", stderr="Error: failed to load bootstrap configuration\n\n"
+                                 "Caused by:\n    unknown variant `never`\n")
+        self.codex_patch.stop()
+        try:
+            with patch.object(herdr_ai.subprocess, "run", return_value=failed) as run, \
+                 patch("platform_runtime.resolve_argv", return_value=["/vendor/codex"]):
+                problem = herdr_ai.codex_problem(None)
+        finally:
+            self.codex_patch.start()
+        self.assertEqual(run.call_args[0][0], ["/vendor/codex", "mcp", "list"])
+        self.assertIn("unknown variant `never`", problem)
 
     def test_team_usage_pane_is_short(self):
         self.run_cli(INSIDE, setup="Codex")
@@ -370,7 +778,7 @@ class HerdrAiTests(unittest.TestCase):
         self.assertEqual(usage[usage.index("--direction") + 1], "down")
         self.assertGreater(float(usage[usage.index("--ratio") + 1]), 0.75)
 
-    def test_rerun_reroutes_a_team_with_its_own_commands(self):
+    def test_rerun_resumes_each_team_member_without_replaying_the_lead_prompt(self):
         self.run_cli(INSIDE, setup="Kiro")
         panes = self.team_panes()["panes"]
         self.fake.start_agents()
@@ -378,10 +786,91 @@ class HerdrAiTests(unittest.TestCase):
         self.assertEqual(self.menu_calls, [])
         self.assertFalse([c for c in self.fake.calls if c[:2] == ["pane", "split"]])
         runs = self.fake.runs()
-        self.assertEqual(set(runs), {panes[r] for r in ("lead", *herdr_ai.CREW)})   # usage keeps running
-        self.assertTrue(runs[panes["lead"]][1].endswith(
-            "--picker-launch Kiro --picker-lead " + ",".join(panes[r] for r in herdr_ai.CREW)))
-        self.assertTrue(runs[panes["crew3"]][1].endswith("--picker-launch Kiro --picker-crew " + panes["lead"]))
+        self.assertEqual(set(runs), {panes[r] for r in ("lead", "usage", *herdr_ai.CREW)})
+        for role in ("lead", *herdr_ai.CREW):
+            native = self.resumed_argv(panes[role])
+            self.assertEqual(native[:2], ["/vendor/kiro-cli", "chat"])
+            self.assertEqual(native[-2:], ["--resume-id", "session-" + panes[role]])
+            self.assertNotIn("old ready prompt", native)
+            self.assertNotIn("--picker-return", runs[panes[role]][-1])
+
+    def test_refresh_retains_working_blocked_unknown_and_unsupported_sessions(self):
+        self.run_cli(INSIDE)
+        panes = self.team_panes()["panes"]
+        self.fake.start_agents()
+        self.fake.panes[panes["codex"]]["agent_status"] = "working"
+        self.fake.panes[panes["claude"]]["agent_status"] = "blocked"
+        self.fake.panes[panes["agy"]].pop("agent_session")
+        self.fake.panes[panes["cursor"]]["children"][0]["argv"].append("--unknown-option")
+        self.run_cli(INSIDE)
+        self.assertEqual(set(self.stopped), {panes["picker"], panes["usage"]})
+        self.assertEqual(set(self.fake.runs()), set(self.stopped))
+
+    def test_refresh_never_uses_a_different_providers_stale_session(self):
+        self.run_cli(INSIDE)
+        panes = self.team_panes()["panes"]
+        self.fake.start_agents()
+        self.fake.panes[panes["codex"]]["agent_session"]["agent"] = "claude"
+        self.run_cli(INSIDE)
+        self.assertNotIn(panes["codex"], self.stopped)
+
+    def test_refresh_keeps_an_exited_agent_with_session_identity_at_its_shell(self):
+        self.run_cli(INSIDE)
+        panes = self.team_panes()["panes"]
+        self.fake.start_agents()
+        self.fake.panes[panes["codex"]]["argv"] = None
+        self.run_cli(INSIDE)
+        self.assertNotIn(panes["codex"], self.stopped)
+
+    def test_refresh_leaves_unrelated_programs_in_agent_slots_running(self):
+        self.run_cli(INSIDE)
+        pane = self.team_panes()["panes"]["codex"]
+        self.fake.start_agents()
+        self.fake.panes[pane] = {"argv": ["npm", "run", "dev"]}
+        self.run_cli(INSIDE)
+        self.assertNotIn(pane, self.stopped)
+
+    def test_refresh_of_a_quit_agent_reloads_its_selector_instead_of_a_blank_provider(self):
+        self.run_cli(INSIDE)
+        pane = self.team_panes()["panes"]["codex"]
+        self.fake.start_agents()
+        selector = [sys.executable, str(herdr_ai.ENTRY), "--picker-return"]
+        self.fake.panes[pane]["argv"] = selector
+        self.fake.panes[pane]["children"] = []
+        self.run_cli(INSIDE)
+        self.assertEqual(self.fake.runs()[pane][-1], self.joined(selector))
+
+    def test_repeated_refreshes_keep_the_same_session_without_duplicate_resume_flags(self):
+        self.run_cli(INSIDE)
+        panes = self.team_panes()["panes"]
+        for _ in range(3):
+            self.fake.start_agents()
+            self.run_cli(INSIDE)
+            for role, flag in (("codex", "resume"), ("claude", "--resume"),
+                               ("cursor", "--resume"), ("agy", "--conversation")):
+                argv = self.resumed_argv(panes[role])
+                self.assertEqual(argv.count(flag), 1)
+                self.assertEqual(argv[-1], "session-" + panes[role])
+
+    def test_refresh_rechecks_pane_identity_and_activity_before_stopping(self):
+        import copy
+        from unittest.mock import Mock
+        pane = "w9:p2"
+        initial = {"terminal_id": "original", "agent": "codex", "agent_status": "idle",
+                   "agent_session": {"agent": "codex", "kind": "id", "value": "original-session"}}
+        process = {"shell_pid": 10, "foreground_process_group_id": 20,
+                   "foreground_processes": [{"pid": 20, "name": "codex", "argv": ["/vendor/codex", "-m", "sol"]}]}
+        for field, changed in (("agent_status", "working"), ("terminal_id", "replacement"),
+                               ("agent_session", {"agent": "codex", "kind": "id", "value": "new-session"})):
+            updated = copy.deepcopy(initial)
+            updated[field] = changed
+            herdr = SimpleNamespace(tab_panes=Mock(side_effect=[{pane: initial}, {pane: updated}]),
+                                    process_info=Mock(return_value=process))
+            with self.subTest(field=field), patch.dict(os.environ, INSIDE), \
+                 patch.object(herdr_ai, "stop_panes") as stop:
+                self.assertEqual(herdr_ai.route(herdr, str(ROOT), {"codex": pane}, False,
+                                               preserve_context=True), [])
+                stop.assert_not_called()
 
     def test_agent_route_restarts_team_roles_with_their_commands(self):
         self.run_cli(INSIDE, setup="Claude")
@@ -389,7 +878,7 @@ class HerdrAiTests(unittest.TestCase):
         self.fake.start_agents()
         self.run_cli(INSIDE, cwd=ROOT / "src", entry=herdr_ai.route_main)
         runs = self.fake.runs()
-        self.assertTrue(runs[panes["crew1"]][1].endswith("--picker-crew " + panes["lead"]))
+        self.assertIn("--picker-crew " + panes["lead"], runs[panes["crew1"]][1])
         self.assertNotIn(panes["usage"], runs)
 
     def test_quitting_the_menu_leaves_the_tab_alone(self):

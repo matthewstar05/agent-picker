@@ -259,6 +259,33 @@ try {
         sync.assert_called_once()
         refresh.assert_not_called()
 
+    def test_bars_setting_is_in_herdr_ai_settings_without_resyncing_sidebar(self):
+        terminal = MagicMock()
+        terminal.wait.return_value = True
+        terminal.read_key.side_effect = ["down", "down", "right", "esc"]
+        with patch.object(team, "Terminal", return_value=terminal), \
+             patch.object(team.ap, "Screen", return_value=Mock()), \
+             patch.object(team.sys, "stdout", io.StringIO()), \
+             patch.object(sidebar, "sync") as sync:
+            self.assertIsNone(team.choose(settings_only=True))
+        self.assertEqual(preferences.get(ap.BARS.key), "used")
+        self.assertFalse(ap.depleting())
+        sync.assert_not_called()
+
+    def test_change_saved_by_another_command_is_seen_and_kept(self):
+        preferences.put("usage.bars", "left")
+        self.assertTrue(ap.depleting())
+        # Another command (the usage panel, herdr-ai) saves while this one runs.
+        saved = json.loads(preferences.PATH.read_text())
+        saved.update({"usage.bars": "used", "usage.theme": "mono"})
+        preferences.PATH.write_text(json.dumps(saved))
+        os.utime(preferences.PATH, ns=(1, 1))
+        with patch.object(preferences, "_checked", 0.0):
+            self.assertFalse(ap.depleting())
+        preferences.put(sidebar.HIDE_CREW.key, False)   # must not drop the other command's values
+        on_disk = json.loads(preferences.PATH.read_text())
+        self.assertEqual((on_disk["usage.bars"], on_disk["usage.theme"]), ("used", "mono"))
+
     def test_settings_cli_never_builds_or_routes(self):
         with patch.object(herdr_ai.sys.stdin, "isatty", return_value=True), \
              patch.object(herdr_ai.sys.stdout, "isatty", return_value=True), \

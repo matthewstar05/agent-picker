@@ -32,6 +32,7 @@ if __name__ == "__main__":
 
 import preferences
 import provider_defaults
+import usage_cache
 from platform_runtime import WINDOWS, Terminal, launch, resolve_argv, state_dir
 from settings import ROOT, config_path, load_agents, update_checkout
 
@@ -46,6 +47,15 @@ START = preferences.register(preferences.Setting(
     "start", "General", "Opens on", ["agents", "usage"], "agents",
     hint="The screen agent opens on; usage always opens the usage panel. u switches anytime.",
     names={"agents": "agent selector", "usage": "usage panel"}))
+# Registered by usage_panel after its own settings, so the Star section lists after them.
+STAR_RESETS = preferences.Setting(
+    "star.resets", "Star", "Provider cooldowns", [False, True], False,
+    hint="Under Star's meter, a dot for each provider it balances with when that limit resets.",
+    names={False: "hidden", True: "shown"})
+
+
+def star_resets():
+    return preferences.get(STAR_RESETS.key) is True
 
 ESC = "\x1b"
 RESET = f"{ESC}[0m"
@@ -202,6 +212,10 @@ def _http_json(url, headers, body=None):
 
 
 def _epoch(iso):
+    # Go's RFC3339 timestamps trim trailing zeros and can contain nanoseconds.
+    # Python 3.9 only accepts three or six fractional-second digits.
+    iso = re.sub(r"\.(\d+)(?=Z|[+-]|$)",
+                 lambda m: "." + m.group(1)[:6].ljust(6, "0"), iso)
     return datetime.fromisoformat(iso.replace("Z", "+00:00")).timestamp()
 
 
@@ -284,8 +298,12 @@ def usage_kiro():
     date = re.search(r"resets on (\d{4}-\d{2}-\d{2})", text)
     if not pct:
         return None
+    credits = re.search(r"([\d.]+) of ([\d.]+) covered", text)
     resets = datetime.strptime(date.group(1), "%Y-%m-%d").timestamp() if date else None
-    return [{"label": "mo", "pct": float(pct.group(1)), "resets": resets}]
+    window = {"label": "mo", "pct": float(pct.group(1)), "resets": resets}
+    if credits:
+        window.update(used=float(credits.group(1)), limit=float(credits.group(2)))
+    return [window]
 
 
 def usage_antigravity():
@@ -321,10 +339,8 @@ FETCHERS = {"Claude": usage_claude, "Codex": usage_codex, "Cursor": usage_cursor
 
 
 def load_usage():
-    try:
-        USAGE.update(json.loads(USAGE_CACHE.read_text()))
-    except Exception:
-        pass
+    with USAGE_LOCK:
+        USAGE.update(usage_cache.merge(USAGE, usage_cache.read(USAGE_CACHE)))
 
 
 def numeric_windows(windows):
@@ -342,10 +358,7 @@ def _fetch(name):
         if windows:
             USAGE[name] = {"windows": windows, "fetched": time.time()}
             try:
-                STATE.mkdir(parents=True, exist_ok=True)
-                tmp = USAGE_CACHE.with_suffix(".tmp")
-                tmp.write_text(json.dumps(USAGE))
-                os.replace(tmp, USAGE_CACHE)
+                USAGE.update(usage_cache.write(USAGE_CACHE, USAGE))
             except Exception:
                 pass
 
@@ -456,8 +469,58 @@ class Line:
         return "".join(out)
 
 
+# One setting for the bars in the agent selector, the usage panel and herdr-ai.
+# The usage panel registers it beside its theme; herdr-ai lists it in its own
+# settings. All three read preferences.json, so a change in one shows in the rest.
+BARS = preferences.Setting(
+    "usage.bars", "Usage panel", "Bars", ["left", "used"], "left",
+    hint="Depleting bars start full and empty as a limit is used; filling bars grow toward 100%.",
+    names={"left": "depleting", "used": "filling"})
+
+
+def depleting():
+    return preferences.get(BARS.key) != "used"
+
+
+def credits_text(w):
+    """Kiro counts credits: '997.60/1000' left when depleting, '2.40/1000 used' when filling."""
+    if not w.get("limit"):
+        return None
+    limit, used = w["limit"], min(w.get("used", 0), w["limit"])
+    if w.get("resets") and w["resets"] < time.time():
+        used = 0   # the window has rolled over since this was read
+    return f"{limit - used:.2f}/{limit:.0f}" if depleting() else f"{used:.2f}/{limit:.0f} used"
+
+
+def star_block(bar, reset):
+    """StarCLI's two lines: its estimated limit as a bar split by provider (in
+    reset order, each in its own colors), then when each provider resets."""
+    import star_meter
+    with USAGE_LOCK:
+        usage = dict(USAGE)
+    info = star_meter.summary(usage, {a["name"] for a in AGENTS if installed(a)}, {a["name"]: a for a in AGENTS})
+    if not info:
+        return [[("-  ", SOFT, False)], []]
+    left = depleting()
+    parts, sizes = [("∑  ", LABEL, False)], None
+    if bar:
+        cells, sizes = star_meter.bar(info, bar, left)
+        parts += [(glyph, color, False) for glyph, color in cells] + [(" ", None, False)]
+    shown = info["now"] if left else 100 - info["now"]
+    parts.append((f"{shown:3.0f}%", star_meter.pct_color(), True))
+    if reset and info["soonest"]:
+        parts.append((f"  ↻ {until(info['soonest']['resets']):<7}", SOFT, False))
+    if not star_resets():
+        return [parts, []]
+    room = usage_width(bar, reset) - 3
+    second = [("   ", None, False)] + [(ch, color, False) for ch, color in star_meter.resets_row(info, room, sizes)]
+    return [parts, second]
+
+
 def usage_block(name, now_t, bar, reset):
     """Two lines of limit readouts for an agent: '5h ▰▰▱▱ 19%  ↻ 2h 31m'."""
+    if name == "Star":
+        return star_block(bar, reset)
     with USAGE_LOCK:
         entry = USAGE.get(name)
         pending = name in PENDING
@@ -466,7 +529,7 @@ def usage_block(name, now_t, bar, reset):
         dots = "·" * (1 + int(now_t * 3) % 3) if pending else "-"
         return [[(dots.ljust(3), SOFT, False)], []]
     stale = time.time() - entry.get("fetched", 0) > 3600 and not pending
-    left = preferences.get("usage.bars") != "used"   # the usage panel's Bars setting
+    left = depleting()
     for w in entry["windows"][:2]:
         pct = w["pct"]
         if w.get("resets") and w["resets"] < time.time():
@@ -483,6 +546,11 @@ def usage_block(name, now_t, bar, reset):
         if reset:
             parts.append((f"  ↻ {until(w.get('resets')):<7}", SOFT, False))
         lines.append(parts)
+    credits = credits_text(entry["windows"][0]) if len(entry["windows"]) == 1 else None
+    if credits:
+        # a lone limit's spare line, ending under its percentage
+        end = 3 + (bar + 1 if bar else 0) + 4
+        lines.append([(credits.rjust(end), SOFT, False)])
     while len(lines) < 2:
         lines.append([])
     return lines
@@ -1028,12 +1096,12 @@ def save_last(index):
 def choose(screen=None, only=None):
     """Run the screens until an agent is picked (its index) or the user quits (None).
 
-    only: a provider name to show alone (a herdr-ai team's usage pane)."""
+    only: provider names to show alone (a herdr-ai team's usage pane)."""
     import usage_panel   # registers its settings; imported here so it can import this module
 
     # Only installed CLIs are listed; the rest of agents.json stays in the catalog
     # until its CLI shows up on this computer.
-    found = [a for a in AGENTS if installed(a) and only in (None, a["name"])]
+    found = [a for a in AGENTS if installed(a) and (only is None or a["name"] in only)]
     if not found:
         raise RuntimeError("No supported CLI found. Run agent --picker-doctor and configure a provider.")
     # Hidden CLIs (settings) leave the selector only; usage still follows them.
@@ -1259,6 +1327,12 @@ def main():
     returning = args[:1] == ["--picker-return"]
     if returning:
         args = args[1:]
+    if args[:1] == ["--picker-relaunch"]:
+        if len(args) != 2:
+            raise ValueError("--picker-relaunch needs saved launch arguments")
+        import session_refresh
+        argv = session_refresh.decode(args[1])
+        return launch_and_return(argv) if returning else launch(argv)
     if args[:1] == ["--picker-update"]:
         update_checkout()
         return 0
@@ -1275,7 +1349,8 @@ def main():
         print("                                      launch as a herdr-ai team lead or worker")
         print("agent --picker-return [--picker-launch NAME]")
         print("                                      reopen the selector when the agent quits")
-        print("agent --picker-usage --picker-only NAME  the usage panel for one provider")
+        print("agent --picker-launch NAME --picker-solo  launch with herdr-ai's usage and handoff rules")
+        print("agent --picker-usage --picker-only NAMES  the usage panel for these providers (comma separated)")
         print("agent --picker-priority               explain the Cursor/Kiro workbench choice")
         print("agent --picker-update                 fast-forward this Git checkout")
         print("agent --picker-doctor                 show paths and launch profiles")
@@ -1306,10 +1381,13 @@ def main():
         if args[:1] == ["--picker-only"]:
             if len(args) < 2:
                 raise ValueError("--picker-only needs a provider name")
-            match = next((a for a in AGENTS if a["name"].lower() == args[1].lower()), None)
-            if match is None:
-                raise ValueError(f"Unknown provider: {args[1]}")
-            only, args = match["name"], args[2:]
+            only = []
+            for word in args[1].split(","):
+                match = next((a for a in AGENTS if a["name"].lower() == word.strip().lower()), None)
+                if match is None:
+                    raise ValueError(f"Unknown provider: {word}")
+                only.append(match["name"])
+            args = args[2:]
         if not (sys.stdin.isatty() and sys.stdout.isatty()):
             raise RuntimeError("agent needs an interactive terminal; try --picker-doctor")
         try:
@@ -1321,10 +1399,14 @@ def main():
     if returning and not launching and not WINDOWS:
         # Re-exec so the pane's command line names the agent, which herdr-ai's
         # reroute restarts.
+        # Inside herdr the chosen agent learns its usage rules like herdr-ai's own panes.
+        # Star balances providers itself and takes no brief.
+        solo = (["--picker-solo"] if os.environ.get("HERDR_ENV") == "1" and not args
+                and AGENTS[index]["name"] != "Star" else [])
         os.execv(sys.executable, [sys.executable, str(Path(__file__).resolve()),
-                                  "--picker-return", "--picker-launch", AGENTS[index]["name"], *args])
+                                  "--picker-return", "--picker-launch", AGENTS[index]["name"], *solo, *args])
     agent = AGENTS[index]
-    if args[:1] in (["--picker-lead"], ["--picker-crew"]):
+    if args[:1] in (["--picker-lead"], ["--picker-crew"], ["--picker-solo"]):
         import team
         agent, args = team.prepare(agent, args)
     argv = resolve_argv(agent)

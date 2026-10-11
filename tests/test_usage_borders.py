@@ -238,6 +238,8 @@ class UsageBorderTests(unittest.TestCase):
                         patch.dict(panel.USAGE, {a["name"]: entry for a in view.agents}, clear=True):
                     shared = []
                     for i, agent in enumerate(view.agents):
+                        if agent["name"] == panel.STAR:
+                            continue   # a composite of every provider, not one provider's limit
                         full = [painted_cells(line) for line in panel.card(view, i, 66, 1.5, now)]
                         compact = painted_cells(panel.compact_row(view, i, 80, 1.5, now))
                         title_len = len(agent["name"] + " (12)")

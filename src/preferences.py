@@ -4,17 +4,23 @@ Each setting is one Setting in SETTINGS. A feature registers its own with
 register() and reads the current value with get(); the settings screen (press s)
 lists every registered setting, grouped by section, with no other wiring. A Page
 is a row that opens its own list of settings (register a child with parent=page).
-Values are saved to preferences.json in the local state directory.
+Values are saved to preferences.json in the local state directory. Every
+command shares that file and rereads it when it changes, so a setting changed in
+one (the agent selector, the usage panel, herdr-ai) shows in the others.
 """
 
 import json
 import os
+import time
 
 from platform_runtime import state_dir
 
 PATH = state_dir() / "preferences.json"
 SETTINGS = []
 _values = None
+_stamp = None       # the file's (mtime, size) when _values was read
+_checked = 0.0      # when the file was last looked at
+RECHECK = 0.25      # seconds between looks; get() runs many times a frame
 
 
 class Setting:
@@ -72,15 +78,29 @@ def find(key):
     return next((s for s in _walk(SETTINGS) if s.key == key), None)
 
 
-def _load():
-    global _values
-    if _values is None:
+def _file_stamp():
+    try:
+        st = PATH.stat()
+        return st.st_mtime_ns, st.st_size
+    except OSError:
+        return None
+
+
+def _load(fresh=False):
+    """The saved values, reread when another command has changed the file."""
+    global _values, _stamp, _checked
+    now = time.monotonic()
+    if _values is not None and not fresh and now - _checked < RECHECK:
+        return _values
+    _checked = now
+    stamp = _file_stamp()
+    if _values is None or stamp != _stamp:
         try:
-            _values = json.loads(PATH.read_text(encoding="utf-8"))
-            if not isinstance(_values, dict):
-                _values = {}
+            values = json.loads(PATH.read_text(encoding="utf-8"))
+            _values, _stamp = (values if isinstance(values, dict) else {}), stamp
         except Exception:
-            _values = {}
+            # Missing, or unreadable: keep what we had; a changed file is read next look.
+            _values = {} if _values is None else _values
     return _values
 
 
@@ -95,12 +115,14 @@ def get(key):
 
 
 def put(key, value):
-    _load()[key] = value
+    global _stamp
+    _load(fresh=True)[key] = value   # fresh: keep what other commands saved meanwhile
     try:
         PATH.parent.mkdir(parents=True, exist_ok=True)
         tmp = PATH.with_name(f".preferences.{os.getpid()}.tmp")
         tmp.write_text(json.dumps(_values, indent=2) + "\n", encoding="utf-8")
         os.replace(tmp, PATH)
+        _stamp = _file_stamp()
     except Exception:
         pass
 
@@ -113,7 +135,7 @@ def toggle(key):
         back = _load().get(key + ".on", setting.default)
         put(key, back if back in setting.choices and back != setting.off else setting.default)
     else:
-        _load()[key + ".on"] = current
+        _load(fresh=True)[key + ".on"] = current
         put(key, setting.off)
 
 

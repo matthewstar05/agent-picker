@@ -41,7 +41,7 @@ class TeamTests(unittest.TestCase):
         return prepared, args
 
     def test_summaries_name_lead_then_crew(self):
-        expected = {"Claude": "opus → haiku", "Codex": "sol → luna", "Antigravity": "flash high → low",
+        expected = {"Claude": "opus → haiku", "Codex": "sol → luna", "Antigravity": "sol/opus → flash high",
                     "Cursor": "opus → grok", "Kiro": "opus → sonnet"}
         for name, text in expected.items():
             self.assertEqual(team.summary(self.agents[name]), text, name)
@@ -59,6 +59,8 @@ class TeamTests(unittest.TestCase):
     def test_lead_and_crew_models_and_effort(self):
         for name in TEAM:
             for role, key in (("--picker-lead", "lead"), ("--picker-crew", "crew")):
+                if key not in self.agents[name]["team"]:
+                    continue   # Antigravity's crew are led by another provider
                 prepared, _ = self.prepare(name, role, "w:p1")
                 values = provider_defaults.current(prepared)
                 config = self.agents[name]["team"][key]
@@ -124,10 +126,24 @@ class TeamTests(unittest.TestCase):
             self.assertTrue(args[-1].endswith("Reply only: ready."), name)
             self.assertFalse(any("herdr team" in a for a in prepared["argv"]), name)
 
-    def test_antigravity_lead_uses_interactive_flag(self):
-        _, args = self.prepare("Antigravity", "--picker-lead", "w:p2")
+    def test_gemini_never_leads_and_every_lead_is_sol_or_opus(self):
+        with self.assertRaisesRegex(ValueError, "no team lead"):
+            self.prepare("Antigravity", "--picker-lead", "w:p2")
+        for name in TEAM:
+            lead = self.agents[name]["team"].get("lead")
+            if lead:
+                self.assertRegex(lead["model"], r"^(gpt-6\.1-sol|claude-opus-5[-.]5)$", name)
+
+    def test_star_takes_no_solo_brief(self):
+        star = {"name": "Star", "argv": ["starcli"]}
+        agent, args = team.prepare(star, ["--picker-solo", "--extra"])
+        self.assertEqual((agent["argv"], args), (["starcli"], ["--extra"]))
+
+    def test_antigravity_solo_uses_interactive_flag(self):
+        _, args = team.prepare(self.agents["Antigravity"], ["--picker-solo", "--extra"])
         self.assertEqual(args[:2], ["--extra", "-i"])
-        self.assertIn("herdr panes w:p2", args[2])
+        self.assertIn("herdr-ai", args[2])
+        self.assertIn("--handoff", args[2])
         self.assertEqual(len(args), 3)
 
     def test_flagless_crew_get_no_opening_prompt(self):
@@ -163,9 +179,9 @@ class TeamTests(unittest.TestCase):
             self.assertEqual(team.find("Codex"), "Codex")
             self.assertEqual(team.find("kiro"), "Kiro")
             self.assertEqual(team.find("ANTIGRAVITY"), "Antigravity")
-            with self.assertRaisesRegex(ValueError, "unknown setup 'nope'.*standard, claude"):
+            with self.assertRaisesRegex(ValueError, "unknown setup 'nope'.*standard, star, claude"):
                 team.find("nope")
-            self.assertEqual([s["name"] for s in team.setups()], ["Standard"] + list(TEAM))
+            self.assertEqual([s["name"] for s in team.setups()], ["Star", "Standard"] + list(TEAM))
 
     def test_main_launches_crew_with_fake_cli(self):
         with tempfile.TemporaryDirectory(prefix="team test ") as folder:

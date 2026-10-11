@@ -142,7 +142,7 @@ class DefaultsTests(unittest.TestCase):
                 pass
         with tempfile.TemporaryDirectory() as folder, ExitStack() as stack:
             path = Path(folder) / "config.json"
-            agents = list(self.agents().values())[:5]
+            agents = [a for a in self.agents().values() if a["name"] != "Star"][:5]
             stack.enter_context(patch.dict(os.environ, AGENT_PICKER_CONFIG=str(path)))
             stack.enter_context(patch.object(picker, "AGENTS", agents))
             stack.enter_context(patch.object(picker, "installed", return_value=True))
@@ -187,7 +187,7 @@ class DefaultsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder, ExitStack() as stack:
             path = Path(folder) / "config.json"
             stack.enter_context(patch.dict(os.environ, AGENT_PICKER_CONFIG=str(path)))
-            stack.enter_context(patch.object(picker, "AGENTS", list(self.agents().values())[:5]))
+            stack.enter_context(patch.object(picker, "AGENTS", [a for a in self.agents().values() if a["name"] != "Star"][:5]))
             stack.enter_context(patch.object(picker, "installed", return_value=True))
             stack.enter_context(patch.object(picker, "load_last", return_value=0))
             stack.enter_context(patch.object(picker, "load_usage"))
@@ -219,7 +219,7 @@ class DefaultsTests(unittest.TestCase):
                 pass
         with ExitStack() as stack:
             stack.enter_context(patch.dict(os.environ, AGENT_PICKER_CONFIG=str(path)))
-            agents = list(self.agents().values())[:5]
+            agents = [a for a in self.agents().values() if a["name"] != "Star"][:5]
             before = copy.deepcopy(agents)
             stack.enter_context(patch.object(picker, "AGENTS", agents))
             stack.enter_context(patch.object(picker, "installed", return_value=True))
@@ -322,7 +322,8 @@ a.main()
             ready, acknowledged = root / "ready", root / "keys"
             process = subprocess.Popen([sys.executable, "-c", code, str(ROOT / "src"), str(ready), str(acknowledged)], stdin=slave, stdout=slave, stderr=slave, env=env)
             output = b""
-            keys = [b"\x1b[C", b"\x1b[B", b"\x1b[D", b"\x1b[B", b"\x1b[D", b"\x1b", b"\r", b"\x1b"]
+            # Star leads the selector; one Down reaches Claude.
+            keys = [b"\x1b[B", b"\x1b[C", b"\x1b[B", b"\x1b[D", b"\x1b[B", b"\x1b[D", b"\x1b", b"\r", b"\x1b"]
             start, sent = time.monotonic(), 0
             try:
                 while time.monotonic() - start < 15:

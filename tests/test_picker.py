@@ -17,6 +17,14 @@ import settings
 
 
 class PickerTests(unittest.TestCase):
+    def test_kiro_credits_follow_the_bar_direction(self):
+        window = {"label": "mo", "pct": 0.2, "resets": time.time() + 86400, "used": 2.4, "limit": 1000.0}
+        with patch.object(picker, "depleting", return_value=True):
+            self.assertEqual(picker.credits_text(window), "997.60/1000")
+        with patch.object(picker, "depleting", return_value=False):
+            self.assertEqual(picker.credits_text(window), "2.40/1000 used")
+        self.assertIsNone(picker.credits_text({"label": "5h", "pct": 10}))
+
     def test_original_launch_settings_preserved(self):
         with tempfile.TemporaryDirectory() as folder:
             with patch.dict(os.environ, AGENT_PICKER_CONFIG=str(Path(folder) / "config.json")):
@@ -24,7 +32,7 @@ class PickerTests(unittest.TestCase):
         self.assertEqual(agents["Codex"]["argv"][1:], ["-m", "gpt-6.1-sol", "-c", "model_reasoning_effort=high", "--dangerously-bypass-approvals-and-sandbox", "-c", "features.fast_mode=true", "-c", "service_tier=default"])
         self.assertIn("--dangerously-skip-permissions", agents["Claude"]["argv"])
         self.assertIn("--trust-all-tools", agents["Kiro"]["argv"])
-        self.assertEqual(list(agents)[:5], ["Claude", "Codex", "Antigravity", "Cursor", "Kiro"])
+        self.assertEqual(list(agents)[:6], ["Star", "Claude", "Codex", "Antigravity", "Cursor", "Kiro"])
         self.assertIn("OpenCode", agents)
 
     def test_local_platform_override(self):
@@ -224,6 +232,26 @@ class PickerTests(unittest.TestCase):
                 windows = picker.usage_claude()
             self.assertEqual(windows[0]["pct"], 20)
             self.assertEqual(path.read_text(), original)
+
+    def test_provider_timestamps_accept_rfc3339_fractional_seconds(self):
+        for fraction in ("1", "12", "123", "1234", "12345", "123456", "1234567", "12345678", "123456789"):
+            with self.subTest(fraction=fraction):
+                expected = picker._epoch("2030-01-01T00:00:00." + fraction[:6].ljust(6, "0") + "Z")
+                self.assertEqual(picker._epoch("2030-01-01T00:00:00." + fraction + "Z"), expected)
+                self.assertEqual(picker._epoch("2029-12-31T17:00:00." + fraction + "-07:00"), expected)
+        self.assertEqual(picker._epoch("2030-01-01T00:00:00Z"), 1893456000)
+
+    def test_antigravity_refresh_accepts_go_token_and_quota_timestamps(self):
+        token = {"token": {"access_token": "fake", "expiry": "2030-01-01T00:00:00.85698-07:00"}}
+        raw = "go-keyring-base64:" + picker.base64.b64encode(json.dumps(token).encode()).decode()
+        quota = {"groups": [{"displayName": "Gemini", "buckets": [
+            {"window": "5h", "remainingFraction": 0.75, "resetTime": "2030-01-01T00:00:00.123456789Z"}]}]}
+        with patch.object(picker, "_keychain", return_value=raw), \
+                patch.object(picker, "_http_json", return_value=quota) as http:
+            windows = picker.usage_antigravity()
+        http.assert_called_once()
+        self.assertEqual(windows, [{"label": "5h", "pct": 25.0,
+                                    "resets": picker._epoch("2030-01-01T00:00:00.123456Z")}])
 
     def test_windows_cursor_and_antigravity_logins_are_read_only(self):
         usage = {"billingCycleEnd": "1900000000000", "planUsage": {"autoPercentUsed": 24, "apiPercentUsed": 5}}

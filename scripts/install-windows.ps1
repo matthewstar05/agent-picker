@@ -80,11 +80,19 @@ if (-not (Test-Path -LiteralPath $herdrResetPath) -or [IO.File]::ReadAllText($he
     Save-Backup $herdrResetPath
     [IO.File]::WriteAllText($herdrResetPath, $herdrReset, $utf8)
 }
+# starcli is StarCLI, which routes each prompt to the best provider with quota.
+$starPath = Join-Path $binDir 'starcli.cmd'
+$star = "@echo off`r`n`"$Python`" `"$(Join-Path $repo 'src\starcli.py')`" %*`r`nexit /b %errorlevel%`r`n"
+if (-not (Test-Path -LiteralPath $starPath) -or [IO.File]::ReadAllText($starPath) -ne $star) {
+    Save-Backup $starPath
+    [IO.File]::WriteAllText($starPath, $star, $utf8)
+}
 $escapedPython = $Python.Replace("'", "''")
 $escapedEntry = $entry.Replace("'", "''")
 $escapedHerdrAi = (Join-Path $repo 'src\herdr_ai.py').Replace("'", "''")
 $escapedAgentRoute = (Join-Path $repo 'src\agent_route.py').Replace("'", "''")
 $escapedHerdrReset = (Join-Path $repo 'src\herdr_reset.py').Replace("'", "''")
+$escapedStar = (Join-Path $repo 'src\starcli.py').Replace("'", "''")
 $start = '# >>> agent-picker managed >>>'
 $end = '# <<< agent-picker managed <<<'
 $block = @"
@@ -97,6 +105,8 @@ function global:usage { & '$escapedPython' '$escapedEntry' --picker-usage @args 
 function global:herdr-ai { & '$escapedPython' '$escapedHerdrAi' @args }
 function global:agent-route { & '$escapedPython' '$escapedAgentRoute' @args }
 function global:herdr-reset { & '$escapedPython' '$escapedHerdrReset' @args }
+function global:star { & '$escapedPython' '$escapedStar' @args }
+function global:starcli { & '$escapedPython' '$escapedStar' @args }
 $end
 "@
 $profiles = @($PROFILE.CurrentUserAllHosts)

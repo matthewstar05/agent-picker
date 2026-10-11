@@ -1,7 +1,12 @@
 """Single-provider teams for herdr-ai, and the menu herdr-ai opens to pick a setup.
 
-A team is one lead agent beside four crew agents, all from one provider. The
-lead runs the provider's strongest model; the crew run a cheaper one. The lead
+A team is one lead agent beside four crew agents. The lead always runs Sol or
+Opus: the provider's strongest model, or for Antigravity, whose Gemini Flash
+should not orchestrate, the best other provider with quota (see handoff). The
+crew run the team provider's cheaper model, except that crew4 runs Gemini Flash
+on Antigravity's separate quota for trivial tasks when Antigravity is installed.
+Every member is told to watch its usage; a lead near a limit hands its goal on.
+The lead
 is told to hand searches, test runs, and well specified edits to the crew
 panes through herdr, so its own context and quota stay small. The crew are told
 to answer in a short summary the lead can read cheaply. Each provider's pair of
@@ -9,8 +14,8 @@ models is the "team" entry of its profile in agents.json.
 
 Instructions reach each CLI the way it supports: Claude appends them to its
 system prompt, Codex takes them as developer instructions. Kiro, Cursor and
-Antigravity have no such flag, so their lead gets them as its opening prompt
-and their crew get the reply rules inside each task the lead sends.
+Antigravity have no such flag, so their lead (or Standard pane) gets them as its
+opening prompt and their crew get the reply and usage rules inside each task.
 """
 
 import copy
@@ -25,6 +30,7 @@ import threading
 import time
 
 import agent_picker as ap
+import handoff
 import provider_defaults
 import preferences
 import herdr_sidebar
@@ -60,6 +66,8 @@ def nick(agent, model):
 
 def summary(agent):
     """'opus → haiku': the lead's model, then the crew's."""
+    if "lead" not in agent["team"]:   # led by another provider's Sol or Opus
+        return "sol/opus → " + nick(agent, agent["team"]["crew"]["model"])
     lead, crew = (nick(agent, agent["team"][r]["model"]) for r in ("lead", "crew"))
     shared = lead.split(" ")[0]
     if " " in lead and crew.startswith(shared + " "):
@@ -73,17 +81,30 @@ def option(agent):
     return dict(agent, model=text, short=text)
 
 
+STAR = "Star"
+
+
+def star_setup():
+    """The Star mesh setup: a lead StarCLI and four crew StarCLIs, each routing its
+    own turns across every provider. Shown with Star's combined usage meter."""
+    star = next((a for a in ap.AGENTS if a["name"] == STAR and ap.installed(a)), None)
+    return dict(star, model="lead + 4 crew", short="lead + 4 crew") if star else None
+
+
 def setups():
-    return [STANDARD] + [option(a) for a in providers()]
+    star = star_setup()
+    return ([star] if star else []) + [STANDARD] + [option(a) for a in providers()]
 
 
 def find(name):
     """The setup a --setup name means: None for standard, else a provider name."""
     if name.lower() == "standard":
         return None
+    if name.lower() == "star" and star_setup():
+        return STAR
     match = next((a["name"] for a in providers() if a["name"].lower() == name.lower()), None)
     if match is None:
-        known = ", ".join(["standard"] + [a["name"].lower() for a in providers()])
+        known = ", ".join(["standard"] + (["star"] if star_setup() else []) + [a["name"].lower() for a in providers()])
         raise ValueError(f"unknown setup {name!r}; choose one of: {known}")
     return match
 
@@ -99,10 +120,32 @@ def reply_rule():
             f"Put anything longer in a file under {tempfile.gettempdir()} and give its path.")
 
 
-def lead_brief(agent, crew):
+def gemini_work(them="it", they="it"):
+    return (f"Send {them} only work that needs no taste or judgment: finding files and symbols, grepping, "
+            f"running commands and tests and summarizing their output, renames and edits you specify exactly, "
+            f"boilerplate, simple lookups. Keep design, debugging, subtle edits and reviews for yourself or "
+            f"stronger workers, and check what {they} return{'s' if they == 'it' else ''}.")
+
+
+def crew_line(agent, crew, crew_agent, gemini):
+    """Who the four workers are, and what each kind is good for."""
+    if crew_agent["name"] == handoff.GEMINI:
+        return (f"All four run Gemini Flash on Antigravity's own quota, separate from yours. Gemini Flash is "
+                f"fast but much weaker than you. {gemini_work('them', 'they')} Split bigger jobs into small, exact steps.")
+    model = crew_agent["team"]["crew"]["model"]
+    mates = [p for p in crew if p != gemini]
+    line = (f"{', '.join(mates)} run {crew_agent['name']} {model}, a cheaper model than yours"
+            + (" that shares your usage limit." if crew_agent["name"] == agent["name"] else "."))
+    if gemini:
+        line += (f" {gemini} runs Gemini Flash on Antigravity's separate quota, so work sent there spares "
+                 f"yours. It is much weaker. {gemini_work()}")
+    return line
+
+
+def lead_brief(agent, crew, crew_agent=None, gemini=None, usage_pane=None):
     herdr = herdr_command()
-    worker = agent["team"]["crew"]["model"]
-    return f"""You lead a herdr team. Four {agent['name']} worker agents running {worker}, a cheaper model than yours, wait in the herdr panes {', '.join(crew)} on this tab, in your working directory. Your context is the expensive one: delegate whatever would fill it, and keep understanding the request, planning, decisions, integration, and the final check for yourself.
+    crew_agent = crew_agent or agent
+    return f"""You lead a herdr team. Four worker agents wait in the herdr panes {', '.join(crew)} on this tab, in your working directory. {crew_line(agent, crew, crew_agent, gemini)} Your context is the expensive one: delegate whatever would fill it, and keep understanding the request, planning, decisions, integration, and the final check for yourself.
 
 Delegate searching and reading code or docs, running builds and tests and digesting their output, mechanical or well specified edits, research, first drafts, and reviews. Do a step yourself only when it is quicker to do than to describe. Use these panes instead of built-in subagents.
 
@@ -110,17 +153,24 @@ How:
 - `{herdr} agent list` shows each pane's status. idle or done means ready.
 - `{herdr} agent prompt <pane> "<task>"` sends a task. For a single task add `--wait --timeout 900000`. For parallel work, send to several panes without --wait, then run `{herdr} agent wait <pane> --timeout 900000` for each.
 - Workers do not see this conversation. Make each task self-contained: the goal, exact paths, constraints, and what to return. Give parallel workers separate files.
-- End every task with: "{reply_rule()} Do not prompt other panes."
+- End every task with: "{reply_rule()} Do not prompt other panes. If `{handoff.command()} --usage` shows your provider at {handoff.NEAR}% or more of a limit, stop at a safe point and say so first."
 - Read only the result: `{herdr} agent read <pane> --source recent-unwrapped --lines 40`. Open a results file only when you need its detail.
 - Check a worker's changes cheaply (git diff, a test run) before you report them as done.
 - If a pane is blocked, read it before acting, and ask the user before approving anything risky. Do not close, restart, or rename the worker panes.
-- Tell the user what you delegated in a line, not the full task."""
+- A worker that reports a usage limit is done for now: move its work to another worker or do it yourself.
+- Tell the user what you delegated in a line, not the full task.
+
+{handoff.rules(agent['name'], 'lead', usage_pane)}"""
 
 
-def crew_brief(agent, lead):
+def crew_brief(agent, lead, usage_pane=None):
     return (f"You are a worker on a herdr team. The lead agent in herdr pane {lead} sends you tasks and reads "
             f"only the end of your reply. Do the task as given, within the files and scope it names. Do not prompt "
-            f"other panes or start subagents. {reply_rule()}")
+            f"other panes or start subagents. {reply_rule()} {handoff.rules(agent['name'], 'crew', usage_pane)}")
+
+
+def solo_brief(agent):
+    return handoff.rules(agent["name"], "solo")
 
 
 def cmd_safe(text):
@@ -138,38 +188,86 @@ def claude_settings():
     """A settings file that keeps iMCP out of a Claude team pane. A file, not inline JSON,
     since a .cmd shim would strip the quotes."""
     path = os.path.join(tempfile.gettempdir(), "herdr-team-claude-settings.json")
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(CLAUDE_SETTINGS, f)
+    text = json.dumps(CLAUDE_SETTINGS)
+    try:
+        with open(path, encoding="utf-8") as f:
+            if f.read() == text:
+                return path
+    except OSError:
+        pass
+    # Several mesh panes can start Claude at once. Readers must never see a
+    # settings file truncated by a concurrent writer.
+    fd, temporary = tempfile.mkstemp(prefix="herdr-team-claude-", suffix=".json")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
     return path
 
 
+def options(args, names):
+    """Pull --picker-NAME VALUE pairs for names out of args."""
+    found, rest, i = {}, [], 0
+    while i < len(args):
+        if args[i] in names and i + 1 < len(args):
+            found[args[i]] = args[i + 1]
+            i += 2
+        else:
+            rest.append(args[i])
+            i += 1
+    return found, rest
+
+
 def prepare(agent, args):
-    """The profile and arguments for a team member: --picker-lead PANES or --picker-crew PANE first in args."""
-    if len(args) < 2:
+    """The profile and arguments for a herdr-ai agent, from the first of args:
+    --picker-lead PANES [--picker-crew-of NAME] [--picker-gemini PANE] [--picker-usage-pane PANE],
+    --picker-crew PANE [--picker-usage-pane PANE], or --picker-solo (a Standard pane)."""
+    solo = args[:1] == ["--picker-solo"]
+    if solo and agent["name"] == "Star":
+        return agent, list(args[1:])   # StarCLI routes its own turns; a brief would read as a prompt
+    if not solo and len(args) < 2:
         raise ValueError(f"{args[0]} needs pane ids")
     lead = args[0] == "--picker-lead"
-    target, args = args[1], list(args[2:])
-    config = (agent.get("team") or {}).get("lead" if lead else "crew")
-    if not config:
-        raise ValueError(f"{agent['name']} has no team in agents.json")
+    target, args = (None, list(args[1:])) if solo else (args[1], list(args[2:]))
+    extra, args = options(args, ("--picker-crew-of", "--picker-gemini", "--picker-usage-pane"))
     agent = copy.deepcopy(agent)
-    if provider_defaults.current(agent) is not None:
-        provider_defaults.apply(agent, {"model": config["model"],
-                                        "effort": config.get("effort", "provider default")})
-    agent["detail"] = ("lead · " if lead else "crew · ") + agent.get("detail", "")
-    brief = lead_brief(agent, target.split(",")) if lead else crew_brief(agent, target)
+    if solo:
+        brief = solo_brief(agent)
+    else:
+        config = (agent.get("team") or {}).get("lead" if lead else "crew")
+        if not config:
+            raise ValueError(f"{agent['name']} has no team {'lead' if lead else 'crew'} in agents.json")
+        if provider_defaults.current(agent) is not None:
+            provider_defaults.apply(agent, {"model": config["model"],
+                                            "effort": config.get("effort", "provider default")})
+        agent["detail"] = ("lead · " if lead else "crew · ") + agent.get("detail", "")
+        usage_pane = extra.get("--picker-usage-pane")
+        if lead:
+            crew_of = extra.get("--picker-crew-of")
+            crew_agent = next((a for a in ap.AGENTS if a["name"] == crew_of), None) if crew_of else None
+            if crew_of and crew_agent is None:
+                raise ValueError(f"Unknown provider: {crew_of}")
+            brief = lead_brief(agent, target.split(","), crew_agent, extra.get("--picker-gemini"), usage_pane)
+        else:
+            brief = crew_brief(agent, target, usage_pane)
     shim = WINDOWS and str((resolve_argv(agent) or [""])[0]).lower().endswith((".cmd", ".bat"))
     if shim:
         brief = cmd_safe(brief)
     name = agent["name"]
     if name == "Claude":
-        agent["argv"] += ["--append-system-prompt", brief, "--settings", claude_settings()]
+        agent["argv"] += ["--append-system-prompt", brief]
+        if not solo:
+            agent["argv"] += ["--settings", claude_settings()]
     elif name == "Codex":
         # A TOML string; through a cmd shim, unquoted text Codex reads as a literal string instead.
         agent["argv"] += ["-c", "developer_instructions=" + (brief if shim else json.dumps(brief))]
-        agent["argv"] += ["-c", "mcp_servers.iMCP.enabled=false"]  # see CLAUDE_SETTINGS
-    elif lead:
-        # No system prompt flag: the lead reads its brief as the opening prompt.
+        if not solo:
+            agent["argv"] += ["-c", "mcp_servers.iMCP.enabled=false"]  # see CLAUDE_SETTINGS
+    elif lead or solo:
+        # No system prompt flag: the agent reads its brief as the opening prompt.
         opening = brief + "\n\nThese are your standing instructions for this session. Reply only: ready."
         args += ["-i", opening] if name == "Antigravity" else [opening]
     return agent, args
@@ -219,7 +317,7 @@ def choose(settings_only=False):
     writer = ap.Screen(terminal)
     out = sys.stdout
     start = time.monotonic()
-    menu = preferences.Menu([preferences.register(s) for s in herdr_sidebar.SETTINGS])
+    menu = preferences.Menu([preferences.register(s) for s in (*herdr_sidebar.SETTINGS, ap.BARS)])
     settings_open = settings_only
     notices = []
 
@@ -248,9 +346,9 @@ def choose(settings_only=False):
             if settings_open:
                 if key in ("\x03", "\x04"):
                     return None
-                before = [preferences.get(s.key) for s in menu.items]
+                before = [preferences.get(s.key) for s in herdr_sidebar.SETTINGS]
                 closed = menu.handle(key) == "close"
-                if [preferences.get(s.key) for s in menu.items] != before:
+                if [preferences.get(s.key) for s in herdr_sidebar.SETTINGS] != before:
                     try:
                         import herdr_ai
                         herdr_sidebar.sync(herdr_ai.load_state())

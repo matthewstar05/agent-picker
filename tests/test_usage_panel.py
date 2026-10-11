@@ -428,6 +428,12 @@ class CardScopeTests(unittest.TestCase):
             self.assertFalse(self.view.peeking())
 
     def test_herdr_counts_this_tab_this_workspace_and_every_workspace(self):
+        # A StarCLI turn running on this computer must not count here.
+        empty = tempfile.TemporaryDirectory()
+        self.addCleanup(empty.cleanup)
+        live = patch.object(panel, "STAR_LIVE", Path(empty.name))
+        live.start()
+        self.addCleanup(live.stop)
         panes = [{"pane_id": "w:p1", "tab_id": "w:t1", "workspace_id": "w"},
                  {"pane_id": "w:p2", "tab_id": "w:t1", "workspace_id": "w", "agent": "claude", "agent_status": "idle"},
                  {"pane_id": "w:p3", "tab_id": "w:t2", "workspace_id": "w", "agent": "codex", "agent_status": "working"},
