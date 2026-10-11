@@ -505,12 +505,21 @@ class StarSessionTests(unittest.TestCase):
         self.assertEqual(turn.call_args[0][1].provider, "Claude")
         self.assertIn("Codex needs native approvals", turn.call_args[0][3])
 
-    @unittest.skipIf(os.name == "nt", "the fake app-server is a Unix script")
+    def runnable(self, path):
+        """The fake itself, or on Windows a batch launcher for it, which also
+        exercises the launcher path that a real npm-installed CLI takes."""
+        path.chmod(0o755)
+        if os.name != "nt":
+            return path
+        launcher = path.with_suffix(".bat")
+        launcher.write_text(f'@"{sys.executable}" "{path}" %*\r\n')
+        return launcher
+
     def test_codex_approvals_run_through_the_app_server_client(self):
         server = self.dir / "fake-codex-app-server"
         log = self.dir / "app-server.log"
         server.write_text(FAKE_APP_SERVER.format(python=sys.executable, log=str(log)))
-        server.chmod(0o755)
+        server = self.runnable(server)
         star = self.star({"Codex": False})
         engine = star_engines.CodexEngine({"name": "Codex", "argv": ["codex", "--ask-for-approval", "on-request",
                                                                     "--sandbox", "workspace-write"]})
@@ -553,12 +562,11 @@ class StarSessionTests(unittest.TestCase):
         self.assertIn("clean the build", turn["input"][0]["text"])
         self.assertEqual(star.convo.turns[-1]["provider"], "Codex")
 
-    @unittest.skipIf(os.name == "nt", "the fake ACP agent is a Unix script")
     def test_kiro_permissions_run_through_the_acp_client(self):
         server = self.dir / "acp-kiro-agent"   # not fake-Kiro: macOS paths ignore case
         log = self.dir / "kiro-acp.argv"
         server.write_text(FAKE_KIRO_ACP.format(python=sys.executable, log=str(log)))
-        server.chmod(0o755)
+        server = self.runnable(server)
         star = self.star({"Kiro": False})
         engine = star_engines.KiroEngine({"name": "Kiro", "argv": ["kiro-cli", "chat", "--trust-tools=fs_read"]})
         engine.exe = str(server)
