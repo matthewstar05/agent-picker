@@ -330,7 +330,6 @@ class UsagePanelTests(unittest.TestCase):
             working = panel.interval("Claude")
         self.assertLess(working, panel.interval("Claude"))
 
-
     def test_usage_keys_switch_screens_and_themes(self):
         view = self.view()
         self.assertEqual(panel.handle(view, "t", []), None)
@@ -494,7 +493,6 @@ class CardScopeTests(unittest.TestCase):
         self.assertEqual(menu.handle("esc"), "close")
 
 
-@unittest.skipIf(os.name == "nt", "POSIX input decoding; Windows reads keys through msvcrt")
 class KeyTests(unittest.TestCase):
     def keys(self, data):
         import os

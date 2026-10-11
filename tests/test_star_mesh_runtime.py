@@ -14,7 +14,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-@unittest.skipIf(os.name == "nt", "PTY integration uses a Unix terminal; Windows needs a native console")
 class MeshRuntimeTests(unittest.TestCase):
     def test_crashed_goal_reopens_with_its_native_session_and_resumes_automatically(self):
         sys.path.insert(0, str(ROOT / "src"))
@@ -213,7 +212,7 @@ class MeshRuntimeTests(unittest.TestCase):
                         pass
                 os.close(master)
 
-    def test_three_ctrl_c_quit_with_a_draft_as_a_windows_reroute_sends_them(self):
+    def test_three_ctrl_c_quit_with_a_draft(self):
         import pty
         import select
         import signal

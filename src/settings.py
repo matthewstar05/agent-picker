@@ -1,10 +1,9 @@
 """Shared launch profiles plus machine-local overrides."""
 
-import provider_defaults
 import json
 import os
 from pathlib import Path
-from platform_runtime import WINDOWS
+
 import provider_defaults
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -13,8 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def config_path():
     if os.environ.get("AGENT_PICKER_CONFIG"):
         return Path(os.environ["AGENT_PICKER_CONFIG"]).expanduser()
-    base = (os.environ.get("APPDATA", str(Path.home() / "AppData/Roaming"))
-            if WINDOWS else os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config")))
+    base = os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))
     return Path(base) / "agent-picker/config.json"
 
 
@@ -27,9 +25,7 @@ def load_agents():
     unknown = set(overrides.get("agents", {})) - {a["name"] for a in agents}
     if unknown:
         raise ValueError("unknown agent overrides: " + ", ".join(sorted(unknown)))
-    platform = "windows" if WINDOWS else "posix"
     for agent in agents:
-        agent.update(agent.pop("platforms", {}).get(platform, {}))
         agent.update(overrides.get("agents", {}).get(agent["name"], {}))
         command = agent.pop("command", None)
         if command is not None:

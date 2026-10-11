@@ -8,7 +8,6 @@ import sys
 import tempfile
 import time
 import unittest
-import unittest.mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
@@ -147,7 +146,6 @@ class ProviderOwnershipTests(unittest.TestCase):
             self.assertFalse(alive(int(path.read_text())))
             self.assertIsNotNone(run.proc.returncode)
 
-    @unittest.skipIf(os.name == "nt", "Windows ends leftover tools with the guardian's job")
     def test_a_tool_left_holding_the_output_pipe_does_not_hold_the_turn(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "tool.pid"
@@ -170,89 +168,6 @@ class ProviderOwnershipTests(unittest.TestCase):
                 self.assertTrue(alive(pid))
             finally:
                 os.kill(pid, 9)
-
-
-# The template npm's cmd-shim writes for a package bin on Windows.
-NPM_SHIM = r'''@ECHO off
-GOTO start
-:find_dp0
-SET dp0=%~dp0
-EXIT /b
-:start
-SETLOCAL
-CALL :find_dp0
-
-IF EXIST "%dp0%\node.exe" (
-  SET "_prog=%dp0%\node.exe"
-) ELSE (
-  SET "_prog=node"
-  SET PATHEXT=%PATHEXT:;.JS;=;%
-)
-
-endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\node_modules\@openai\codex\bin\codex.js" %*
-'''
-
-
-class BatchLauncherTests(unittest.TestCase):
-    """cmd.exe re-parses a .cmd file's arguments, so a prompt never goes through one."""
-
-    PROMPT = 'fix "this" & del /q *\nthen run %PATH% | more'
-
-    def test_an_npm_shim_runs_its_script_with_the_prompt_unchanged(self):
-        from platform_runtime import direct_argv
-        with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder)
-            shim = root / "codex.cmd"
-            shim.write_text(NPM_SHIM)
-            script = root / "node_modules" / "@openai" / "codex" / "bin" / "codex.js"
-            script.parent.mkdir(parents=True)
-            script.write_text("")
-            (root / "node.exe").write_text("")
-            argv = direct_argv([str(shim), "exec", "--", self.PROMPT], windows=True)
-            self.assertEqual(argv, [str(root / "node.exe"), str(script), "exec", "--", self.PROMPT])
-
-    def test_an_older_npm_shim_and_a_missing_script(self):
-        from platform_runtime import direct_argv, shim_target
-        with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder)
-            shim = root / "claude.cmd"
-            shim.write_text('@IF EXIST "%~dp0\\node.exe" (\r\n  "%~dp0\\node.exe"  '
-                            '"%~dp0\\node_modules\\@anthropic-ai\\claude-code\\cli.js" %*\r\n) ELSE (\r\n'
-                            '  node  "%~dp0\\node_modules\\@anthropic-ai\\claude-code\\cli.js" %*\r\n)\r\n')
-            self.assertIsNone(shim_target(shim))   # the script it names is not there
-            script = root / "node_modules" / "@anthropic-ai" / "claude-code" / "cli.js"
-            script.parent.mkdir(parents=True)
-            script.write_text("")
-            with unittest.mock.patch("platform_runtime.shutil.which", return_value="C:/node/node.exe"):
-                self.assertEqual(direct_argv([str(shim), "-p", self.PROMPT], windows=True),
-                                 ["C:/node/node.exe", str(script), "-p", self.PROMPT])
-
-    def test_an_unknown_batch_launcher_refuses_cmd_syntax_but_takes_plain_words(self):
-        from platform_runtime import UnsafeLauncher, direct_argv
-        with tempfile.TemporaryDirectory() as folder:
-            launcher = Path(folder) / "agent.BAT"
-            launcher.write_text("@echo off\r\nC:\\tools\\agent.exe %*\r\n")
-            for prompt in (self.PROMPT, "two\nlines", "100%", 'say "hi"', "a|b", "a^b"):
-                with self.assertRaises(UnsafeLauncher, msg=prompt):
-                    direct_argv([str(launcher), "-p", prompt], windows=True)
-            plain = [str(launcher), "-p", "rename the helper (and its tests)!"]
-            self.assertEqual(direct_argv(plain, windows=True), plain)
-            # Other platforms and executables pass through untouched.
-            self.assertEqual(direct_argv([str(launcher), self.PROMPT], windows=False), [str(launcher), self.PROMPT])
-            self.assertEqual(direct_argv(["C:/x/codex.exe", self.PROMPT], windows=True), ["C:/x/codex.exe", self.PROMPT])
-
-    def test_a_refused_launcher_fails_the_turn_before_any_process_starts(self):
-        import platform_runtime
-        with tempfile.TemporaryDirectory() as folder:
-            launcher = Path(folder) / "agent.cmd"
-            launcher.write_text("@echo off\r\nagent.exe %*\r\n")
-            with unittest.mock.patch.object(star_engines, "direct_argv",
-                                            lambda argv: platform_runtime.direct_argv(argv, windows=True)), \
-                    unittest.mock.patch.object(star_engines.subprocess, "Popen") as popen:
-                with self.assertRaises(OSError) as caught:
-                    star_engines.Turn(None, [str(launcher), "-p", self.PROMPT])
-            popen.assert_not_called()
-            self.assertIn("batch launcher", str(caught.exception))
 
 
 if __name__ == "__main__":

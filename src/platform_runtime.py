@@ -1,94 +1,49 @@
-"""Terminal and process differences, kept out of the shared renderer."""
+"""Terminal and process handling, kept out of the shared renderer."""
 
 import os
-import re
 import shutil
-import subprocess
 import sys
-import time
 from pathlib import Path
-
-WINDOWS = os.name == "nt"
 
 
 def state_dir():
     if os.environ.get("AGENT_PICKER_STATE_HOME"):
         return Path(os.environ["AGENT_PICKER_STATE_HOME"]).expanduser()
-    base = os.environ.get("XDG_STATE_HOME")
-    if not base:
-        base = (os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData/Local"))
-                if WINDOWS else str(Path.home() / ".local/state"))
+    base = os.environ.get("XDG_STATE_HOME") or str(Path.home() / ".local/state")
     return Path(base) / "agent-picker"
 
 
 class Terminal:
     def __enter__(self):
         self.fd = sys.stdin.fileno()
-        if WINDOWS:
-            import ctypes
-            from ctypes import wintypes
-            self.kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-            self.kernel.GetStdHandle.argtypes = [wintypes.DWORD]
-            self.kernel.GetStdHandle.restype = wintypes.HANDLE
-            self.kernel.GetConsoleMode.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
-            self.kernel.SetConsoleMode.argtypes = [wintypes.HANDLE, wintypes.DWORD]
-            self.modes = []
-            for handle_id, output in ((-11, True), (-10, False)):
-                handle = self.kernel.GetStdHandle(handle_id & 0xffffffff)
-                mode = wintypes.DWORD()
-                if not self.kernel.GetConsoleMode(handle, ctypes.byref(mode)):
-                    self._restore_windows()
-                    raise RuntimeError("Use a native PowerShell tab in Windows Terminal.")
-                updated = mode.value | 0x0004 if output else (mode.value | 0x0080) & ~0x0047
-                if not self.kernel.SetConsoleMode(handle, updated):
-                    self._restore_windows()
-                    raise RuntimeError("This terminal does not support ANSI output.")
-                self.modes.append((handle, mode.value))
-        else:
-            import termios
-            import tty
-            self.old = termios.tcgetattr(self.fd)
-            tty.setcbreak(self.fd)
-            # Ctrl+\ (SIGQUIT), a closed pane (SIGHUP), or kill (SIGTERM) would
-            # otherwise abort Python mid-frame: macOS shows "Python quit
-            # unexpectedly" and the terminal is left in cbreak mode. Leave the
-            # way q does instead, so the caller's cleanup restores everything.
-            import signal
+        import termios
+        import tty
+        self.old = termios.tcgetattr(self.fd)
+        tty.setcbreak(self.fd)
+        # Ctrl+\ (SIGQUIT), a closed pane (SIGHUP), or kill (SIGTERM) would
+        # otherwise abort Python mid-frame: macOS shows "Python quit
+        # unexpectedly" and the terminal is left in cbreak mode. Leave the
+        # way q does instead, so the caller's cleanup restores everything.
+        import signal
 
-            def leave(signum, frame):
-                raise KeyboardInterrupt
+        def leave(signum, frame):
+            raise KeyboardInterrupt
 
-            self.signals = {}
-            for name in ("SIGQUIT", "SIGHUP", "SIGTERM"):
-                number = getattr(signal, name)
-                self.signals[number] = signal.signal(number, leave)
+        self.signals = {}
+        for name in ("SIGQUIT", "SIGHUP", "SIGTERM"):
+            number = getattr(signal, name)
+            self.signals[number] = signal.signal(number, leave)
         return self
 
-    def _restore_windows(self):
-        for handle, mode in reversed(self.modes):
-            self.kernel.SetConsoleMode(handle, mode)
-
     def __exit__(self, *exc):
-        if WINDOWS:
-            self._restore_windows()
-        else:
-            import signal
-            import termios
-            for number, handler in getattr(self, "signals", {}).items():
-                signal.signal(number, handler)
-            termios.tcsetattr(self.fd, termios.TCSADRAIN, self.old)
+        import signal
+        import termios
+        for number, handler in getattr(self, "signals", {}).items():
+            signal.signal(number, handler)
+        termios.tcsetattr(self.fd, termios.TCSADRAIN, self.old)
 
     def wait(self, seconds):
         if getattr(self, "_pending", b""):
-            return True
-        if WINDOWS:
-            import msvcrt
-            deadline = time.monotonic() + max(0, seconds)
-            while not msvcrt.kbhit():
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    return False
-                time.sleep(min(remaining, 0.005))
             return True
         import select
         return bool(select.select([self.fd], [], [], max(0, seconds))[0])
@@ -98,7 +53,7 @@ class Terminal:
         with repeat and release events, so a held key can be told from a tap.
         Terminals without it ignore the request and keep sending plain keys.
         Only used on the alternate screen, whose flags the shell never sees."""
-        if WINDOWS or enhanced == getattr(self, "enhanced", False):
+        if enhanced == getattr(self, "enhanced", False):
             return
         self.enhanced = enhanced
         self.write("\x1b[>11u" if enhanced else "\x1b[<u")
@@ -113,12 +68,6 @@ class Terminal:
         """A key name: a character, "up"/"down"/"left"/"right", or "esc". With
         the kitty protocol a release comes as "release:" + the key, and
         self.releases turns true once one has."""
-        if WINDOWS:
-            import msvcrt
-            ch = msvcrt.getwch()
-            if ch in ("\x00", "\xe0"):
-                return {"H": "up", "P": "down", "M": "right", "K": "left"}.get(msvcrt.getwch(), "")
-            return "esc" if ch == "\x1b" else ch
         ch = self._byte()
         if not ch:
             return "esc"
@@ -156,13 +105,9 @@ class Terminal:
         return key
 
     def write(self, text):
-        if WINDOWS:
-            sys.stdout.write(text)
-            sys.stdout.flush()
-        else:
-            data = text.encode("utf-8")
-            while data:
-                data = data[os.write(sys.stdout.fileno(), data):]
+        data = text.encode("utf-8")
+        while data:
+            data = data[os.write(sys.stdout.fileno(), data):]
 
 
 ARROWS = {"A": "up", "B": "down", "C": "right", "D": "left"}
@@ -210,13 +155,11 @@ def decode_key(prefix, seq):
 
 # Where agent CLI installers put their binaries when that folder isn't always
 # on PATH (a pane started before the install, or a shell without the rc line).
-SEARCH_DIRS = ([
-    "~/AppData/Roaming/npm", "~/.bun/bin", "~/.cargo/bin", "~/go/bin", "~/.local/bin",
-] if WINDOWS else [
+SEARCH_DIRS = [
     "~/.local/bin", "~/.opencode/bin", "~/.bun/bin", "~/.npm-global/bin", "~/.npm/bin",
     "~/.cargo/bin", "~/go/bin", "~/.amp/bin", "~/.factory/bin", "~/.deno/bin",
     "/opt/homebrew/bin", "/usr/local/bin",
-])
+]
 
 
 def resolve_argv(agent):
@@ -232,54 +175,5 @@ def resolve_argv(agent):
     return None
 
 
-# Windows runs a .cmd or .bat file through cmd.exe, which re-parses its command
-# line: it expands %VAR%, runs & | < > and ends the command at a newline. Python
-# quotes arguments for normal programs only, so a prompt cannot go to cmd.exe.
-BATCH_SUFFIXES = (".cmd", ".bat")
-CMD_UNSAFE = re.compile(r'[\r\n%^&|<>"]')
-# npm, pnpm and yarn shims end with: "<node>" "%~dp0\path\to\cli.js" %*
-SHIM_SCRIPT = re.compile(r'"%(?:~dp0|dp0%)\\?([^"%]+)"\s+%\*')
-
-
-class UnsafeLauncher(OSError):
-    pass
-
-
-def shim_target(path):
-    """[node, script] that an npm-style batch shim would run, or None."""
-    try:
-        text = Path(path).read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return None
-    folder = Path(path).parent
-    for match in reversed(SHIM_SCRIPT.findall(text)):
-        script = folder / match.replace("\\", os.sep)
-        if script.name.lower() == "node.exe" or not script.is_file():
-            continue
-        node = folder / "node.exe"
-        node = str(node) if node.is_file() else shutil.which("node")
-        return [node, str(script)] if node else None
-    return None
-
-
-def direct_argv(argv, windows=WINDOWS):
-    """argv that passes every argument unchanged. A batch launcher is replaced
-    by the script it runs; one that cannot be unwrapped is refused when an
-    argument holds characters cmd.exe would interpret."""
-    if not windows or not argv or not str(argv[0]).lower().endswith(BATCH_SUFFIXES):
-        return list(argv)
-    target = shim_target(argv[0])
-    if target:
-        return target + list(argv[1:])
-    if any(CMD_UNSAFE.search(str(a)) for a in argv[1:]):
-        raise UnsafeLauncher(f"{Path(argv[0]).name} is a batch launcher, which cannot receive this prompt "
-                             "safely; point the local config at the provider's executable")
-    return list(argv)
-
-
 def launch(argv):
-    if not WINDOWS:
-        os.execvp(argv[0], argv)
-    # Windows cannot replace the current process as POSIX exec does.
-    # Inherit cwd, environment, and console, and propagate the CLI's exit code.
-    return subprocess.call(argv)
+    os.execvp(argv[0], argv)

@@ -1,4 +1,4 @@
-name: Cross-platform tests
+name: Tests
 on:
   push:
   pull_request:
@@ -9,9 +9,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest]
         python: ['3.9', '3.13']
-    runs-on: ${{ matrix.os }}
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -21,46 +20,3 @@ jobs:
         run: python -m unittest discover -s tests -v
       - name: Validate profiles without opening agent sessions
         run: python src/agent_picker.py --picker-doctor
-      - name: Verify Windows install and reinstall
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $fixture = Join-Path $env:RUNNER_TEMP 'picker-install-fixture'
-          New-Item -ItemType Directory -Force -Path $fixture | Out-Null
-          $fakeCursor = Join-Path $fixture 'cursor-agent.cmd'
-          Set-Content -Path $fakeCursor -Value "@echo off`r`nexit /b 0" -Encoding ascii
-          $env:PATH = "$fixture;$env:PATH"
-          $env:AGENT_PICKER_CONFIG = Join-Path $fixture 'config.json'
-          $env:AGENT_PICKER_STATE_HOME = Join-Path $fixture 'state'
-          $python = (Get-Command python).Source
-          & ./scripts/install-windows.ps1 -Python $python
-          if ($LASTEXITCODE -ne 0) { throw 'Install failed' }
-          & ./scripts/install-windows.ps1 -Python $python
-          if ($LASTEXITCODE -ne 0) { throw 'Reinstall failed' }
-          . $PROFILE.CurrentUserAllHosts
-          agent --picker-doctor
-          if ($LASTEXITCODE -ne 0) { throw 'Profile function failed' }
-          agent-picker.cmd --picker-doctor
-          if ($LASTEXITCODE -ne 0) { throw 'Command prompt shim failed' }
-          $config = Get-Content -Raw $env:AGENT_PICKER_CONFIG | ConvertFrom-Json
-          if ($config.agents.Cursor.command -ne $fakeCursor) { throw 'Cursor vendor path was not captured' }
-          if ($config.agents.Cursor.argv) { throw 'Installer pinned shared launch arguments' }
-          agent --picker-launch Cursor --version
-          if ($LASTEXITCODE -ne 0) { throw 'Captured Cursor launch failed' }
-          $profileText = Get-Content -Raw $PROFILE.CurrentUserAllHosts
-          if ([regex]::Matches($profileText, '# >>> agent-picker managed >>>').Count -ne 1) { throw 'Duplicate profile blocks' }
-          herdr-ai.cmd --help
-          if ($LASTEXITCODE -ne 0) { throw 'herdr-ai shim failed' }
-          agent-route.cmd --help
-          if ($LASTEXITCODE -ne 0) { throw 'agent-route shim failed' }
-          herdr-reset.cmd --help
-          if ($LASTEXITCODE -ne 0) { throw 'herdr-reset shim failed' }
-      - name: Parse Windows setup scripts
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          foreach ($script in Get-ChildItem scripts/*.ps1) {
-            $errors = $null
-            [System.Management.Automation.Language.Parser]::ParseFile($script.FullName, [ref]$null, [ref]$errors) | Out-Null
-            if ($errors) { $errors | Out-String | Write-Error; throw "Syntax errors in $($script.Name)" }
-          }

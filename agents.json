@@ -328,20 +328,6 @@
     "executables": [
       "cursor-agent"
     ],
-    "platforms": {
-      "windows": {
-        "argv": [
-          "cursor-agent",
-          "--model",
-          "grok-4.7-high",
-          "--yolo",
-          "--trust"
-        ],
-        "executables": [
-          "cursor-cli"
-        ]
-      }
-    },
     "detect": [
       "cursor",
       "cursor-agent",

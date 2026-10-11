@@ -34,7 +34,7 @@ import handoff
 import provider_defaults
 import preferences
 import herdr_sidebar
-from platform_runtime import WINDOWS, Terminal, resolve_argv
+from platform_runtime import Terminal
 
 CREW = ("crew1", "crew2", "crew3", "crew4")
 REPLY = 15   # lines a crew reply may run, so the lead reads little
@@ -173,13 +173,6 @@ def solo_brief(agent):
     return handoff.rules(agent["name"], "solo")
 
 
-def cmd_safe(text):
-    """One line without the characters cmd.exe treats specially, for a CLI behind a .cmd shim:
-    cmd ends a command at a newline and misreads quotes, <, >, &, | and ^ inside arguments."""
-    text = re.sub(r"\s*\n\s*", " ", text)
-    return re.sub(r'["<>&|^%]', "", text)
-
-
 # iMCP drops every client when several connect at once, as a team's five panes do at launch.
 CLAUDE_SETTINGS = {"deniedMcpServers": [{"serverName": "iMCP"}]}
 
@@ -253,17 +246,13 @@ def prepare(agent, args):
             brief = lead_brief(agent, target.split(","), crew_agent, extra.get("--picker-gemini"), usage_pane)
         else:
             brief = crew_brief(agent, target, usage_pane)
-    shim = WINDOWS and str((resolve_argv(agent) or [""])[0]).lower().endswith((".cmd", ".bat"))
-    if shim:
-        brief = cmd_safe(brief)
     name = agent["name"]
     if name == "Claude":
         agent["argv"] += ["--append-system-prompt", brief]
         if not solo:
             agent["argv"] += ["--settings", claude_settings()]
     elif name == "Codex":
-        # A TOML string; through a cmd shim, unquoted text Codex reads as a literal string instead.
-        agent["argv"] += ["-c", "developer_instructions=" + (brief if shim else json.dumps(brief))]
+        agent["argv"] += ["-c", "developer_instructions=" + json.dumps(brief)]   # a TOML string
         if not solo:
             agent["argv"] += ["-c", "mcp_servers.iMCP.enabled=false"]  # see CLAUDE_SETTINGS
     elif lead or solo:

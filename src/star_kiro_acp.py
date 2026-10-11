@@ -18,7 +18,6 @@ import sys
 from pathlib import Path
 
 import star_approve
-from platform_runtime import direct_argv
 
 CLIENT = {"name": "starcli", "title": "StarCLI", "version": "1"}
 ALLOW = ("allow_once", "allow_always")
@@ -116,7 +115,7 @@ def prompt_blocks(text, images):
 def run(config):
     argv = [config["kiro"], "acp"] + list(config.get("flags") or [])
     try:
-        proc = subprocess.Popen(direct_argv(argv), stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
+        proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
                                 encoding="utf-8", errors="replace", bufsize=1)
     except OSError as exc:
         emit({"type": "runError", "data": {"message": str(exc)}})

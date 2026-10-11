@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Link the command to this Git checkout; back up files before changing them."""
 
-import os
 import re
 import shlex
 import shutil
@@ -43,8 +42,6 @@ def install_herdr_ai(bindir):
 
 
 def main():
-    if os.name == "nt":
-        sys.exit("Use scripts/install-windows.ps1 on Windows.")
     install_herdr_ai(Path.home() / ".local/bin")
     bindir = Path.home() / ".local/bin"
     bindir.mkdir(parents=True, exist_ok=True)

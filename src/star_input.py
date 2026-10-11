@@ -26,24 +26,8 @@ import sys
 import time
 import unicodedata
 
-try:
-    import termios
-    import tty
-except ImportError:   # Windows reads the console with msvcrt instead
-    termios = tty = None
-
-# Windows console scan codes that follow a \x00 or \xe0 prefix from msvcrt.
-WINDOWS_SCAN = {
-    "H": "up", "P": "down", "K": "left", "M": "right",
-    "G": "home", "O": "end", "S": "delete",
-    "s": "word-left", "t": "word-right", "\x0f": "shift-tab",
-}
-WINDOWS_CTRL = {
-    "\r": "enter", "\n": "newline", "\x7f": "backspace", "\x08": "backspace", "\t": "tab",
-    "\x01": "home", "\x05": "end", "\x02": "left", "\x06": "right", "\x03": "ctrl-c",
-    "\x04": "ctrl-d", "\x17": "kill-word", "\x15": "kill-line", "\x0b": "kill-end",
-    "\x0c": "ctrl-l", "\x16": "ctrl-v", "\x10": "up", "\x0e": "down", "\x1b": "esc",
-}
+import termios
+import tty
 
 MENU_ROWS = 7
 IMAGE = re.compile(r"\.(png|jpe?g|gif|webp|heic|bmp|tiff?)$", re.I)
@@ -75,49 +59,7 @@ def clipboard_image(dest):
         except (OSError, subprocess.SubprocessError):
             return False
         return out.stdout.strip() == "ok" and os.path.isfile(dest) and os.path.getsize(dest) > 0
-    if os.name != "nt":
-        return False
-    safe = str(dest).replace("'", "''")
-    script = ("Add-Type -AssemblyName System.Windows.Forms; "
-              "Add-Type -AssemblyName System.Drawing; "
-              "if (-not [System.Windows.Forms.Clipboard]::ContainsImage()) { 'none'; exit 0 }; "
-              "$img = [System.Windows.Forms.Clipboard]::GetImage(); "
-              f"$img.Save('{safe}', [System.Drawing.Imaging.ImageFormat]::Png); 'ok'")
-    try:
-        out = subprocess.run(["powershell", "-NoProfile", "-Command", script], capture_output=True,
-                             text=True, timeout=8)
-    except (OSError, subprocess.SubprocessError):
-        return False
-    return out.stdout.strip() == "ok" and os.path.isfile(dest) and os.path.getsize(dest) > 0
-
-
-def windows_event(ch, scan=None):
-    """One Windows console key as the same event the POSIX reader yields."""
-    if ch in ("\x00", "\xe0"):
-        return WINDOWS_SCAN.get(scan, "ignore")
-    if ch in WINDOWS_CTRL:
-        return WINDOWS_CTRL[ch]
-    if ch >= " ":
-        return ("text", ch)
-    return "ignore"
-
-
-class WindowsEvents:
-    """Join UTF-16 surrogate key units before passing text to the editor."""
-
-    def __init__(self):
-        import codecs
-        self.decoder = codecs.getincrementaldecoder("utf-16-le")("replace")
-
-    def feed(self, ch, scan=None):
-        event = windows_event(ch, scan)
-        if isinstance(event, tuple):
-            text = self.decoder.decode(event[1].encode("utf-16-le", "surrogatepass"))
-            return ("text", text) if text else None
-        # A control key cancels an incomplete, malformed surrogate. Never put
-        # a lone surrogate into the UTF-8 output or saved conversation.
-        self.decoder.reset()
-        return event
+    return False
 
 
 class Wake(Exception):
@@ -129,10 +71,8 @@ class Wake(Exception):
 
 
 def supported():
-    """A real terminal where the line editor can run: POSIX raw mode, or a Windows console."""
-    if not (sys.stdin.isatty() and sys.stdout.isatty()):
-        return False
-    return termios is not None or os.name == "nt"
+    """A real terminal where the line editor can run in raw mode."""
+    return sys.stdin.isatty() and sys.stdout.isatty()
 
 
 def cell_width(ch):
@@ -510,24 +450,6 @@ class Editor:
             yield ("text", buf[:n].decode("utf-8", "replace"))
             buf = buf[n:]
 
-    def windows_keys(self, idle):
-        """The Windows console equivalent of keys(): msvcrt has no raw tty or bracketed paste."""
-        import msvcrt
-        events = WindowsEvents()
-        while True:
-            if not msvcrt.kbhit():
-                if idle:
-                    woke = idle()
-                    if woke:
-                        yield ("wake", woke)
-                time.sleep(1 / 30)
-                continue
-            ch = msvcrt.getwch()
-            scan = msvcrt.getwch() if ch in ("\x00", "\xe0") else None
-            event = events.feed(ch, scan)
-            if event is not None:
-                yield event
-
     def read(self, hint=lambda: ("", ""), on_mode=None, idle=None, cwd=None, initial="", on_ready=None,
              on_change=None):
         """The next message. Raises EOFError on ctrl-d (or a second ctrl-c) in an empty box,
@@ -538,17 +460,14 @@ class Editor:
         browse, draft = len(self.history), ""
         last_ctrl_c, last_esc = 0.0, 0.0
         fd = sys.stdin.fileno()
-        saved = termios.tcgetattr(fd) if termios else None
-        if termios:
-            sys.stdout.write("\x1b[?2004h")   # bracketed paste
+        saved = termios.tcgetattr(fd)
+        sys.stdout.write("\x1b[?2004h")   # bracketed paste
         try:
-            if termios:
-                tty.setraw(fd)
+            tty.setraw(fd)
             self.draw()
             if on_ready:
                 on_ready(self.text)
-            source = self.keys(fd, idle) if termios else self.windows_keys(idle)
-            for key in source:
+            for key in self.keys(fd, idle):
                 items = self.menu_items()
                 if isinstance(key, tuple) and key[0] == "wake":
                     raise Wake(key[1], self.text)
@@ -658,9 +577,8 @@ class Editor:
             self.text = ""
             raise
         finally:
-            if termios:
-                sys.stdout.write("\x1b[?2004l")
-                termios.tcsetattr(fd, termios.TCSADRAIN, saved)
+            sys.stdout.write("\x1b[?2004l")
+            termios.tcsetattr(fd, termios.TCSADRAIN, saved)
             if self.drawn_rows:
                 # leave the message as transcript, without the rules, menu and hint
                 self.draw(final=True) if self.text.strip() else self._erase()

@@ -88,7 +88,6 @@ from platform_runtime import state_dir
 import herdr_sidebar
 import session_refresh
 
-WINDOWS = os.name == "nt"
 ENTRY = Path(__file__).resolve().parent / "agent_picker.py"
 
 # pane -> picker arguments; panes not listed stay plain shells. --picker-return
@@ -111,37 +110,22 @@ KEPT = "usage"
 
 
 def find_herdr():
-    found = os.environ.get("HERDR_BIN_PATH") or shutil.which("herdr")
-    if not found and WINDOWS:
-        # herdr's Windows installer puts its alias here; a terminal opened
-        # before the install will not have it on PATH yet.
-        alias = Path(os.environ.get("LOCALAPPDATA", "")) / "Programs/Herdr/bin/herdr.exe"
-        found = str(alias) if alias.is_file() else None
-    return found
+    return os.environ.get("HERDR_BIN_PATH") or shutil.which("herdr")
 
 
 def picker_command(args):
     """The line typed into a pane's shell to run the picker with args."""
-    words = [sys.executable, str(ENTRY), *args]
-    if not WINDOWS:
-        return shlex.join(words)
-    # A Windows pane may run PowerShell or cmd, which quote differently. Bare
-    # paths work in both; otherwise use the installer's agent-picker.cmd shim.
-    if any(c in w for w in words for c in ' "&^%()\'`'):
-        return " ".join(["agent-picker.cmd", *args])
-    return " ".join(words)
+    return shlex.join([sys.executable, str(ENTRY), *args])
 
 
 def cd_command(path):
-    # Double quotes work in PowerShell and cmd; /d is not needed for cmd within one drive.
-    return f'cd "{path}"' if WINDOWS else "cd " + shlex.quote(path)
+    return "cd " + shlex.quote(path)
 
 
 def route_directory_command(path):
     # A killed TUI can leave mouse reporting, keyboard protocols, and raw tty
     # flags behind. Reset before the replacement agent starts negotiating them.
-    prefix = "" if WINDOWS else "stty sane && printf '\\033c' && "
-    return prefix + cd_command(path)
+    return "stty sane && printf '\\033c' && " + cd_command(path)
 
 
 def state_file():
@@ -259,7 +243,7 @@ def relaunch_line(info):
     if not leader:
         return None
     if leader.get("argv"):
-        return shlex.join(leader["argv"]) if not WINDOWS else " ".join(leader["argv"])
+        return shlex.join(leader["argv"])
     return leader.get("cmdline")
 
 
@@ -362,13 +346,6 @@ def require_codex(team, lead=None):
 
 def stop_panes(herdr, panes):
     """Stop whatever runs in each pane and wait for its shell prompt."""
-    if WINDOWS:   # no process groups; ask politely the way a user would
-        # The first ctrl+c only clears a typed draft in Claude, Codex and
-        # StarCLI; two more quit. A spare one reaches the shell, which ignores it.
-        for pane in panes:
-            herdr("pane", "send-keys", pane, "ctrl+c", "ctrl+c", "ctrl+c")
-        time.sleep(1.5)
-        return
     pending = {pane: busy(herdr.process_info(pane)) for pane in panes}
     pending = {pane: pgid for pane, pgid in pending.items() if pgid}
     if os.getpgrp() in pending.values():
@@ -554,8 +531,7 @@ def clear_prompt(herdr, pane):
     """Drop whatever a stopped agent left on the shell's input line: late replies
     to its terminal queries, and mouse reports until the reset turns them off.
     Ctrl+U erases the line both in the line editor and in a tty left in cooked mode."""
-    if not WINDOWS:
-        herdr("pane", "send-text", pane, "\x03\x15")
+    herdr("pane", "send-text", pane, "\x03\x15")
 
 
 def type_line(herdr, pane, line):
@@ -565,9 +541,6 @@ def type_line(herdr, pane, line):
     Ctrl+U and Enter as CSI u sequences the shell prints instead of acting on.
     The reset in route_directory_command turns the protocol off again. A
     newline submits even when the tty no longer translates CR."""
-    if WINDOWS:
-        herdr("pane", "run", pane, line)
-        return
     herdr("pane", "send-text", pane, "\x15" + line + "\n")
 
 
@@ -632,9 +605,7 @@ def pick_setup(name=None):
 def require_herdr(name):
     found = find_herdr()
     if not found:
-        install = ('powershell -ExecutionPolicy Bypass -c "irm https://herdr.dev/install.ps1 | iex"'
-                   if WINDOWS else "curl -fsSL https://herdr.dev/install.sh | sh")
-        sys.exit(f"{name}: herdr not found. Install it with:\n  " + install)
+        sys.exit(f"{name}: herdr not found. Install it with:\n  curl -fsSL https://herdr.dev/install.sh | sh")
     return found
 
 
@@ -812,14 +783,9 @@ def handoff_main(argv, herdr=None, spawn=None):
 
 
 def spawn_runner(job, log):
-    flags = {}
-    if WINDOWS:
-        flags["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | getattr(subprocess, "DETACHED_PROCESS", 0)
-    else:
-        flags["start_new_session"] = True
     with open(log, "a", encoding="utf-8") as out:
         subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--handoff-run", json.dumps(job)],
-                         stdin=subprocess.DEVNULL, stdout=out, stderr=out, close_fds=True, **flags)
+                         stdin=subprocess.DEVNULL, stdout=out, stderr=out, close_fds=True, start_new_session=True)
 
 
 def handoff_run(job, sleep=time.sleep):
@@ -944,8 +910,6 @@ def main(argv=None, herdr=None, cwd=None):
                                    "terminals": {p: live.get(p, {}).get("terminal_id") for p in panes.values()}}
             save_state(state)
         sidebar_update(lambda: herdr_sidebar.sync(load_state()))
-        if WINDOWS:   # exec on Windows detaches from the console
-            return subprocess.call([herdr.binary])
         return os.execvp(herdr.binary, [herdr.binary])
 
     state, key = load_state(), tab_key(os.environ["HERDR_TAB_ID"])

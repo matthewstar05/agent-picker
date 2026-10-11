@@ -35,11 +35,11 @@ class PickerTests(unittest.TestCase):
         self.assertEqual(list(agents)[:6], ["Star", "Claude", "Codex", "Antigravity", "Cursor", "Kiro"])
         self.assertIn("OpenCode", agents)
 
-    def test_local_platform_override(self):
+    def test_local_argv_override(self):
         with tempfile.TemporaryDirectory() as folder:
             config = Path(folder) / "config.json"
             config.write_text(json.dumps({"agents": {"Cursor": {"argv": ["custom-cursor", "--custom"]}}}))
-            with patch.dict(os.environ, {"AGENT_PICKER_CONFIG": str(config)}), patch.object(settings, "WINDOWS", True):
+            with patch.dict(os.environ, {"AGENT_PICKER_CONFIG": str(config)}):
                 agents = settings.load_agents()
                 by_name = {a["name"]: a for a in agents}
                 self.assertEqual(by_name["Cursor"]["argv"], ["custom-cursor", "--custom"])
@@ -137,7 +137,6 @@ class PickerTests(unittest.TestCase):
             self.assertEqual(Path(data["cwd"]).resolve(), folder.resolve())
             self.assertEqual((folder / "state/last").read_text(), "Claude")
 
-    @unittest.skipIf(os.name == "nt", "needs a POSIX pty")
     def test_return_mode_reopens_selector_after_agent_quits(self):
         import fcntl, pty, select, struct, termios
         with tempfile.TemporaryDirectory(prefix="picker test ") as folder:
@@ -181,28 +180,6 @@ class PickerTests(unittest.TestCase):
                 except (ProcessLookupError, ChildProcessError):
                     pass
                 os.close(fd)
-
-    @unittest.skipUnless(os.name == "nt", "Windows batch shims")
-    def test_windows_batch_provider(self):
-        with tempfile.TemporaryDirectory(prefix="picker batch ") as folder:
-            folder = Path(folder)
-            script = folder / "record.py"
-            output = folder / "out.json"
-            script.write_text("import json,sys\nfrom pathlib import Path\nPath(sys.argv[1]).write_text(json.dumps(sys.argv[2:]))\nsys.exit(9)\n")
-            shim = folder / "provider.cmd"
-            shim.write_text(f'@echo off\n"{sys.executable}" "{script}" %*\nexit /b %errorlevel%\n')
-            args = [str(output), "space value", "café", "--flag"]
-            status = runtime.launch([str(shim)] + args)
-            self.assertEqual(status, 9)
-            self.assertEqual(json.loads(output.read_text()), args[1:])
-
-    @unittest.skipUnless(os.name == "nt", "Windows keyboard")
-    def test_windows_arrow_and_escape_keys(self):
-        import msvcrt
-        terminal = runtime.Terminal()
-        for chars, expected in ((["\xe0", "H"], "up"), (["\x00", "P"], "down"), (["\x1b"], "esc"), (["\r"], "\r")):
-            with patch.object(msvcrt, "getwch", side_effect=chars):
-                self.assertEqual(terminal.read_key(), expected)
 
     def test_trust_files_preserve_existing_settings(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -253,30 +230,6 @@ class PickerTests(unittest.TestCase):
         self.assertEqual(windows, [{"label": "5h", "pct": 25.0,
                                     "resets": picker._epoch("2030-01-01T00:00:00.123456Z")}])
 
-    def test_windows_cursor_and_antigravity_logins_are_read_only(self):
-        usage = {"billingCycleEnd": "1900000000000", "planUsage": {"autoPercentUsed": 24, "apiPercentUsed": 5}}
-        with tempfile.TemporaryDirectory() as folder:
-            path = Path(folder) / "Cursor/auth.json"
-            path.parent.mkdir()
-            original = json.dumps({"accessToken": "fake-test-token", "refreshToken": "fake"})
-            path.write_text(original)
-            with patch.dict(os.environ, {"APPDATA": folder}), patch.object(picker, "WINDOWS", True), \
-                    patch.object(picker, "_keychain", return_value=None), \
-                    patch.object(picker, "_http_json", return_value=usage) as http:
-                windows = picker.usage_cursor()
-            self.assertEqual([(w["label"], w["pct"]) for w in windows], [("cr", 24.0), ("ex", 5.0)])
-            self.assertIn("Bearer fake-test-token", http.call_args[0][1]["Authorization"])
-            self.assertEqual(path.read_text(), original)
-        token = {"token": {"access_token": "fake", "expiry": "2999-01-01T00:00:00Z"}}
-        quota = {"groups": [{"displayName": "Gemini", "buckets": [
-            {"window": "weekly", "remainingFraction": 0.75, "resetTime": "2999-01-01T00:00:00Z"}]}]}
-        with patch.object(picker, "_keychain", return_value=None), \
-                patch.object(picker, "_wincred", return_value=json.dumps(token)) as cred, \
-                patch.object(picker, "_http_json", return_value=quota):
-            self.assertEqual(picker.usage_antigravity()[0]["pct"], 25)
-        cred.assert_called_once_with("gemini:antigravity")
-
-    @unittest.skipIf(os.name == "nt", "macOS shell installer")
     def test_macos_install_is_idempotent_and_uses_live_checkout(self):
         with tempfile.TemporaryDirectory() as folder:
             home = Path(folder)
@@ -329,7 +282,6 @@ class PickerTests(unittest.TestCase):
                 settings.update_checkout()
             self.assertEqual((consumer / "shared.json").read_text(), (author / "shared.json").read_text())
 
-    @unittest.skipIf(os.name == "nt", "POSIX pseudo-terminal")
     def test_interactive_menu_restores_terminal_after_resize_and_quit(self):
         import fcntl
         import pty

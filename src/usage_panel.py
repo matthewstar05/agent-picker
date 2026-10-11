@@ -183,7 +183,7 @@ WINDOW_LEN = {"5h": 5 * 3600, "wk": 7 * 86400}   # anything else is a month
 def provider_of(agent):
     """The profile a Herdr agent id or a process name belongs to (by its "detect" names)."""
     a = (agent or "").lower()
-    for ext in (".exe", ".cmd", ".js", ".mjs", ".ps1", ".py"):
+    for ext in (".js", ".mjs", ".py"):
         if a.endswith(ext):
             a = a[:-len(ext)]
     if not a:
@@ -305,8 +305,7 @@ def star_turns():
             pid = int(data["pid"])
         except (OSError, ValueError, KeyError, TypeError):
             continue
-        # A stale file from a StarCLI that died mid-turn. star_mesh.alive waits
-        # on a Windows process handle, where os.kill(pid, 0) is not a probe.
+        # A stale file from a StarCLI that died mid-turn.
         from star_mesh import alive
         if not alive(pid):
             try:

@@ -33,7 +33,7 @@ if __name__ == "__main__":
 import preferences
 import provider_defaults
 import usage_cache
-from platform_runtime import WINDOWS, Terminal, launch, resolve_argv, state_dir
+from platform_runtime import Terminal, launch, resolve_argv, state_dir
 from settings import ROOT, config_path, load_agents, update_checkout
 
 try:
@@ -90,9 +90,6 @@ def _write_json(path, data):
 def trust_claude(dirs):
     path = Path.home() / ".claude.json"
     data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-    if os.name == "nt":
-        # Claude keys Windows projects by forward-slash paths (C:/Users/...).
-        dirs = list(dict.fromkeys([*dirs, *(d.replace("\\", "/") for d in dirs)]))
     projects = data.setdefault("projects", {})
     if all(projects.get(d, {}).get("hasTrustDialogAccepted") for d in dirs):
         return
@@ -180,31 +177,6 @@ def _keychain(service):
     return out.stdout.strip() if out.returncode == 0 else None
 
 
-def _wincred(target):
-    """A generic Windows Credential Manager secret (where go-keyring stores logins), read only."""
-    if os.name != "nt":
-        return None
-    import ctypes
-    from ctypes import wintypes
-
-    class Credential(ctypes.Structure):
-        _fields_ = [("Flags", wintypes.DWORD), ("Type", wintypes.DWORD), ("TargetName", wintypes.LPWSTR),
-                    ("Comment", wintypes.LPWSTR), ("LastWritten", wintypes.FILETIME),
-                    ("CredentialBlobSize", wintypes.DWORD), ("CredentialBlob", ctypes.POINTER(ctypes.c_ubyte)),
-                    ("Persist", wintypes.DWORD), ("AttributeCount", wintypes.DWORD),
-                    ("Attributes", ctypes.c_void_p), ("TargetAlias", wintypes.LPWSTR), ("UserName", wintypes.LPWSTR)]
-
-    advapi = ctypes.WinDLL("advapi32")
-    found = ctypes.POINTER(Credential)()
-    if not advapi.CredReadW(target, 1, 0, ctypes.byref(found)):   # 1 = CRED_TYPE_GENERIC
-        return None
-    try:
-        cred = found.contents
-        return bytes(cred.CredentialBlob[:cred.CredentialBlobSize]).decode("utf-8")
-    finally:
-        advapi.CredFree(found)
-
-
 def _http_json(url, headers, body=None):
     req = urllib.request.Request(url, data=body, headers=headers)
     with urllib.request.urlopen(req, timeout=8) as resp:
@@ -267,9 +239,6 @@ def usage_codex():
 
 def usage_cursor():
     token = _keychain("cursor-access-token")
-    auth_file = Path(os.environ.get("APPDATA", "")) / "Cursor/auth.json"   # the Windows CLI's login
-    if not token and WINDOWS and auth_file.exists():
-        token = json.loads(auth_file.read_text(encoding="utf-8")).get("accessToken")
     if not token:
         return None
     d = _http_json("https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage",
@@ -307,7 +276,7 @@ def usage_kiro():
 
 
 def usage_antigravity():
-    raw = _keychain("gemini") or _wincred("gemini:antigravity")
+    raw = _keychain("gemini")
     if not raw:
         return None
     if raw.startswith("go-keyring-base64:"):
@@ -1318,9 +1287,6 @@ def print_launch_banner(agent):
 
 
 def main():
-    if os.name == "nt":
-        sys.stdout.reconfigure(encoding="utf-8")
-        sys.stderr.reconfigure(encoding="utf-8")
     args = sys.argv[1:]
     # herdr-ai's workbench panes: quitting the agent reopens the selector, and
     # Esc there drops to the shell.
@@ -1396,7 +1362,7 @@ def main():
             index = None
     if index is None:
         return 0
-    if returning and not launching and not WINDOWS:
+    if returning and not launching:
         # Re-exec so the pane's command line names the agent, which herdr-ai's
         # reroute restarts.
         # Inside herdr the chosen agent learns its usage rules like herdr-ai's own panes.
@@ -1430,14 +1396,13 @@ def launch_and_return(argv):
     stopped = []
     # The agent handles Ctrl+C itself; a no-op handler (unlike SIG_IGN) is not inherited.
     handlers = {signal.SIGINT: lambda *_: None}
-    if not WINDOWS:
-        # herdr-ai's reroute and a closing pane signal the whole process group.
-        # Wait for the agent instead of dying first: the shell takes the terminal
-        # back as soon as this process exits, and an agent still restoring its
-        # tty modes after that leaves the shell's line editor unable to read Enter.
-        # Ctrl+\ (SIGQUIT) reaches the group too; the agent decides what it means.
-        handlers[signal.SIGTERM] = handlers[signal.SIGHUP] = handlers[signal.SIGQUIT] = \
-            lambda sig, _: stopped.append(sig)
+    # herdr-ai's reroute and a closing pane signal the whole process group.
+    # Wait for the agent instead of dying first: the shell takes the terminal
+    # back as soon as this process exits, and an agent still restoring its
+    # tty modes after that leaves the shell's line editor unable to read Enter.
+    # Ctrl+\ (SIGQUIT) reaches the group too; the agent decides what it means.
+    handlers[signal.SIGTERM] = handlers[signal.SIGHUP] = handlers[signal.SIGQUIT] = \
+        lambda sig, _: stopped.append(sig)
     previous = {sig: signal.signal(sig, handler) for sig, handler in handlers.items()}
     try:
         subprocess.call(argv)
@@ -1446,11 +1411,7 @@ def launch_and_return(argv):
             signal.signal(sig, handler)
     if stopped:
         return 128 + stopped[0]
-    if not WINDOWS:
-        os.execv(sys.executable, [sys.executable, str(Path(__file__).resolve()), "--picker-return"])
-    # Windows cannot exec; one level of recursion per agent switch.
-    sys.argv = [sys.argv[0], "--picker-return"]
-    return main()
+    os.execv(sys.executable, [sys.executable, str(Path(__file__).resolve()), "--picker-return"])
 
 
 if __name__ == "__main__":

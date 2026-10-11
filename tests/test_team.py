@@ -160,16 +160,6 @@ class TeamTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "no team"):
             team.prepare(plain, ["--picker-crew", "w:p1"])
 
-    def test_cmd_shim_gets_a_one_line_brief_without_cmd_metacharacters(self):
-        text = team.cmd_safe('a "b" <c> & d | e ^ f %g%\n  next line')
-        self.assertEqual(text, "a b c  d  e  f g next line")
-        with patch.object(team, "WINDOWS", True), \
-             patch.object(team, "resolve_argv", return_value=[r"C:\npm\codex.CMD"]):
-            agent, _ = team.prepare(self.agents["Codex"], ["--picker-lead", "w:p1,w:p2,w:p3,w:p4"])
-        value = next(a for a in agent["argv"] if a.startswith("developer_instructions="))
-        self.assertNotRegex(value, r'[\n"<>&|^%]')
-        self.assertIn("w:p1", value)
-
     def test_find_standard_and_providers(self):
         agents = list(self.agents.values())
         with patch.object(picker, "AGENTS", agents), patch.object(picker, "installed", return_value=True):

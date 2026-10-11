@@ -14,24 +14,6 @@ import starcli
 
 
 class ConversationLeaseTests(unittest.TestCase):
-    def test_windows_console_restores_modes_when_the_cli_raises(self):
-        import platform_runtime
-        events = []
-        class Console:
-            def __enter__(self):
-                events.append("enter")
-                return self
-            def __exit__(self, *exc):
-                events.append("restore")
-        for supported in (True, False):
-            events.clear()
-            with patch.object(starcli.ap, "WINDOWS", True), \
-                    patch.object(starcli.star_input, "supported", return_value=supported), \
-                    patch.object(platform_runtime, "Terminal", Console), \
-                    patch.object(starcli, "cli_main", side_effect=RuntimeError("fixture failure")):
-                with self.assertRaisesRegex(RuntimeError, "fixture failure"):
-                    starcli.main([])
-            self.assertEqual(events, ["enter", "restore"] if supported else [])
 
     def test_concurrent_mesh_startups_claim_distinct_names_and_release_after_crash(self):
         with tempfile.TemporaryDirectory() as folder:

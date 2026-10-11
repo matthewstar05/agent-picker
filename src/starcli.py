@@ -758,10 +758,6 @@ class KeyWatch:
     def __enter__(self):
         if not self.active:
             return self
-        if os.name == "nt":
-            self.thread = threading.Thread(target=self._watch_windows, daemon=True)
-            self.thread.start()
-            return self
         import termios
         import tty
         self.fd = sys.stdin.fileno()
@@ -770,26 +766,6 @@ class KeyWatch:
         self.thread = threading.Thread(target=self._watch, daemon=True)
         self.thread.start()
         return self
-
-    def _watch_windows(self):
-        import msvcrt
-        events = star_input.WindowsEvents()
-        while not self.stop.is_set():
-            if not msvcrt.kbhit():
-                time.sleep(0.05)
-                continue
-            ch = msvcrt.getwch()
-            event = events.feed(ch, msvcrt.getwch() if ch in ("\x00", "\xe0") else None)
-            if event in ("esc", "ctrl-c"):
-                self._escape()
-            elif self.question and isinstance(event, tuple) and event[0] == "text" and self.question.key(event[1]):
-                continue
-            elif event == "backspace":
-                self.typed = self.typed[:-1]
-            elif event in ("enter", "newline"):
-                self.typed += " " if self.typed and not self.typed.endswith(" ") else ""
-            elif isinstance(event, tuple) and event[0] == "text":
-                self.typed += event[1]
 
     def _watch(self):
         import codecs
@@ -826,9 +802,8 @@ class KeyWatch:
         if self.active:
             self.stop.set()
             self.thread.join(0.3)
-            if os.name != "nt":
-                import termios
-                termios.tcsetattr(self.fd, termios.TCSADRAIN, self.saved)
+            import termios
+            termios.tcsetattr(self.fd, termios.TCSADRAIN, self.saved)
         return False
 
 
@@ -1960,7 +1935,7 @@ class Commands:
         path = memory_file(self.star.convo.cwd)
         if not path.exists():
             path.write_text("# Notes for AI agents\n\n", encoding="utf-8")
-        editor = os.environ.get("VISUAL") or os.environ.get("EDITOR") or ("notepad" if ap.WINDOWS else "nano")
+        editor = os.environ.get("VISUAL") or os.environ.get("EDITOR") or "nano"
         try:
             subprocess.call([*editor.split(), str(path)])
         except OSError as exc:
@@ -2130,7 +2105,7 @@ def interactive(star, first=None, goal=None):
 def sane_terminal():
     """Undo what a killed TUI can leave behind in this pane before drawing: raw tty
     flags (lines would stair-step), mouse reporting and keyboard protocols."""
-    if ap.WINDOWS or not (sys.stdin.isatty() and sys.stdout.isatty()):
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
         return
     try:
         subprocess.run(["stty", "sane"], stdin=sys.stdin, timeout=3)
@@ -2172,9 +2147,6 @@ def main(argv=None):
     with ExitStack() as stack:
         lease = stack.enter_context(star_sessions.Lease(CONVERSATIONS / "locks"))
         try:
-            if ap.WINDOWS and star_input.supported():
-                from platform_runtime import Terminal
-                stack.enter_context(Terminal())
             return cli_main(argv, lease)
         except star_sessions.ConversationBusy as exc:
             sys.exit(f"star: {exc}")

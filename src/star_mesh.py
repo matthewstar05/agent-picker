@@ -39,17 +39,10 @@ STARCLI = Path(__file__).resolve().parent / "starcli.py"
 
 def command():
     """How an agent's shell runs StarCLI: this interpreter and this checkout, no alias needed."""
-    if ap.WINDOWS:
-        # Native Windows providers use PowerShell. Quoted executable paths
-        # require its call operator, and apostrophes escape by doubling.
-        return "& " + " ".join("'" + str(w).replace("'", "''") + "'" for w in (sys.executable, STARCLI))
     return shlex.join([sys.executable, str(STARCLI)])
 
 
 def parallel_note():
-    if ap.WINDOWS:
-        return ("Use PowerShell for these commands. Independent sends can run in Start-Job script blocks; "
-                "use Wait-Job and Receive-Job to collect their reports.")
     return "Several can run at once in the background, each redirected to its own file, then `wait`."
 
 
@@ -74,25 +67,6 @@ def alive(pid):
         return False
     if pid <= 0:
         return False
-    if ap.WINDOWS:
-        # os.kill(pid, 0) is not a safe liveness probe on Windows. Wait on a
-        # process handle without signalling it; permission failures stay unknown.
-        import ctypes
-        from ctypes import wintypes
-        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-        kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
-        kernel.OpenProcess.restype = wintypes.HANDLE
-        kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
-        kernel.WaitForSingleObject.restype = wintypes.DWORD
-        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
-        kernel.CloseHandle.restype = wintypes.BOOL
-        handle = kernel.OpenProcess(0x00100000, False, pid)  # SYNCHRONIZE only
-        if not handle:
-            return ctypes.get_last_error() != 87  # ERROR_INVALID_PARAMETER: no such pid
-        try:
-            return kernel.WaitForSingleObject(handle, 0) != 0  # signalled means exited
-        finally:
-            kernel.CloseHandle(handle)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:

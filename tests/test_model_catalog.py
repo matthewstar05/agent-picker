@@ -115,7 +115,6 @@ class CatalogTests(unittest.TestCase):
                 self.assertTrue(all(picker.visible_len(line) <= cols for line in frame), (cols, rows))
         self.assertIn("ultra", menu.efforts())
 
-    @unittest.skipIf(os.name == "nt", "POSIX input decoding")
     def test_escape_preserves_a_quick_following_key(self):
         terminal = platform_runtime.Terminal()
         terminal.fd = 0

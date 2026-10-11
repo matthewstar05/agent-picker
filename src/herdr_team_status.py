@@ -12,7 +12,7 @@ from pathlib import Path
 
 import herdr_sidebar as sidebar
 import preferences
-from platform_runtime import WINDOWS, state_dir
+from platform_runtime import state_dir
 
 STATUSES = ("blocked", "crew_working", "working", "done", "idle", "unknown")
 RANK = {"blocked": 4, "done": 3, "working": 2, "idle": 1, "unknown": 0}
@@ -111,8 +111,6 @@ def config_path():
     if os.environ.get("HERDR_CONFIG_PATH"):
         return Path(os.environ["HERDR_CONFIG_PATH"]).expanduser()
     base = os.environ.get("XDG_CONFIG_HOME")
-    if not base:
-        base = os.environ.get("APPDATA") if WINDOWS else None
     return Path(base or str(Path.home() / ".config")) / "herdr/config.toml"
 
 
@@ -195,33 +193,16 @@ def watcher_lock(socket_path):
     path = state_dir() / ("herdr-ai-status-" + key + ".lock")
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a+b") as handle:
-        if WINDOWS:
-            import msvcrt
-            if path.stat().st_size == 0:
-                handle.write(b"0")
-                handle.flush()
-            handle.seek(0)
-            try:
-                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-            except OSError:
-                yield False
-                return
-            try:
-                yield True
-            finally:
-                handle.seek(0)
-                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-        else:
-            import fcntl
-            try:
-                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
-                yield False
-                return
-            try:
-                yield True
-            finally:
-                fcntl.flock(handle, fcntl.LOCK_UN)
+        import fcntl
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
 
 
 def ensure_running():
@@ -229,13 +210,11 @@ def ensure_running():
     with watcher_lock(path) as acquired:
         if not acquired:
             return
-    options = ({"creationflags": subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP}
-               if WINDOWS else {"start_new_session": True})
     log_path = state_dir() / "herdr-ai-status.log"
     with log_path.open("ab") as log:
         subprocess.Popen([sys.executable, str(Path(__file__).with_name("herdr_ai.py")), "--watch-sidebar"],
                          env={**os.environ, "HERDR_SOCKET_PATH": path}, stdin=subprocess.DEVNULL,
-                         stdout=log, stderr=log, close_fds=True, **options)
+                         stdout=log, stderr=log, close_fds=True, start_new_session=True)
 
 
 def run():

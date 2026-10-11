@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def main():
-    if os.name == "nt" or os.environ.get("HERDR_ENV") != "1":
+    if os.environ.get("HERDR_ENV") != "1":
         raise SystemExit("Run this Unix smoke from a Herdr-managed pane.")
     binary = shutil.which("herdr")
     if not binary:

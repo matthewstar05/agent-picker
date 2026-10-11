@@ -415,8 +415,7 @@ class StarSessionTests(unittest.TestCase):
     def star(self, fakes):
         class ScriptEngine(star_engines.ClaudeEngine):
             def argv(self, *args, **kwargs):
-                # Invoke the fake through Python on both platforms. Windows
-                # does not execute Unix shebang files as native programs.
+                # Invoke the fake through this interpreter.
                 return [sys.executable] + super().argv(*args, **kwargs)
 
         star = starcli.Star(starcli.Conversation({"cwd": str(self.dir)}))
@@ -506,14 +505,8 @@ class StarSessionTests(unittest.TestCase):
         self.assertIn("Codex needs native approvals", turn.call_args[0][3])
 
     def runnable(self, path):
-        """The fake itself, or on Windows a batch launcher for it, which also
-        exercises the launcher path that a real npm-installed CLI takes."""
         path.chmod(0o755)
-        if os.name != "nt":
-            return path
-        launcher = path.with_suffix(".bat")
-        launcher.write_text(f'@"{sys.executable}" "{path}" %*\r\n')
-        return launcher
+        return path
 
     def test_codex_approvals_run_through_the_app_server_client(self):
         server = self.dir / "fake-codex-app-server"
@@ -996,7 +989,6 @@ class StarMeterTests(unittest.TestCase):
         self.assertTrue(narrow.startswith("●2h"), narrow)
         self.assertLessEqual(len(narrow), 16)
 
-
     def test_provider_cooldowns_are_an_opt_in_star_setting(self):
         info = star_meter.summary(fresh(), ALL, self.AGENTS, NOW)
         self.assertEqual(ap.STAR_RESETS.default, False)
@@ -1035,25 +1027,6 @@ if __name__ == "__main__":
 
 
 class MeshTests(unittest.TestCase):
-    def test_windows_liveness_checks_a_handle_without_sending_a_signal(self):
-        import ctypes
-        import star_mesh
-        kernel = MagicMock()
-        kernel.OpenProcess.return_value = 42
-        with patch.object(ap, "WINDOWS", True), patch.object(ctypes, "WinDLL", return_value=kernel, create=True), \
-                patch.object(ctypes, "get_last_error", return_value=87, create=True) as error, \
-                patch.object(os, "kill", side_effect=AssertionError("must not signal a Windows process")):
-            kernel.WaitForSingleObject.return_value = 258  # still running
-            self.assertTrue(star_mesh.alive(123))
-            kernel.WaitForSingleObject.return_value = 0  # exited
-            self.assertFalse(star_mesh.alive(123))
-            kernel.CloseHandle.assert_called_with(42)
-            kernel.OpenProcess.return_value = None
-            self.assertFalse(star_mesh.alive(123))
-            error.return_value = 5  # access denied is not proof it exited
-            self.assertTrue(star_mesh.alive(123))
-        for pid in (None, "bad-pid", 0, -1):
-            self.assertFalse(star_mesh.alive(pid))
 
     def setUp(self):
         folder = tempfile.TemporaryDirectory()
@@ -1072,8 +1045,7 @@ class MeshTests(unittest.TestCase):
         env = patch.dict(os.environ, {"HERDR_TAB_ID": "w1:t1", "HERDR_WORKSPACE_ID": "w1", "HERDR_PANE_ID": "w1:p2"})
         env.start()
         self.addCleanup(env.stop)
-        # Release every member's name lock before the folder goes: Windows
-        # cannot delete a file that is still open.
+        # Release every member's name lock when the test ends.
         created, original = [], star_mesh.Member.__init__
 
         def track(member, *args, **kwargs):
@@ -1158,15 +1130,6 @@ class MeshTests(unittest.TestCase):
         first.leave()
         replacement = self.mesh.Member("crew1", "crew")
         self.assertEqual([m["text"] for m in replacement.inbox()], ["one task"])
-
-    def test_windows_mesh_commands_quote_executables_for_powershell(self):
-        with patch.object(ap, "WINDOWS", True), \
-                patch.object(self.mesh.sys, "executable", "C:\\Program Files\\Python\\python.exe"), \
-                patch.object(self.mesh, "STARCLI", "C:\\Users\\Sam's Home\\starcli.py"):
-            self.assertEqual(self.mesh.command(),
-                             "& 'C:\\Program Files\\Python\\python.exe' 'C:\\Users\\Sam''s Home\\starcli.py'")
-            self.assertIn("Wait-Job and Receive-Job", self.mesh.parallel_note())
-            self.assertNotIn("`wait`", self.mesh.parallel_note())
 
     def test_a_task_survives_restart_and_an_answer_is_not_executed_twice(self):
         crew = self.mesh.Member("crew1", "crew")
@@ -1328,64 +1291,6 @@ class EditorTests(unittest.TestCase):
             self.assertGreater(Path(dest).stat().st_size, 0)
         with patch.object(star_input.sys, "platform", "linux"):
             self.assertFalse(star_input.clipboard_image("/nope.png"))
-
-    def test_windows_console_keys_use_the_same_names(self):
-        import star_input
-        self.assertEqual(star_input.windows_event("\x00", "H"), "up")
-        self.assertEqual(star_input.windows_event("\xe0", "\x0f"), "shift-tab")
-        self.assertEqual(star_input.windows_event("\x16"), "ctrl-v")
-        self.assertEqual(star_input.windows_event("\r"), "enter")
-        self.assertEqual(star_input.windows_event("a"), ("text", "a"))
-
-    def test_windows_surrogate_keys_form_one_character_and_backspace_removes_it(self):
-        import star_input
-        events = star_input.WindowsEvents()
-        self.assertIsNone(events.feed("\ud83d"))
-        self.assertEqual(events.feed("\ude80"), ("text", "🚀"))
-        self.assertEqual(events.feed("\xe0", "H"), "up")
-        self.assertIsNone(events.feed("\ud83d"))
-        self.assertEqual(events.feed("\x1b"), "esc")
-        self.assertEqual(events.feed("a"), ("text", "a"))
-
-        watch = starcli.KeyWatch(lambda: None)
-        units = iter(["\ud83d", "\ude80", "\x08", "é"])
-        fake = SimpleNamespace(kbhit=lambda: True, getwch=lambda: next(units))
-        with patch.dict(sys.modules, msvcrt=fake):
-            with self.assertRaises(StopIteration):
-                watch._watch_windows()
-        self.assertEqual(watch.typed, "é")
-
-    def test_windows_control_c_interrupts_a_turn_in_raw_console_mode(self):
-        interrupted = []
-        watch = starcli.KeyWatch(lambda: interrupted.append(True))
-        units = iter(["\x03"])
-        fake = SimpleNamespace(kbhit=lambda: True, getwch=lambda: next(units))
-        with patch.dict(sys.modules, msvcrt=fake):
-            with self.assertRaises(StopIteration):
-                watch._watch_windows()
-        self.assertEqual(interrupted, [True])
-
-    def test_windows_clipboard_image_asks_powershell(self):
-        import star_input
-
-        def run(argv, **kwargs):
-            self.assertEqual(argv[0], "powershell")
-            # pathlib follows os.name, so keep this open() while the name is patched.
-            found = argv[-1].split("Save('", 1)[1].split("'", 1)[0]
-            with open(found, "wb") as handle:
-                handle.write(b"\x89PNG\r\n")
-            return SimpleNamespace(returncode=0, stdout="ok\n", stderr="")
-
-        folder = tempfile.mkdtemp()
-        try:
-            dest = os.path.join(folder, "paste.png")
-            with patch.object(star_input.sys, "platform", "win32"), \
-                    patch.object(star_input.os, "name", "nt"), \
-                    patch.object(star_input.subprocess, "run", side_effect=run):
-                self.assertTrue(star_input.clipboard_image(dest))
-        finally:
-            os.remove(dest)
-            os.rmdir(folder)
 
 
 class PlanAndEnvTests(unittest.TestCase):
@@ -1646,7 +1551,7 @@ class RoutingMemoryTests(unittest.TestCase):
                 try:
                     starcli.Commands(fresh).do_resume(loaded.id)
                 finally:
-                    os.chdir(origin)   # /resume moved here; Windows cannot delete a current directory
+                    os.chdir(origin)   # /resume moved here; leave before the folder is deleted
                 self.assertEqual(fresh.pinned, "Claude")
                 self.assertEqual(fresh.tier, "heavy")
                 self.assertFalse(fresh.plan)

@@ -26,7 +26,7 @@ import tempfile
 import sys
 from pathlib import Path
 
-from platform_runtime import WINDOWS, direct_argv, resolve_argv
+from platform_runtime import resolve_argv
 
 VALID_APPROVAL = {"auto", "prompt", "writes", "approve"}
 
@@ -557,16 +557,13 @@ class Turn:
     """One running turn: iterate it for events; interrupt() stops the CLI."""
 
     def __init__(self, engine, argv, cwd=None, lease=None):
-        # Before any process starts: a batch launcher must not see the prompt.
-        argv = direct_argv(argv)
         self.engine, self.argv = engine, argv
-        # Its own process group, so ctrl-c reaches StarCLI and StarCLI decides how to stop it.
-        group = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if WINDOWS
-                 else {"start_new_session": True})
         guardian = [sys.executable, str(Path(__file__).with_name("star_process.py"))]
         self.proc = subprocess.Popen(guardian, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                      stdin=subprocess.PIPE, cwd=cwd, text=True, encoding="utf-8",
-                                     errors="replace", bufsize=1, env=child_env(), **group)
+                                     errors="replace", bufsize=1, env=child_env(),
+                                     # Its own session, so ctrl-c reaches StarCLI and StarCLI decides how to stop it.
+                                     start_new_session=True)
         self.stderr = []
         self.interrupted = False
         self.drain = threading.Thread(target=self._drain, daemon=True)

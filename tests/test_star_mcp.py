@@ -1,5 +1,4 @@
 import json
-import os
 import queue
 import subprocess
 import sys
@@ -130,8 +129,7 @@ for line in sys.stdin:
             self.assertEqual(docs["args"][-2:], ["project-docs", "--local"])
             self.assertEqual(made["hooks"], {"test": []})
             self.assertEqual(made["mcpServers"]["disabled"]["command"], "do-not-run")
-            if os.name != "nt":
-                self.assertEqual(target.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(target.stat().st_mode & 0o777, 0o600)
             self.assertEqual({p: p.read_bytes() for p in sources}, sources)
             other = star_engines.ensure_kiro_agent(home, Path(folder) / "other", mcp=True)
             self.assertNotEqual(name, other)

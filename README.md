@@ -1,46 +1,19 @@
 # agent-picker
 
-The shared source for my `agent` command on macOS and Windows. One repository controls both installations: edit, commit, and push from either computer, then run `agent --picker-update` on each computer to pull the change. Installed launchers run the checkout directly, so copying or reinstalling the application is unnecessary after ordinary code and profile updates.
+The source for my `agent` command on macOS. Edit, commit, and push, then run `agent --picker-update` to pull the change. Installed launchers run the checkout directly, so copying or reinstalling the application is unnecessary after ordinary code and profile updates.
 
-The picker preserves the original animated gradients, usage meters, remembered selection, adaptive layout, launch animation, arrow keys, j/k navigation, number keys, Enter, and q/Escape. Extra arguments go to the selected CLI. Windows uses native console input and ANSI output rather than Unix-only termios APIs.
+The picker preserves the original animated gradients, usage meters, remembered selection, adaptive layout, launch animation, arrow keys, j/k navigation, number keys, Enter, and q/Escape. Extra arguments go to the selected CLI.
 
 ## Requirements
 
 - Git and access to this private GitHub repository.
 - Python 3.9 or later. No third-party Python packages are required.
 - At least one provider CLI installed and signed in on that computer.
-- An interactive terminal. Use Windows Terminal with a PowerShell tab on Windows.
+- macOS and an interactive terminal. Windows is no longer supported.
 
 The installer installs this picker, not the provider CLIs or their account credentials. Providers missing from PATH are disabled in the menu. Credentials and usage caches remain local.
 
-## Windows setup
-
-Paste this into a PowerShell window. Skip the first line if Git is already installed. The clone opens a browser to sign in to GitHub because the repository is private.
-
-```powershell
-winget install -e --id Git.Git --accept-package-agreements --accept-source-agreements
-$env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User')
-git clone https://github.com/matthewstar05/agent-picker.git "$HOME\Projects\agent-picker"
-powershell -NoProfile -ExecutionPolicy Bypass -File "$HOME\Projects\agent-picker\scripts\setup-windows.ps1"
-```
-
-`setup-windows.ps1` installs Python (winget, per-user) and [herdr](https://herdr.dev/docs/windows-beta/) only if they are missing, then runs `install-windows.ps1`. Pass `-SkipHerdr` to leave herdr out. It does not install provider CLIs or sign in to them. Open a new Windows Terminal tab, then:
-
-```powershell
-agent --picker-doctor
-cd $HOME\Projects\some-project
-herdr-ai
-```
-
-To install only the picker, without Python or herdr checks, run `scripts\install-windows.ps1` instead. Give a Windows coding agent [docs/WINDOWS_AGENT.md](docs/WINDOWS_AGENT.md) for a full verification pass.
-
-If your execution policy prevents your own PowerShell profile from loading, use `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` where local policy permits it, or invoke `agent-picker.cmd`. Running the installer with a process-level Bypass does not change the persistent execution policy. An administrator-managed execution policy must be respected.
-
-The installer backs up changed profiles and launchers under the local state directory. It adds a managed function to both PowerShell 7 and Windows PowerShell user profiles. It also adds `agent-picker.cmd` to your user PATH for Command Prompt. PowerShell's `agent` function takes precedence over Cursor's similarly named application. Cursor's existing executable is captured as an absolute local path when necessary; no vendor executable is moved or deleted.
-
-Install Cursor before this picker when possible. If you install Cursor later, rerun the picker installer to capture its executable path. Existing local Cursor launch overrides are preserved. Cursor's [official installation instructions](https://prod.cursor.com/docs/cli/installation) cover native Windows and WSL. Kiro's [installation instructions](https://kiro.dev/docs/getting-started/installation/) list its Windows CLI requirements. For Antigravity, install the CLI that provides `agy`, or configure the actual executable you use locally. Installing an IDE alone does not guarantee its CLI is on PATH.
-
-## macOS setup
+## Setup
 
 ```sh
 git clone https://github.com/matthewstar05/agent-picker.git ~/Desktop/Projects/agent-picker
@@ -85,7 +58,7 @@ A conversation stays with one provider while that is sensible, since its session
 
 `star -p` returns 0 for success, 1 for an unavailable or failed provider, and 130 for interruption. With `--goal`, a blocked goal returns 2 and a paused goal returns 3. The saved objective remains resumable. Explicit `--name` and `--role` flags also work in print mode.
 
-The input box works like Claude Code's: `/` opens a filtered command menu with descriptions and ghost-text completion (Tab or → accepts, the commands you use most rank first), `@` completes file paths, history completes the rest, `!` runs a shell command, `#` adds a line to AGENTS.md, Esc interrupts a turn, and text typed during a turn is kept for the next prompt. `/help` lists every command: `/goal`, `/plan`, `/status`, `/usage`, `/cost`, `/route`, `/why`, `/use`, `/model`, `/tier`, `/auto`, `/models`, `/crew`, `/panel`, `/peers`, `/send`, `/open`, `/new`, `/clear`, `/compact`, `/resume`, `/export`, `/init`, `/review`, `/memory`, `/doctor`, `/cd`. Any other `/name` that a provider's own interface would accept also works: Claude skills, plugin skills (`/design:ux-copy`), and command files in `.claude/commands`, `.cursor/commands` or `~/.codex/prompts` (`/prompts:name`), plus Codex, Cursor, Kiro and `.agents` skills. StarCLI expands the command, or points at the skill's SKILL.md, so whichever provider takes the turn can follow it; a crew task that starts with such a name is expanded the same way. On Windows, a provider behind an npm `.cmd` shim runs its script with Node directly, because cmd.exe would reinterpret a prompt's quotes, `&`, `%` and newlines; another batch launcher refuses such a prompt rather than pass it through cmd.exe.
+The input box works like Claude Code's: `/` opens a filtered command menu with descriptions and ghost-text completion (Tab or → accepts, the commands you use most rank first), `@` completes file paths, history completes the rest, `!` runs a shell command, `#` adds a line to AGENTS.md, Esc interrupts a turn, and text typed during a turn is kept for the next prompt. `/help` lists every command: `/goal`, `/plan`, `/status`, `/usage`, `/cost`, `/route`, `/why`, `/use`, `/model`, `/tier`, `/auto`, `/models`, `/crew`, `/panel`, `/peers`, `/send`, `/open`, `/new`, `/clear`, `/compact`, `/resume`, `/export`, `/init`, `/review`, `/memory`, `/doctor`, `/cd`. Any other `/name` that a provider's own interface would accept also works: Claude skills, plugin skills (`/design:ux-copy`), and command files in `.claude/commands`, `.cursor/commands` or `~/.codex/prompts` (`/prompts:name`), plus Codex, Cursor, Kiro and `.agents` skills. StarCLI expands the command, or points at the skill's SKILL.md, so whichever provider takes the turn can follow it; a crew task that starts with such a name is expanded the same way.exe.
 
 StarCLIs in the same herdr tab form a mesh. Each registers what it is doing; the agents inside it are told who their peers are and how to hand them work (`star --send NAME "task" --wait` prints the peer's reply), so a lead fans tasks out to its crew in parallel and every crew member routes its task across the providers again. The agents inside are told to check `herdr-ai --usage` and to leave the pane in place; StarCLI routes the next turn. `herdr-ai --setup star` lays out a lead and four crew StarCLIs with a usage panel; inside herdr, `/crew [n]` opens crew panes beside the current StarCLI and `/panel` opens the usage panel. StarCLI reports its idle and working state to herdr, so its panes appear in herdr's Agents sidebar, and the usage panel shows a Star card (an estimated combined limit) that lights up together with the provider StarCLI is driving.
 
@@ -137,7 +110,7 @@ Press Ctrl+B, then Shift+S to open it; Esc saves and closes the popup. Herdr 0.9
 | Cursor | Opus 5.5, high | Grok 4.7, high |
 | Antigravity | Gemini 3.8 Flash High | Gemini 3.8 Flash Low |
 
-The pairs are the `team` entry of each profile in `agents.json`; a local config can override them per machine. The other picker defaults, such as permissions, still apply. The lead is told to hand searches, test runs, builds, research and well specified edits to the crew panes through `herdr agent prompt`, run them in parallel when they can be, ask for replies of at most 15 lines, read only the end of each reply, and keep planning, decisions and the final check for itself, so its own context and quota stay small. The crew are told to stay in the scope they are given and to finish with that short summary. Claude takes these instructions as an appended system prompt and Codex as developer instructions. Kiro, Cursor and Antigravity have no such flag, so their lead receives its instructions as an opening prompt (one short turn) and passes the reply rules to the crew inside each task. Claude and Codex team panes start without the iMCP server, which drops every client when several connect at once. On Windows, a CLI behind a `.cmd` shim gets the instructions on one line without cmd metacharacters.
+The pairs are the `team` entry of each profile in `agents.json`; a local config can override them per machine. The other picker defaults, such as permissions, still apply. The lead is told to hand searches, test runs, builds, research and well specified edits to the crew panes through `herdr agent prompt`, run them in parallel when they can be, ask for replies of at most 15 lines, read only the end of each reply, and keep planning, decisions and the final check for itself, so its own context and quota stay small. The crew are told to stay in the scope they are given and to finish with that short summary. Claude takes these instructions as an appended system prompt and Codex as developer instructions. Kiro, Cursor and Antigravity have no such flag, so their lead receives its instructions as an opening prompt (one short turn) and passes the reply rules to the crew inside each task. Claude and Codex team panes start without the iMCP server, which drops every client when several connect at once.
 
 A small background observer keeps the expanded Agents sidebar's team indicators current. An idle or finished orchestrator shows an orange working indicator while any crew agent on its tab is working, then returns to its own state when the last crew member stops. An orchestrator asking for approval keeps its blocked indicator. Completed work stays marked finished until its pane is focused. The indicators and priority ranks come from display-only metadata; provider lifecycle hooks, session identity, prompts, waits, and notifications remain native. The observer polls once per second, refreshes short-lived metadata, and uses a per-server lock to avoid duplicate observers. It starts with `herdr-ai` and after server restores, and preserves the existing task-label rows and other Herdr configuration.
 
@@ -155,7 +128,7 @@ The selector and usage panel reload on every refresh so local UI fixes appear im
 
 To switch a tab between Standard and a team, or to a different team, run `herdr-reset` and then `herdr-ai`; `herdr-ai --setup` refuses a tab laid out differently, and a team whose lead pane was closed is not rerouted.
 
-Rerouting stops the agents, so unsaved conversation state in them is lost. herdr-ai remembers each tab's panes in `herdr-ai-tabs.json` in the local state directory. On Windows, agents are stopped with Ctrl+C rather than a signal.
+Rerouting stops the agents, so unsaved conversation state in them is lost. herdr-ai remembers each tab's panes in `herdr-ai-tabs.json` in the local state directory.
 
 ## Workbench agent priority
 
@@ -185,7 +158,7 @@ Changes are saved in the machine-local config as `agents.<Provider>.defaults`, p
 
 The defaults retain the original permission bypass flags and automatic current-folder trust behavior. Turn **Bypass Permissions** Off in a provider's defaults to remove its bypass flags and skip new folder-trust writes for that launch. Claude explicitly uses its default permission mode; Codex uses on-request approvals with the workspace-write sandbox. Set `AGENT_PICKER_NO_PRETRUST=1` to skip all picker folder-trust writes. Only the selected provider's current directory is pre-trusted when bypass is On.
 
-Use the config path printed by `--picker-doctor` for machine-specific executable paths or launch arguments. On macOS it is normally `~/.config/agent-picker/config.json`; on Windows it is `%APPDATA%\agent-picker\config.json`.
+Use the config path printed by `--picker-doctor` for machine-specific executable paths or launch arguments. It is normally `~/.config/agent-picker/config.json`.
 
 ```json
 {
@@ -197,21 +170,21 @@ Use the config path printed by `--picker-doctor` for machine-specific executable
 }
 ```
 
-Use `command` to override only the executable path while continuing to inherit shared model and flag changes. The Windows installer uses this form for Cursor. An `argv` override replaces the entire argument array and intentionally pins that machine's launch settings. Do not set a provider command to bare `agent`, which would reopen this picker. Use an absolute vendor path for Cursor when its CLI is named `agent`. `AGENT_PICKER_CONFIG` can select a different local config file, and `AGENT_PICKER_STATE_HOME` can select a different local state directory. Shared edits to `agents.json` apply to both computers unless the corresponding field has a local override.
+Use `command` to override only the executable path while continuing to inherit shared model and flag changes. An `argv` override replaces the entire argument array and intentionally pins that machine's launch settings. Do not set a provider command to bare `agent`, which would reopen this picker. Use an absolute vendor path for Cursor when its CLI is named `agent`. `AGENT_PICKER_CONFIG` can select a different local config file, and `AGENT_PICKER_STATE_HOME` can select a different local state directory. Shared edits to `agents.json` apply to both computers unless the corresponding field has a local override.
 
 ## Usage meters
 
 Usage collection runs in background threads and never refreshes authentication tokens. Failure does not block launching a provider. The previous successful numbers are cached locally and dim when stale. A dash means no usable usage data is available, not zero usage.
 
-| Provider | macOS | Windows |
-| --- | --- | --- |
-| Claude | Existing Keychain credentials or credentials file | Existing credentials file |
-| Codex | Local session rate-limit records | Local session rate-limit records |
-| Cursor | Existing macOS Keychain token | Existing CLI login file (`%APPDATA%\Cursor\auth.json`) |
-| Kiro | CLI `/usage` output | CLI `/usage` output, when supported by the installed version |
-| Antigravity | Existing macOS Keychain token | Existing Credential Manager login (`gemini:antigravity`) |
+| Provider | Source |
+| --- | --- |
+| Claude | Existing Keychain credentials or credentials file |
+| Codex | Local session rate-limit records |
+| Cursor | Existing macOS Keychain token |
+| Kiro | CLI `/usage` output |
+| Antigravity | Existing macOS Keychain token |
 
-Claude's [authentication documentation](https://code.claude.com/docs/en/authentication#credential-management) describes its platform-specific credential files. `CLAUDE_CONFIG_DIR` and `CODEX_HOME` are respected by the usage readers. Cursor and Antigravity usage endpoints and credential formats come from the original Mac implementation and may change. On Windows both are read from where their CLIs store the login, without refreshing it, so a meter shows a dash while that login's access token has expired until the CLI next runs. Login, expired credentials, provider-specific model access, and live usage accuracy need verification on each computer.
+Claude's [authentication documentation](https://code.claude.com/docs/en/authentication#credential-management) describes its platform-specific credential files. `CLAUDE_CONFIG_DIR` and `CODEX_HOME` are respected by the usage readers. Cursor and Antigravity usage endpoints and credential formats come from the original Mac implementation and may change. Login, expired credentials, provider-specific model access, and live usage accuracy need verification.
 
 ## Agent catalog
 
@@ -233,7 +206,7 @@ Filled-bar gradients and light pulses move left in depleting mode and right in f
 
 Keys: `t` or `→` next theme, `T` or `←` previous theme, `r` refresh now, `a` toggle animation (off redraws once a second), hold Tab to see every connected provider (each installed provider with a usage reader) until Tab is let go, `s` settings, `u` or Esc back to the picker, `q` quit.
 
-Holding Tab relies on key release events. On the usage screen the panel turns on the kitty keyboard protocol, which Ghostty, kitty, WezTerm, and Herdr support, and the peek ends the moment Tab is released. Where releases never arrive (other terminals, Windows), the peek follows key repeat instead: it opens on the press and closes about a quarter second after the repeats stop, so a quick tap shows it for just over half a second.
+Holding Tab relies on key release events. On the usage screen the panel turns on the kitty keyboard protocol, which Ghostty, kitty, WezTerm, and Herdr support, and the peek ends the moment Tab is released. Where releases never arrive (other terminals), the peek follows key repeat instead: it opens on the press and closes about a quarter second after the repeats stop, so a quick tap shows it for just over half a second.
 
 Brand uses an animated gray outer border and each provider's own title, count, status, and bar colors. Each working provider gets the same animated border as its row in the agent selector. Every other theme gives all providers one shared palette: the panel title, provider names and instance counts, status dots and spinners, working count and text, borders, glow, and bars follow the selected gradient in both full cards and compact rows. Rainbow keeps white status dots, spinners, and usage percentages, including stale and high-usage values. Its filled usage bars are white while idle and turn rainbow while working. Short panes drop the top and bottom of provider borders to keep the limits visible. Border space is reserved even while idle, so titles, bars, and card positions stay fixed as providers start or stop working. The layout changes only when the pane size or installed providers change. The theme name appears in the outer border for 2.5 seconds after changing themes, then disappears.
 
@@ -256,24 +229,23 @@ if preferences.get(SOUND.key):
     ...
 ```
 
-## Iterate from either computer
+## Iterate
 
 ```sh
-# In this repo on whichever computer you are editing:
 git pull --ff-only
 # Edit agents.json or src/, then:
-python3 -m unittest discover -s tests -v  # use python on Windows
+python3 -m unittest discover -s tests -v
 git add agents.json src tests docs README.md scripts .github
 git commit -m "Describe the command update"
 git push
 ```
 
-On both computers, run:
+Then run:
 
 ```text
 agent --picker-update
 ```
 
-The next invocation uses the new code. If installer or shell-integration behavior changed, rerun the relevant installer after pulling. Machine-specific local overrides remain on their own computer. Neither computer needs a separate platform fork.
+The next invocation uses the new code. If installer or shell-integration behavior changed, rerun the relevant installer after pulling. Machine-specific local overrides stay in the local config.
 
-GitHub Actions tests macOS and Windows with Python 3.9 and 3.13, including process argument forwarding, exit codes, Windows batch providers, rendering bounds, configuration, and reinstall behavior. Tests use fake providers and do not open paid agent sessions. CI does not verify authentication, provider model availability, or the visual appearance in your actual Windows terminal.
+GitHub Actions tests macOS with Python 3.9 and 3.13, including process argument forwarding, exit codes, rendering bounds, and configuration. Tests use fake providers and do not open paid agent sessions. CI does not verify authentication or provider model availability.

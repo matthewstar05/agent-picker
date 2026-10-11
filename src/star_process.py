@@ -19,54 +19,6 @@ import time
 from star_sessions import Lease
 
 
-def windows_job():
-    """Put this guardian and its future children in a kill-on-close job."""
-    import ctypes
-    from ctypes import wintypes as w
-
-    class Basic(ctypes.Structure):
-        _fields_ = [("process_time", ctypes.c_longlong), ("job_time", ctypes.c_longlong),
-                    ("flags", w.DWORD), ("min_working", ctypes.c_size_t),
-                    ("max_working", ctypes.c_size_t), ("active", w.DWORD),
-                    ("affinity", ctypes.c_size_t), ("priority", w.DWORD), ("scheduling", w.DWORD)]
-
-    class Counters(ctypes.Structure):
-        _fields_ = [(name, ctypes.c_ulonglong) for name in
-                    ("reads", "writes", "other", "read_bytes", "write_bytes", "other_bytes")]
-
-    class Extended(ctypes.Structure):
-        _fields_ = [("basic", Basic), ("io", Counters), ("process_memory", ctypes.c_size_t),
-                    ("job_memory", ctypes.c_size_t), ("peak_process", ctypes.c_size_t),
-                    ("peak_job", ctypes.c_size_t)]
-
-    api = ctypes.WinDLL("kernel32", use_last_error=True)
-    api.CreateJobObjectW.argtypes = [ctypes.c_void_p, w.LPCWSTR]
-    api.CreateJobObjectW.restype = w.HANDLE
-    api.SetInformationJobObject.argtypes = [w.HANDLE, ctypes.c_int, ctypes.c_void_p, w.DWORD]
-    api.SetInformationJobObject.restype = w.BOOL
-    api.GetCurrentProcess.argtypes = []
-    api.GetCurrentProcess.restype = w.HANDLE
-    api.AssignProcessToJobObject.argtypes = [w.HANDLE, w.HANDLE]
-    api.AssignProcessToJobObject.restype = w.BOOL
-    api.TerminateJobObject.argtypes = [w.HANDLE, w.UINT]
-    api.TerminateJobObject.restype = w.BOOL
-    api.CloseHandle.argtypes = [w.HANDLE]
-    api.CloseHandle.restype = w.BOOL
-    job = api.CreateJobObjectW(None, None)
-    if not job:
-        raise ctypes.WinError(ctypes.get_last_error())
-    info = Extended()
-    info.basic.flags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-    if (not api.SetInformationJobObject(job, 9, ctypes.byref(info), ctypes.sizeof(info))
-            or not api.AssignProcessToJobObject(job, api.GetCurrentProcess())):
-        error = ctypes.get_last_error()
-        api.CloseHandle(job)
-        raise ctypes.WinError(error)
-    # Do not close explicitly: the guardian itself belongs to this job. The OS
-    # closes it at exit, also stopping any child tools left by the provider.
-    return api, job
-
-
 def pump(source, target, exited):
     """Copy provider output to this guardian's own stream. A tool the provider
     left running can hold the pipe open indefinitely, so once the provider has
@@ -93,16 +45,13 @@ def pump(source, target, exited):
 
 
 def own(argv):
-    job = windows_job() if os.name == "nt" else None
-    # Windows: closing the job at exit also ends leftover tools and their pipes.
-    group = {} if job else {"start_new_session": True, "stdout": subprocess.PIPE, "stderr": subprocess.PIPE}
     try:
-        proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, **group)
+        proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                start_new_session=True)
     except OSError as exc:
-        # Windows' message does not name the program it could not start.
         raise OSError(f"{argv[0]}: {exc.strerror or exc}") from exc
     exited = threading.Event()
-    pumps = [] if job else [threading.Thread(target=pump, args=(stream.fileno(), fd, exited), daemon=True)
+    pumps = [threading.Thread(target=pump, args=(stream.fileno(), fd, exited), daemon=True)
                             for stream, fd in ((proc.stdout, 1), (proc.stderr, 2))]
     for thread in pumps:
         thread.start()
@@ -113,10 +62,6 @@ def own(argv):
         nonlocal finished
         with gate:
             if finished:
-                return
-            if job:
-                api, handle = job
-                api.TerminateJobObject(handle, 130)
                 return
             # The child has not been reaped while this lock is held. Its PID
             # and process group cannot be reused during the escalation.
@@ -161,7 +106,6 @@ def main():
         if folder:
             lease.claim(ident)
         print('{"star_guard":"ready"}', flush=True)
-        # Star writes in text mode, so Windows sends "go\r\n".
         if sys.stdin.buffer.readline().strip() != b"go":
             return 130
         return own(config["argv"])

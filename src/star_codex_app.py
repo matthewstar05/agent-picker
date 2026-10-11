@@ -16,7 +16,6 @@ import sys
 from pathlib import Path
 
 import star_approve
-from platform_runtime import direct_argv
 from star_engines import unwrap_shell
 
 CLIENT = {"name": "starcli", "title": "StarCLI", "version": "1"}
@@ -159,9 +158,8 @@ def completed(item):
 
 
 def run(config):
-    # A Windows npm shim runs its script directly, as for every provider turn.
     try:
-        argv = direct_argv([config["codex"], "app-server"] + list(config.get("overrides") or []))
+        argv = [config["codex"], "app-server"] + list(config.get("overrides") or [])
         proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
                                 encoding="utf-8", errors="replace", bufsize=1)
     except OSError as exc:

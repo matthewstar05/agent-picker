@@ -8,7 +8,6 @@ import sys
 import tempfile
 import threading
 import unittest
-import uuid
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock, patch
@@ -177,19 +176,6 @@ class SidebarTests(unittest.TestCase):
         build.assert_not_called()
         route.assert_not_called()
 
-    def test_windows_pipe_payload_is_structured_and_bounded(self):
-        def run(args, **kwargs):
-            data = json.loads(kwargs["input"])
-            req = json.loads(data["payload"])
-            self.assertEqual(data["socket"], "fake-pipe")
-            self.assertEqual(req["params"], {"source": 'text with "quotes"'})
-            self.assertEqual(kwargs["timeout"], 5)
-            return SimpleNamespace(returncode=0, stdout=json.dumps({"id": req["id"], "result": {"active": False}}))
-        with patch.object(sidebar, "WINDOWS", True), patch.object(sidebar.subprocess, "run", side_effect=run):
-            self.assertEqual(sidebar.request("agent.view.clear", {"source": 'text with "quotes"'},
-                                            r"\\.\pipe\fake-pipe"), {"active": False})
-
-    @unittest.skipIf(os.name == "nt", "Unix transport")
     def test_socket_transport_ignores_events_and_reports_api_errors(self):
         # Short macOS Unix socket path, below sockaddr_un's 104-byte limit.
         with tempfile.TemporaryDirectory(dir="/tmp") as folder:
@@ -209,32 +195,6 @@ class SidebarTests(unittest.TestCase):
                         sidebar.request("agent.view.set", {}, path)
                 finally:
                     worker.join(timeout=3)
-
-    @unittest.skipUnless(os.name == "nt", "Windows named pipe transport")
-    def test_native_windows_named_pipe_round_trip(self):
-        name = "herdr-ai-test-" + uuid.uuid4().hex
-        script = r'''
-$server = [IO.Pipes.NamedPipeServerStream]::new($env:HERDR_AI_TEST_PIPE, [IO.Pipes.PipeDirection]::InOut)
-try {
-    $server.WaitForConnection()
-    $reader = [IO.StreamReader]::new($server)
-    $writer = [IO.StreamWriter]::new($server, [Text.UTF8Encoding]::new($false), 4096, $true)
-    $writer.AutoFlush = $true
-    $request = $reader.ReadLine() | ConvertFrom-Json
-    $writer.WriteLine((@{id=$request.id; result=@{active=$true}} | ConvertTo-Json -Compress))
-} finally { $server.Dispose() }
-'''
-        server = subprocess.Popen(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
-                                  env={**os.environ, "HERDR_AI_TEST_PIPE": name},
-                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        try:
-            self.assertEqual(sidebar.request("agent.view.set", {}, name), {"active": True})
-            _, error = server.communicate(timeout=5)
-            self.assertEqual(server.returncode, 0, error)
-        finally:
-            if server.poll() is None:
-                server.kill()
-                server.communicate()
 
     def test_settings_screen_uses_shared_renderer_at_various_sizes(self):
         menu = preferences.Menu([sidebar.HIDE_CREW])

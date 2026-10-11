@@ -284,7 +284,6 @@ class DefaultsTests(unittest.TestCase):
             self.assertIn("workspace-write", args)
             self.assertNotIn("--dangerously-bypass-approvals-and-sandbox", args)
 
-    @unittest.skipIf(os.name == "nt", "POSIX pseudo-terminal")
     def test_real_arrow_keys_save_and_restore_terminal(self):
         import fcntl
         import pty

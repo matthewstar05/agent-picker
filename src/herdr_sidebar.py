@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 
 import preferences
-from platform_runtime import WINDOWS, state_dir
+from platform_runtime import state_dir
 
 SOURCE = "custom:herdr-ai"
 ROLE = "herdr_ai_role"
@@ -23,28 +23,6 @@ ORDER = preferences.Setting(
     hint="Group agents by workspace, or put active and finished agents first.",
     names={"default": "grouped", "priority": "priority"})
 SETTINGS = (HIDE_CREW, ORDER)
-
-# PowerShell's async line read gives named pipes the same bounded wait as Unix sockets.
-PIPE_REQUEST = r'''
-$r = [Console]::In.ReadToEnd() | ConvertFrom-Json
-$pipe = [IO.Pipes.NamedPipeClientStream]::new('.', $r.socket, [IO.Pipes.PipeDirection]::InOut)
-try {
-    $pipe.Connect(2000)
-    $writer = [IO.StreamWriter]::new($pipe, [Text.UTF8Encoding]::new($false), 4096, $true)
-    $writer.AutoFlush = $true
-    $reader = [IO.StreamReader]::new($pipe)
-    $writer.WriteLine($r.payload)
-    for ($i = 0; $i -lt 32; $i++) {
-        $read = $reader.ReadLineAsync()
-        if (-not $read.Wait(2000)) { throw 'Herdr API timed out' }
-        $line = $read.Result
-        if ($null -eq $line) { throw 'Herdr closed the connection' }
-        if (($line | ConvertFrom-Json).id -eq $r.id) { [Console]::Out.WriteLine($line); exit 0 }
-    }
-    throw 'No matching Herdr response'
-} finally { $pipe.Dispose() }
-'''
-
 
 def endpoint():
     if os.environ.get("HERDR_SOCKET_PATH"):
@@ -61,29 +39,20 @@ def request(method, params, socket_path=None):
     path = socket_path or endpoint()
     rid = f"herdr-ai:{time.time_ns()}"
     payload = json.dumps({"id": rid, "method": method, "params": params})
-    if WINDOWS:
-        out = subprocess.run(
-            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", PIPE_REQUEST],
-            input=json.dumps({"socket": path.removeprefix("\\\\.\\pipe\\"), "id": rid, "payload": payload}),
-            capture_output=True, text=True, encoding="utf-8", timeout=5)
-        if out.returncode:
-            raise RuntimeError("Herdr pipe request failed: " + out.stderr.strip())
-        response = json.loads(out.stdout)
-    else:
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-            client.settimeout(2)
-            client.connect(path)
-            client.sendall((payload + "\n").encode("utf-8"))
-            with client.makefile("rb") as stream:
-                for _ in range(32):
-                    line = stream.readline(4 * 1024 * 1024)
-                    if not line:
-                        raise RuntimeError("Herdr closed the connection")
-                    response = json.loads(line)
-                    if response.get("id") == rid:
-                        break
-                else:
-                    raise RuntimeError("No matching Herdr response")
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        client.settimeout(2)
+        client.connect(path)
+        client.sendall((payload + "\n").encode("utf-8"))
+        with client.makefile("rb") as stream:
+            for _ in range(32):
+                line = stream.readline(4 * 1024 * 1024)
+                if not line:
+                    raise RuntimeError("Herdr closed the connection")
+                response = json.loads(line)
+                if response.get("id") == rid:
+                    break
+            else:
+                raise RuntimeError("No matching Herdr response")
     if "error" in response:
         error = response["error"]
         raise RuntimeError(error.get("message", str(error)))

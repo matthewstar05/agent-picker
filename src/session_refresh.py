@@ -210,7 +210,7 @@ def resume_argv(name, argv, session):
 
 
 def encode(argv):
-    # One shell-safe word works in both PowerShell and cmd, even for team briefs.
+    # One shell-safe word, even for team briefs.
     return base64.urlsafe_b64encode(json.dumps(argv).encode("utf-8")).decode("ascii")
 
 
