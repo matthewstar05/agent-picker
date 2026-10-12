@@ -228,7 +228,7 @@ class HerdrAiTests(unittest.TestCase):
         self.addCleanup(self.state.cleanup)
         self.fake = FakeHerdr()
         # Teams lead themselves without Gemini unless a test asks; no live usage reads.
-        plan = patch.object(herdr_ai, "team_plan", side_effect=lambda team: {"lead": team, "gemini": False} if team else {})
+        plan = patch.object(herdr_ai, "team_plan", side_effect=lambda team, mode=None: {"lead": team, "gemini": False} if team else {})
         self.team_plan = plan.start()
         self.addCleanup(plan.stop)
         # Fake sessions have no transcripts on disk; tests opt into that check.
@@ -522,7 +522,7 @@ class HerdrAiTests(unittest.TestCase):
         self.assertTrue(runs[panes["usage"]][0].endswith("--picker-usage --picker-only Claude"))
 
     def test_gemini_team_is_led_by_another_provider(self):
-        self.team_plan.side_effect = lambda team: {"lead": "Codex", "gemini": False}
+        self.team_plan.side_effect = lambda team, mode=None: {"lead": "Codex", "gemini": False}
         self.run_cli(INSIDE, setup="Antigravity")
         entry = self.team_panes()
         panes, runs = entry["panes"], self.fake.runs()
@@ -630,7 +630,7 @@ class HerdrAiTests(unittest.TestCase):
             self.assertEqual(commands[role][:3], ["--picker-return", "--picker-launch", "Star"], role)
 
     def test_other_teams_give_crew4_to_gemini(self):
-        self.team_plan.side_effect = lambda team: {"lead": team, "gemini": True}
+        self.team_plan.side_effect = lambda team, mode=None: {"lead": team, "gemini": True}
         self.run_cli(INSIDE, setup="Claude")
         entry = self.team_panes()
         panes, runs = entry["panes"], self.fake.runs()
@@ -667,7 +667,7 @@ class HerdrAiTests(unittest.TestCase):
         self.assertFalse(job["opening"])
 
     def test_team_lead_handoff_moves_a_team_that_shares_its_quota(self):
-        self.team_plan.side_effect = lambda team: {"lead": team, "gemini": True}
+        self.team_plan.side_effect = lambda team, mode=None: {"lead": team, "gemini": True}
         self.run_cli(INSIDE, setup="Claude")
         panes = self.team_panes()["panes"]
         self.fake.start_agents()
@@ -681,7 +681,7 @@ class HerdrAiTests(unittest.TestCase):
         self.assertTrue(job["opening"])
 
     def test_gemini_team_handoff_replaces_only_the_lead(self):
-        self.team_plan.side_effect = lambda team: {"lead": "Codex", "gemini": False}
+        self.team_plan.side_effect = lambda team, mode=None: {"lead": "Codex", "gemini": False}
         self.run_cli(INSIDE, setup="Antigravity")
         panes = self.team_panes()["panes"]
         self.fake.start_agents()
@@ -691,6 +691,44 @@ class HerdrAiTests(unittest.TestCase):
         self.assertIn("--picker-launch Claude --picker-lead", job["lines"][panes["lead"]])
         self.assertIn("--picker-crew-of Antigravity", job["lines"][panes["lead"]])
         self.assertEqual(job["update"], {"team": "Antigravity", "lead": "Claude"})
+
+    def individual(self):
+        self.team_plan.side_effect = lambda team, mode=None: {"lead": team, "gemini": False, "mode": "individual"}
+        self.run_cli(INSIDE, setup="Claude")
+        return self.team_panes()
+
+    def test_individual_mode_runs_five_peers_of_one_provider(self):
+        entry = self.individual()
+        panes, runs = entry["panes"], self.fake.runs()
+        self.assertEqual(entry["mode"], "individual")
+        peers = ",".join(panes[r] for r in herdr_ai.PEERS)
+        for role in herdr_ai.PEERS:
+            self.assertIn(f"--picker-return --picker-launch Claude --picker-peer {panes[role]} --picker-peers {peers}",
+                          runs[panes[role]][0], role)
+            self.assertNotIn("--picker-crew", runs[panes[role]][0])
+        self.assertTrue(runs[panes["usage"]][0].endswith("--picker-only Claude"))
+
+    def test_individual_handoff_moves_only_that_peer(self):
+        panes = self.individual()["panes"]
+        self.fake.start_agents()
+        _, jobs = self.handoff(panes["crew2"], ("Codex", "ok"))
+        job = jobs[0]
+        self.assertEqual(set(job["lines"]), {panes["crew2"], panes["usage"]})
+        self.assertIn(f"--picker-launch Codex --picker-peer {panes['crew2']}", job["lines"][panes["crew2"]])
+        self.assertTrue(job["lines"][panes["usage"]].endswith("--picker-only Claude,Codex"))
+        self.assertEqual(job["update"], {"providers": {"crew2": "Codex"}})
+        commands = herdr_ai.entry_commands({**self.team_panes(), **job["update"]})
+        self.assertIn("Codex", commands["crew2"])
+        self.assertIn("Claude", commands["crew1"])
+
+    def test_mode_flag_refuses_a_tab_laid_out_in_the_other_mode(self):
+        self.individual()
+        with self.assertRaises(SystemExit) as raised:
+            self.run_cli(INSIDE, ["--setup", "claude", "--mode", "orchestrator"])
+        self.assertIn("is individual, not orchestrator", str(raised.exception))
+        with self.assertRaises(SystemExit) as raised:
+            self.run_cli(INSIDE, ["--mode", "solo"])
+        self.assertIn("individual or orchestrator", str(raised.exception))
 
     def test_crew_and_exhausted_handoffs_are_refused(self):
         self.run_cli(INSIDE, setup="Claude")
@@ -929,6 +967,24 @@ class HerdrAiTests(unittest.TestCase):
         self.assertEqual(words[0], "/opt/my python/bin/python3")
         self.assertEqual(words[-2:], ["--picker-launch", "Codex"])
 
+
+
+class TeamPlanTests(unittest.TestCase):
+    def test_team_plan_defaults_to_individual(self):
+        import team
+        with patch.object(team, "mode", return_value="individual"):
+            self.assertEqual(herdr_ai.team_plan("Codex"), {"lead": "Codex", "gemini": False, "mode": "individual"})
+        self.assertEqual(herdr_ai.team_plan("Codex", "individual")["mode"], "individual")
+        self.assertNotIn("mode", herdr_ai.team_plan("Codex", "orchestrator"))
+        self.assertEqual(herdr_ai.team_plan("Star", "individual"), {"lead": "Star", "gemini": False})
+
+    def test_mode_setting_defaults_to_individual(self):
+        import preferences
+        import team
+        with patch.object(preferences, "get", return_value=None):
+            self.assertEqual(team.mode(), "individual")
+        with patch.object(preferences, "get", return_value="orchestrator"):
+            self.assertEqual(team.mode(), "orchestrator")
 
 if __name__ == "__main__":
     unittest.main()

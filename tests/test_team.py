@@ -44,8 +44,52 @@ class TeamTests(unittest.TestCase):
         expected = {"Claude": "opus → haiku", "Codex": "sol → luna", "Antigravity": "sol/opus → flash high",
                     "Cursor": "opus → grok", "Kiro": "opus → sonnet"}
         for name, text in expected.items():
-            self.assertEqual(team.summary(self.agents[name]), text, name)
-            self.assertEqual(team.option(self.agents[name])["short"], text, name)
+            with patch.object(team, "mode", return_value=team.ORCHESTRATOR):
+                self.assertEqual(team.summary(self.agents[name]), text, name)
+                self.assertEqual(team.option(self.agents[name])["short"], text, name)
+
+    def test_individual_summaries_name_the_strongest_model(self):
+        expected = {"Claude": "5 × opus", "Codex": "5 × sol", "Antigravity": "5 × flash high",
+                    "Cursor": "5 × opus", "Kiro": "5 × opus"}
+        for name, text in expected.items():
+            self.assertEqual(team.summary(self.agents[name], team.INDIVIDUAL), text, name)
+
+    def peer(self, name, me="w:p2", peers="w:p2,w:p3,w:p4,w:p5,w:p6"):
+        agent = self.agents[name]
+        before = json.loads(json.dumps(agent))
+        with tempfile.TemporaryDirectory() as folder, \
+             patch.object(team, "SHARED", Path(folder)), patch.dict(os.environ, {"HERDR_TAB_ID": "w:t1"}):
+            prepared, args = team.prepare(agent, ["--picker-peer", me, "--picker-peers", peers,
+                                                  "--picker-usage-pane", "w:u", "--extra"])
+            notes = Path(folder) / "w_t1.md"
+            self.assertTrue(notes.exists())
+        self.assertEqual(agent, before, "prepare must not change the shared profile")
+        return prepared, args, str(notes)
+
+    def test_individual_peers_run_the_strongest_model_at_picker_effort(self):
+        claude, _, _ = self.peer("Claude")
+        values = provider_defaults.current(claude)
+        self.assertEqual(values["model"], "claude-opus-5-5")
+        self.assertEqual(values["effort"], "medium")   # the picker's Claude effort, not the lead's high
+        self.assertTrue(values["bypass_permissions"])
+        codex, _, _ = self.peer("Codex")
+        self.assertEqual(provider_defaults.current(codex)["model"], "gpt-6.1-sol")
+        self.assertTrue(codex["detail"].startswith("peer · "))
+
+    def test_individual_peers_share_context_instead_of_delegating(self):
+        claude, args, notes = self.peer("Claude")
+        brief = claude["argv"][claude["argv"].index("--append-system-prompt") + 1]
+        self.assertIn("You are pane w:p2; the others are w:p3, w:p4, w:p5, w:p6", brief)
+        self.assertIn(notes, brief)
+        self.assertIn("nobody leads", brief)
+        self.assertNotIn("delegate", brief.lower())
+        self.assertIn("--settings", claude["argv"])   # iMCP stays out of the five panes
+        self.assertEqual(args, ["--extra"])
+        codex, _, _ = self.peer("Codex")
+        self.assertTrue(any(a.startswith("developer_instructions=") and "nobody leads" in a for a in codex["argv"]))
+        self.assertIn("mcp_servers.iMCP.enabled=false", codex["argv"])
+        kiro, args, _ = self.peer("Kiro")
+        self.assertIn("nobody leads", args[-1])   # flagless CLIs read it as the opening prompt
 
     def test_nick_shortens_model_ids(self):
         claude = self.agents["Claude"]

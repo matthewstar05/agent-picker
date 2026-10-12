@@ -1,5 +1,12 @@
 """Single-provider teams for herdr-ai, and the menu herdr-ai opens to pick a setup.
 
+A provider's setup runs in one of two modes, the "Team mode" setting (m in the
+menu toggles it). Individual, the default, opens five peers that each work for
+the user directly, all on the provider's strongest model at its picker effort
+(Claude: Opus at the picker's effort). They share context through one notes file
+per tab and can read each other's panes, but nobody delegates. Orchestrator mode
+is the lead and crew below.
+
 A team is one lead agent beside four crew agents. The lead always runs Sol or
 Opus: the provider's strongest model, or for Antigravity, whose Gemini Flash
 should not orchestrate, the best other provider with quota (see handoff). The
@@ -45,8 +52,33 @@ STANDARD = {
     "model": "every provider", "short": "every provider",
     "aside": ["Claude · Codex · Antigravity", "Cursor/Kiro · selector · usage"],
 }
-HINTS = [" ↑↓ move · ⏎ lay out · s settings · esc quit ", " ⏎ lay out · esc quit ", " ⏎ lay out ", ""]
+HINTS = [" ↑↓ move · ⏎ lay out · m mode · s settings · esc quit ", " ⏎ lay out · m mode · esc quit ",
+         " ⏎ lay out ", ""]
 LAST = ap.STATE / "herdr-ai-setup"
+SHARED = ap.STATE / "herdr-ai-shared"   # one context notes file per tab for individual peers
+
+INDIVIDUAL, ORCHESTRATOR = "individual", "orchestrator"
+MODE = preferences.Setting(
+    "herdr_ai.mode", "Herdr AI", "Team mode", [INDIVIDUAL, ORCHESTRATOR], INDIVIDUAL,
+    hint="Individual: five peers on the strongest model, sharing context. Orchestrator: a lead and four cheaper crew.",
+    names={INDIVIDUAL: "all individual", ORCHESTRATOR: "lead + crew"})
+
+
+def mode():
+    preferences.register(MODE)
+    return ORCHESTRATOR if preferences.get(MODE.key) == ORCHESTRATOR else INDIVIDUAL
+
+
+def individual_config(agent):
+    """The model an individual peer runs: the team's strongest (its lead model, or the
+    only model a lead-less team has) at the provider's picker effort, so a Claude peer
+    runs Opus at the effort the picker launches Claude with."""
+    team = agent.get("team") or {}
+    config = team.get("lead") or team.get("crew")
+    if not config:
+        return None
+    values = provider_defaults.current(agent) or {}
+    return {"model": config["model"], "effort": values.get("effort") or config.get("effort", "provider default")}
 
 
 def providers():
@@ -64,8 +96,10 @@ def nick(agent, model):
     return words[-1] if model.lower().startswith("gpt-") and words else (words[0] if words else model)
 
 
-def summary(agent):
-    """'opus → haiku': the lead's model, then the crew's."""
+def summary(agent, kind=None):
+    """'opus → haiku': the lead's model, then the crew's. Individual: '5 × opus'."""
+    if (kind or mode()) == INDIVIDUAL:
+        return "5 × " + nick(agent, individual_config(agent)["model"])
     if "lead" not in agent["team"]:   # led by another provider's Sol or Opus
         return "sol/opus → " + nick(agent, agent["team"]["crew"]["model"])
     lead, crew = (nick(agent, agent["team"][r]["model"]) for r in ("lead", "crew"))
@@ -173,6 +207,31 @@ def solo_brief(agent):
     return handoff.rules(agent["name"], "solo")
 
 
+def shared_notes(peers):
+    """This tab's shared context file, created with a header if missing."""
+    tab = os.environ.get("HERDR_TAB_ID") or "-".join(sorted(peers))
+    path = SHARED / (re.sub(r"[^A-Za-z0-9_.-]", "_", tab) + ".md")
+    try:
+        SHARED.mkdir(parents=True, exist_ok=True)
+        if not path.exists():
+            path.write_text("# Shared context for the agents on this herdr tab\n\n", encoding="utf-8")
+    except OSError:
+        pass
+    return path
+
+
+def peer_brief(agent, me, peers, usage_pane=None):
+    herdr = herdr_command()
+    others = [p for p in peers if p != me]
+    notes = shared_notes(peers)
+    return f"""You are one of {len(peers)} independent agents on this herdr tab, all in your working directory. You are pane {me}; the others are {', '.join(others)}. Each takes its own requests from the user and nobody leads, so do your own work fully yourself. Share context so you do not collide or redo each other's work:
+- Shared notes: {notes}. Read it before you start a task. Append one line when you start (`- {me}: working on <task>; files <paths>`), and one when you finish or learn something the others need (a decision, a finding, a gotcha, where results are). Keep lines short, append only, never edit or delete another pane's lines.
+- Before editing a file another pane has claimed there, check what it is doing: `{herdr} agent list` shows each pane's status, and `{herdr} agent read <pane> --source recent-unwrapped --lines 30` shows its recent output. Look at peers only when it matters to your task.
+- Do not prompt, interrupt, close, or restart other panes unless the user asks you to.
+
+{handoff.rules(agent['name'], 'solo', usage_pane)}""".rstrip()
+
+
 # iMCP drops every client when several connect at once, as a team's five panes do at launch.
 CLAUDE_SETTINGS = {"deniedMcpServers": [{"serverName": "iMCP"}]}
 
@@ -217,7 +276,10 @@ def options(args, names):
 def prepare(agent, args):
     """The profile and arguments for a herdr-ai agent, from the first of args:
     --picker-lead PANES [--picker-crew-of NAME] [--picker-gemini PANE] [--picker-usage-pane PANE],
-    --picker-crew PANE [--picker-usage-pane PANE], or --picker-solo (a Standard pane)."""
+    --picker-crew PANE [--picker-usage-pane PANE], --picker-peer PANE --picker-peers PANES
+    [--picker-usage-pane PANE] (an individual peer), or --picker-solo (a Standard pane)."""
+    if args[:1] == ["--picker-peer"]:
+        return prepare_peer(agent, args)
     solo = args[:1] == ["--picker-solo"]
     if solo and (agent["name"] == "Star" or not handoff.enabled()):
         # StarCLI routes its own turns, and with handoff off a solo pane has no brief.
@@ -247,16 +309,39 @@ def prepare(agent, args):
             brief = lead_brief(agent, target.split(","), crew_agent, extra.get("--picker-gemini"), usage_pane)
         else:
             brief = crew_brief(agent, target, usage_pane)
+    return instruct(agent, args, brief, opening=lead or solo, shared=not solo)
+
+
+def prepare_peer(agent, args):
+    """An individual peer: the team's strongest model, told who its peers are."""
+    if len(args) < 2:
+        raise ValueError("--picker-peer needs its pane id")
+    me, (extra, args) = args[1], options(list(args[2:]), ("--picker-peers", "--picker-usage-pane"))
+    peers = [p for p in (extra.get("--picker-peers") or me).split(",") if p]
+    agent = copy.deepcopy(agent)
+    config = individual_config(agent)
+    if not config:
+        raise ValueError(f"{agent['name']} has no team in agents.json")
+    if provider_defaults.current(agent) is not None:
+        provider_defaults.apply(agent, config)
+    agent["detail"] = "peer · " + agent.get("detail", "")
+    brief = peer_brief(agent, me, peers, extra.get("--picker-usage-pane"))
+    return instruct(agent, args, brief, opening=True, shared=True)
+
+
+def instruct(agent, args, brief, opening, shared):
+    """Give the agent its brief the way its CLI supports. shared: several panes of
+    this tab start at once, so keep iMCP out."""
     name = agent["name"]
     if name == "Claude":
         agent["argv"] += ["--append-system-prompt", brief]
-        if not solo:
+        if shared:
             agent["argv"] += ["--settings", claude_settings()]
     elif name == "Codex":
         agent["argv"] += ["-c", "developer_instructions=" + json.dumps(brief)]   # a TOML string
-        if not solo:
+        if shared:
             agent["argv"] += ["-c", "mcp_servers.iMCP.enabled=false"]  # see CLAUDE_SETTINGS
-    elif lead or solo:
+    elif opening:
         # No system prompt flag: the agent reads its brief as the opening prompt.
         opening = brief + "\n\nThese are your standing instructions for this session. Reply only: ready."
         args += ["-i", opening] if name == "Antigravity" else [opening]
@@ -307,7 +392,7 @@ def choose(settings_only=False):
     writer = ap.Screen(terminal)
     out = sys.stdout
     start = time.monotonic()
-    menu = preferences.Menu([preferences.register(s) for s in (*herdr_sidebar.SETTINGS, ap.BARS, handoff.AUTO)])
+    menu = preferences.Menu([preferences.register(s) for s in (*herdr_sidebar.SETTINGS, ap.BARS, handoff.AUTO, MODE)])
     settings_open = settings_only
     notices = []
 
@@ -348,12 +433,16 @@ def choose(settings_only=False):
                     if settings_only:
                         return None
                     settings_open = False
+                    options[:] = setups()   # the team mode may have changed the summaries
                     writer.reset()
                 draw()
                 continue
             if key == "s":
                 settings_open = True
                 writer.reset()
+            elif key == "m":
+                preferences.put(MODE.key, ORCHESTRATOR if mode() == INDIVIDUAL else INDIVIDUAL)
+                options[:] = setups()
             elif key in ("up", "k"):
                 selected = (selected - 1) % len(options)
             elif key in ("down", "j", "\t"):

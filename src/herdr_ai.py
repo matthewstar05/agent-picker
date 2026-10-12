@@ -19,6 +19,13 @@ Star lays the same grid out with StarCLIs: a lead and four crew that know about
 each other and hand each other tasks, every one routing its own turns to the
 best provider with quota.
 
+A provider's setup has two modes, the "Team mode" setting (m in the menu, or
+herdr-ai --settings). Individual, the default, puts five independent peers in
+the grid below, every one on the provider's strongest model (Claude: Opus at the
+picker's effort), with no lead and no cheaper crew. They share context through a
+notes file for the tab and can read each other's panes (see team.peer_brief).
+Orchestrator mode is the lead and crew:
+
 A provider's team is a lead agent on Sol or Opus beside four crew agents on a
 cheaper model (the "team" entry in agents.json). The lead is the provider's own
 strongest model, except that an Antigravity team, whose Gemini Flash should not
@@ -58,9 +65,10 @@ on the next provider with quota, Codex, then Claude, then Cursor or Kiro
 its crew share hands off the whole team.
 The middle-bottom pane chooses Cursor or Kiro by remaining quota and reset date.
 
-Usage: herdr-ai [--setup NAME] [label]
+Usage: herdr-ai [--setup NAME] [--mode individual|orchestrator] [label]
                               (label defaults to the directory name; --setup
-                              skips the menu: standard, star, claude, codex, ...)
+                              skips the menu: standard, star, claude, codex, ...;
+                              --mode overrides the Team mode setting for this layout)
        herdr-ai --settings    change crew visibility, handoff and usage bars without rerouting
        herdr-ai --open-settings    open those settings in a Herdr popup
        herdr-ai --usage       every provider's usage, and who a handoff would pick
@@ -104,6 +112,8 @@ PANES = {
 }
 # A team's panes: the lead, four crew, usage for that provider, and the terminal.
 CREW = ("crew1", "crew2", "crew3", "crew4")
+PEERS = ("lead", *CREW)   # an individual layout keeps the team's roles, so refresh and handoff work alike
+INDIVIDUAL, ORCHESTRATOR = "individual", "orchestrator"   # the team modes (team.MODE)
 STAR = "Star"   # the Star mesh setup: StarCLIs in the lead and crew panes
 # Explicit directory reroutes keep usage running. A context-preserving refresh
 # reloads it too, so picker and usage fixes can be checked from the terminal.
@@ -266,12 +276,25 @@ def star_member_args(name, role):
     return ["--picker-return", "--picker-launch", STAR, "--", "--name", name, "--role", role]
 
 
-def layout_commands(team, panes, lead=None, gemini=False):
+def layout_commands(team, panes, lead=None, gemini=False, mode=None, providers=None):
     """role -> picker arguments for a layout's panes. team is the crew's provider, or
     None for Standard; lead is the lead's provider (team by default); gemini puts
-    Antigravity's Gemini Flash in crew4."""
+    Antigravity's Gemini Flash in crew4. mode INDIVIDUAL runs every agent pane as a
+    peer of team, or of providers[role] for a pane that handed off."""
     if not team:
         return PANES
+    if mode == INDIVIDUAL and team != STAR:
+        providers = providers or {}
+        usage = ["--picker-usage-pane", panes["usage"]] if "usage" in panes else []
+        peers = ",".join(panes[r] for r in PEERS if r in panes)
+        shown = list(dict.fromkeys([team, *(providers.get(r, team) for r in PEERS)]))
+        commands = {"usage": ["--picker-usage", "--picker-only", ",".join(shown)]}
+        for role in PEERS:
+            if role in panes:
+                # Quitting a peer reopens the selector, as in a Standard pane.
+                commands[role] = ["--picker-return", "--picker-launch", providers.get(role, team),
+                                  "--picker-peer", panes[role], "--picker-peers", peers] + usage
+        return commands
     if team == STAR:
         # Star CLIs that know each other (star_mesh): the lead delegates to the crew,
         # and every one of them routes its own turns across the providers. Quitting
@@ -296,14 +319,19 @@ def layout_commands(team, panes, lead=None, gemini=False):
     return commands
 
 
-def team_plan(team):
+def team_plan(team, mode=None):
     """{"lead": provider, "gemini": bool} for a new team of team's crew: who leads it,
     and whether Gemini Flash takes crew4. Antigravity crews are led by the best
-    orchestrator with quota; other providers lead their own crew."""
+    orchestrator with quota; other providers lead their own crew. In individual
+    mode (the Team mode setting, unless mode says otherwise) there is no lead or
+    Gemini crew: {"lead": team, "gemini": False, "mode": "individual"}."""
     if not team:
         return {}
     if team == STAR:
         return {"lead": STAR, "gemini": False}
+    import team as teams
+    if (mode or teams.mode()) == INDIVIDUAL:
+        return {"lead": team, "gemini": False, "mode": INDIVIDUAL}
     import agent_picker
     import handoff
     gemini_ok = any(a["name"] == GEMINI and agent_picker.installed(a) for a in agent_picker.AGENTS)
@@ -580,7 +608,8 @@ def build_team(herdr, root, split, team, plan):
     panes["crew2"] = split(panes["crew1"], "right", 0.49)
     panes["crew3"] = split(panes["crew1"], "down", 0.54)
     panes["crew4"] = split(panes["crew2"], "down", 0.54)
-    launch_panes(herdr, panes, layout_commands(team, panes, plan.get("lead"), plan.get("gemini", False)))
+    launch_panes(herdr, panes, layout_commands(team, panes, plan.get("lead"), plan.get("gemini", False),
+                                               plan.get("mode")))
     return panes
 
 
@@ -638,9 +667,11 @@ def close_leftovers(herdr, entry):
         herdr("pane", "close", pane)
 
 
-def layout_problem(entry, recorded, setup):
+def layout_problem(entry, recorded, setup, mode=None):
     """Why a laid-out tab cannot simply be rerouted, or None."""
     team = entry.get("team")
+    if mode and team and team != STAR and (entry.get("mode") or ORCHESTRATOR) != mode:
+        return f"this tab's {team} setup is {entry.get('mode') or ORCHESTRATOR}, not {mode}"
     if setup is not None:
         import team as teams
         try:
@@ -661,7 +692,8 @@ def entry_commands(entry, recorded=None):
         return PANES
     if entry.get("team") and recorded is not None and "lead" not in recorded:
         return {}
-    return layout_commands(entry.get("team"), entry["panes"], entry.get("lead"), entry.get("gemini", False))
+    return layout_commands(entry.get("team"), entry["panes"], entry.get("lead"), entry.get("gemini", False),
+                           entry.get("mode"), entry.get("providers"))
 
 
 def report(name, routed, cwd):
@@ -744,7 +776,8 @@ def handoff_main(argv, herdr=None, spawn=None):
     state, key = load_state(), tab_key(os.environ["HERDR_TAB_ID"])
     entry = state.get(key) or {}
     role = next((r for r, p in entry.get("panes", {}).items() if p == me), None)
-    if role and role.startswith("crew"):
+    individual = entry.get("mode") == INDIVIDUAL and role in PEERS
+    if role and role.startswith("crew") and not individual:
         sys.exit("herdr-ai: crew do not hand off; tell your lead you are at the usage limit")
     if caller == STAR or entry.get("team") == STAR:
         # A Star mesh is not one provider's quota. The next turn is routed to
@@ -758,7 +791,15 @@ def handoff_main(argv, herdr=None, spawn=None):
         return 1
     cwd = info.get("cwd") or os.getcwd()
     update = {}
-    if entry.get("team") and role == "lead":
+    if individual:
+        # Peers each use their own provider's quota: only this pane moves.
+        providers = dict(entry.get("providers") or {}, **{role: target})
+        panes = entry["panes"]
+        commands = layout_commands(entry["team"], panes, mode=INDIVIDUAL, providers=providers)
+        lines = {panes[r]: picker_command(commands[r]) for r in (role, "usage") if r in panes}
+        update = {"providers": providers}
+        moved = "this pane"
+    elif entry.get("team") and role == "lead":
         panes, gemini = entry["panes"], entry.get("gemini", False)
         lead = entry.get("lead") or entry["team"]
         if lead == entry["team"]:
@@ -871,7 +912,13 @@ def main(argv=None, herdr=None, cwd=None):
         import team
         team.choose(settings_only=True)
         return 0
-    setup = None
+    setup, mode = None, None
+    if "--mode" in argv or any(a.startswith("--mode=") for a in argv):
+        i = next(i for i, a in enumerate(argv) if a == "--mode" or a.startswith("--mode="))
+        mode = argv[i].split("=", 1)[1] if "=" in argv[i] else (argv[i + 1] if i + 1 < len(argv) else "")
+        if mode not in (INDIVIDUAL, ORCHESTRATOR):
+            sys.exit("herdr-ai: --mode takes individual or orchestrator")
+        del argv[i:i + (1 if "=" in argv[i] else 2)]
     if argv[:1] == ["--setup"] or (argv and argv[0].startswith("--setup=")):
         if argv[0] == "--setup" and len(argv) < 2:
             sys.exit("herdr-ai: --setup needs a name: standard, claude, codex, ...")
@@ -897,7 +944,7 @@ def main(argv=None, herdr=None, cwd=None):
         team = choose()
         if team is False:
             return 0
-        plan = team_plan(team)
+        plan = team_plan(team, mode)
         require_codex(team, plan.get("lead"))
         out = herdr("workspace", "create", "--cwd", cwd, "--label", label, "--focus")
         panes = build(herdr, out["root_pane"]["pane_id"], cwd, team, plan)
@@ -919,7 +966,7 @@ def main(argv=None, herdr=None, cwd=None):
     recorded = recorded_panes(herdr, state, key)
     if recorded:
         entry = state[key]
-        problem = layout_problem(entry, recorded, setup)
+        problem = layout_problem(entry, recorded, setup, mode)
         if problem:
             sys.exit(f"herdr-ai: {problem}; run herdr-reset, then herdr-ai")
         require_codex(entry.get("team"), entry.get("lead"))
@@ -932,7 +979,7 @@ def main(argv=None, herdr=None, cwd=None):
         team = choose()
         if team is False:
             return 0
-        plan = team_plan(team)
+        plan = team_plan(team, mode)
         require_codex(team, plan.get("lead"))
         close_leftovers(herdr, state.get(key))
         panes = build(herdr, os.environ["HERDR_PANE_ID"], cwd, team, plan)
