@@ -131,6 +131,74 @@ class ProviderOwnershipTests(unittest.TestCase):
         self.assertEqual(len(errors), 1)
         self.assertIn("not-installed-provider", errors[0])
 
+    def test_guardian_exits_cleanly_while_owner_keeps_control_pipe_open(self):
+        # Closing stdin with communicate() would hide the shutdown bug: the
+        # old daemon reader only held its lock while the owner's pipe stayed open.
+        for code in (0, 7):
+            for attempt in range(5):
+                with self.subTest(code=code, attempt=attempt):
+                    proc = subprocess.Popen([sys.executable, str(ROOT / "src/star_process.py")],
+                                            stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                            stderr=subprocess.PIPE, text=True)
+                    try:
+                        argv = [sys.executable, "-c", f"print('finished', flush=True); raise SystemExit({code})"]
+                        proc.stdin.write(json.dumps({"argv": argv}) + "\n")
+                        proc.stdin.flush()
+                        self.assertIn('"ready"', proc.stdout.readline())
+                        proc.stdin.write("go\n")
+                        proc.stdin.flush()
+                        self.assertEqual(proc.wait(timeout=5), code)
+                        self.assertEqual(proc.stdout.read(), "finished\n")
+                        self.assertEqual(proc.stderr.read(), "")
+                    finally:
+                        if proc.poll() is None:
+                            proc.kill()
+                        proc.wait(timeout=5)
+                        proc.stdin.close()
+                        proc.stdout.close()
+                        proc.stderr.close()
+
+    def test_owner_closing_output_pipes_does_not_crash_the_guardian(self):
+        script = '''import os, signal, time
+def finish(*_):
+    for fd in (1, 2):
+        try:
+            os.write(fd, b'provider closing\\n')
+        except BrokenPipeError:
+            pass
+    raise SystemExit(0)
+signal.signal(signal.SIGINT, finish)
+print('provider ready', flush=True)
+while True:
+    time.sleep(.1)
+'''
+        for close_stderr in (False, True):
+            with self.subTest(close_stderr=close_stderr):
+                proc = subprocess.Popen([sys.executable, str(ROOT / "src/star_process.py")],
+                                        stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                        stderr=subprocess.PIPE, text=True)
+                try:
+                    proc.stdin.write(json.dumps({"argv": [sys.executable, "-c", script]}) + "\n")
+                    proc.stdin.flush()
+                    self.assertIn('"ready"', proc.stdout.readline())
+                    proc.stdin.write("go\n")
+                    proc.stdin.flush()
+                    self.assertEqual(proc.stdout.readline().strip(), "provider ready")
+                    proc.stdout.close()
+                    if close_stderr:
+                        proc.stderr.close()
+                    proc.stdin.close()
+                    self.assertEqual(proc.wait(timeout=8), 0)
+                    if not close_stderr:
+                        self.assertEqual(proc.stderr.read(), "provider closing\n")
+                finally:
+                    if proc.poll() is None:
+                        proc.kill()
+                    proc.wait(timeout=5)
+                    proc.stdin.close()
+                    proc.stdout.close()
+                    proc.stderr.close()
+
     def test_stream_parser_failure_stops_the_owned_provider(self):
         class BrokenParser:
             @staticmethod

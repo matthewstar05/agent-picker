@@ -41,7 +41,13 @@ def pump(source, target, exited):
             return
         view = memoryview(data)
         while view:
-            view = view[os.write(target, view):]
+            try:
+                view = view[os.write(target, view):]
+            except OSError:
+                # Star may have crashed and closed its read ends. Let the
+                # control pipe stop the provider without a thread traceback
+                # trying to write to the guardian's broken stderr pipe.
+                return
 
 
 def own(argv):
@@ -55,43 +61,44 @@ def own(argv):
                             for stream, fd in ((proc.stdout, 1), (proc.stderr, 2))]
     for thread in pumps:
         thread.start()
-    gate = threading.Lock()
     finished = False
 
     def stop():
         nonlocal finished
-        with gate:
-            if finished:
-                return
-            # The child has not been reaped while this lock is held. Its PID
-            # and process group cannot be reused during the escalation.
-            for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGKILL):
-                try:
-                    os.killpg(proc.pid, sig)
-                except ProcessLookupError:
-                    break
-                if sig != signal.SIGKILL:
-                    time.sleep(1)
-            proc.wait()
-            finished = True
+        if finished:
+            return
+        # Only this thread polls or reaps the child. Its PID and process group
+        # cannot be reused during the escalation.
+        for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGKILL):
+            try:
+                os.killpg(proc.pid, sig)
+            except ProcessLookupError:
+                break
+            except PermissionError:
+                # Darwin can leave an exited child in a group with no live
+                # processes we can signal. Reap it, and never signal its PID
+                # again. A live child failing permission checks is an error.
+                if proc.poll() is None:
+                    raise
+                break
+            if sig != signal.SIGKILL:
+                time.sleep(1)
+        proc.wait()
+        finished = True
 
-    def watch():
-        # A command or EOF both stop this turn. Native provider stdin stays
-        # disconnected, retaining each engine's headless behavior.
-        # Unbuffered OS reads avoid Python finalization waiting for a buffered
-        # stdin lock held by this daemon after a provider completes normally.
-        os.read(sys.stdin.fileno(), 1)
-        stop()
-
-    threading.Thread(target=watch, daemon=True).start()
+    control = sys.stdin.fileno()
     try:
         while True:
-            with gate:
-                code = proc.poll()
-                if code is not None:
-                    finished = True
-                    return code
-            time.sleep(.03)
+            code = proc.poll()
+            if code is not None:
+                finished = True
+                return code
+            # A command or EOF stops the turn. Poll in the owning thread so
+            # no stdin reader survives into Python's interpreter shutdown.
+            # Native provider stdin remains disconnected.
+            if select.select([control], [], [], .03)[0]:
+                os.read(control, 1)
+                stop()
     finally:
         stop()
         exited.set()
