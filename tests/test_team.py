@@ -246,7 +246,7 @@ class TeamTests(unittest.TestCase):
             self.assertEqual(team.find("ANTIGRAVITY"), "Antigravity")
             with self.assertRaisesRegex(ValueError, "unknown setup 'nope'.*standard, star, claude"):
                 team.find("nope")
-            self.assertEqual([s["name"] for s in team.setups()], ["Star", "Standard"] + list(TEAM))
+            self.assertEqual([s["name"] for s in team.setups()], ["Standard"] + list(TEAM) + ["Star"])
 
     def test_main_launches_crew_with_fake_cli(self):
         with tempfile.TemporaryDirectory(prefix="team test ") as folder:

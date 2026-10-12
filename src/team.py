@@ -138,7 +138,7 @@ def star_setup():
 
 def setups():
     star = star_setup()
-    return ([star] if star else []) + [STANDARD] + [option(a) for a in providers()]
+    return [STANDARD] + [option(a) for a in providers()] + ([star] if star else [])
 
 
 def find(name):
