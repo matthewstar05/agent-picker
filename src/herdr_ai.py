@@ -19,12 +19,13 @@ Star lays the same grid out with StarCLIs: a lead and four crew that know about
 each other and hand each other tasks, every one routing its own turns to the
 best provider with quota.
 
-A provider's setup has two modes, the "Team mode" setting (m in the menu, or
-herdr-ai --settings). Individual, the default, puts five independent peers in
-the grid below, every one on the provider's strongest model (Claude: Opus at the
-picker's effort), with no lead and no cheaper crew. They share context through a
-notes file for the tab and can read each other's panes (see team.peer_brief).
-Orchestrator mode is the lead and crew:
+A provider's setup follows the "System prompt" setting (m in the menu cycles it,
+or herdr-ai --settings): off, individual, or orchestrator-crew. Off and
+individual put five independent agents in the grid below, every one on the
+provider's strongest model (Claude: Opus at the picker's effort), with no lead
+and no cheaper crew. Off gives them no herdr-ai instructions at all. Individual,
+the default, has them share context through a notes file for the tab and read
+each other's panes (see team.peer_brief). Orchestrator-crew is the lead and crew:
 
 A provider's team is a lead agent on Sol or Opus beside four crew agents on a
 cheaper model (the "team" entry in agents.json). The lead is the provider's own
@@ -65,10 +66,10 @@ on the next provider with quota, Codex, then Claude, then Cursor or Kiro
 its crew share hands off the whole team.
 The middle-bottom pane chooses Cursor or Kiro by remaining quota and reset date.
 
-Usage: herdr-ai [--setup NAME] [--mode individual|orchestrator] [label]
+Usage: herdr-ai [--setup NAME] [--mode off|individual|orchestrator] [label]
                               (label defaults to the directory name; --setup
                               skips the menu: standard, star, claude, codex, ...;
-                              --mode overrides the Team mode setting for this layout)
+                              --mode overrides the System prompt setting for this layout)
        herdr-ai --settings    change crew visibility, handoff and usage bars without rerouting
        herdr-ai --open-settings    open those settings in a Herdr popup
        herdr-ai --usage       every provider's usage, and who a handoff would pick
@@ -113,7 +114,8 @@ PANES = {
 # A team's panes: the lead, four crew, usage for that provider, and the terminal.
 CREW = ("crew1", "crew2", "crew3", "crew4")
 PEERS = ("lead", *CREW)   # an individual layout keeps the team's roles, so refresh and handoff work alike
-INDIVIDUAL, ORCHESTRATOR = "individual", "orchestrator"   # the team modes (team.MODE)
+OFF, INDIVIDUAL, ORCHESTRATOR = "off", "individual", "orchestrator"   # the system prompt modes (team.MODE)
+SEPARATE = (OFF, INDIVIDUAL)   # modes whose five agents work alone, with no lead
 STAR = "Star"   # the Star mesh setup: StarCLIs in the lead and crew panes
 # Explicit directory reroutes keep usage running. A context-preserving refresh
 # reloads it too, so picker and usage fixes can be checked from the terminal.
@@ -280,10 +282,11 @@ def layout_commands(team, panes, lead=None, gemini=False, mode=None, providers=N
     """role -> picker arguments for a layout's panes. team is the crew's provider, or
     None for Standard; lead is the lead's provider (team by default); gemini puts
     Antigravity's Gemini Flash in crew4. mode INDIVIDUAL runs every agent pane as a
-    peer of team, or of providers[role] for a pane that handed off."""
+    peer of team, or of providers[role] for a pane that handed off; mode OFF does the
+    same with no instructions."""
     if not team:
         return PANES
-    if mode == INDIVIDUAL and team != STAR:
+    if mode in SEPARATE and team != STAR:
         providers = providers or {}
         usage = ["--picker-usage-pane", panes["usage"]] if "usage" in panes else []
         peers = ",".join(panes[r] for r in PEERS if r in panes)
@@ -292,8 +295,9 @@ def layout_commands(team, panes, lead=None, gemini=False, mode=None, providers=N
         for role in PEERS:
             if role in panes:
                 # Quitting a peer reopens the selector, as in a Standard pane.
-                commands[role] = ["--picker-return", "--picker-launch", providers.get(role, team),
-                                  "--picker-peer", panes[role], "--picker-peers", peers] + usage
+                launch = ["--picker-return", "--picker-launch", providers.get(role, team)]
+                commands[role] = launch + (["--picker-plain"] if mode == OFF else
+                                           ["--picker-peer", panes[role], "--picker-peers", peers] + usage)
         return commands
     if team == STAR:
         # Star CLIs that know each other (star_mesh): the lead delegates to the crew,
@@ -322,16 +326,17 @@ def layout_commands(team, panes, lead=None, gemini=False, mode=None, providers=N
 def team_plan(team, mode=None):
     """{"lead": provider, "gemini": bool} for a new team of team's crew: who leads it,
     and whether Gemini Flash takes crew4. Antigravity crews are led by the best
-    orchestrator with quota; other providers lead their own crew. In individual
-    mode (the Team mode setting, unless mode says otherwise) there is no lead or
-    Gemini crew: {"lead": team, "gemini": False, "mode": "individual"}."""
+    orchestrator with quota; other providers lead their own crew. With the system
+    prompt off or individual (the setting, unless mode says otherwise) there is no
+    lead or Gemini crew: {"lead": team, "gemini": False, "mode": "off"|"individual"}."""
     if not team:
         return {}
     if team == STAR:
         return {"lead": STAR, "gemini": False}
     import team as teams
-    if (mode or teams.mode()) == INDIVIDUAL:
-        return {"lead": team, "gemini": False, "mode": INDIVIDUAL}
+    mode = mode or teams.mode()
+    if mode in SEPARATE:
+        return {"lead": team, "gemini": False, "mode": mode}
     import agent_picker
     import handoff
     gemini_ok = any(a["name"] == GEMINI and agent_picker.installed(a) for a in agent_picker.AGENTS)
@@ -776,7 +781,7 @@ def handoff_main(argv, herdr=None, spawn=None):
     state, key = load_state(), tab_key(os.environ["HERDR_TAB_ID"])
     entry = state.get(key) or {}
     role = next((r for r, p in entry.get("panes", {}).items() if p == me), None)
-    individual = entry.get("mode") == INDIVIDUAL and role in PEERS
+    individual = entry.get("mode") in SEPARATE and role in PEERS
     if role and role.startswith("crew") and not individual:
         sys.exit("herdr-ai: crew do not hand off; tell your lead you are at the usage limit")
     if caller == STAR or entry.get("team") == STAR:
@@ -795,7 +800,7 @@ def handoff_main(argv, herdr=None, spawn=None):
         # Peers each use their own provider's quota: only this pane moves.
         providers = dict(entry.get("providers") or {}, **{role: target})
         panes = entry["panes"]
-        commands = layout_commands(entry["team"], panes, mode=INDIVIDUAL, providers=providers)
+        commands = layout_commands(entry["team"], panes, mode=entry["mode"], providers=providers)
         lines = {panes[r]: picker_command(commands[r]) for r in (role, "usage") if r in panes}
         update = {"providers": providers}
         moved = "this pane"
@@ -916,8 +921,8 @@ def main(argv=None, herdr=None, cwd=None):
     if "--mode" in argv or any(a.startswith("--mode=") for a in argv):
         i = next(i for i, a in enumerate(argv) if a == "--mode" or a.startswith("--mode="))
         mode = argv[i].split("=", 1)[1] if "=" in argv[i] else (argv[i + 1] if i + 1 < len(argv) else "")
-        if mode not in (INDIVIDUAL, ORCHESTRATOR):
-            sys.exit("herdr-ai: --mode takes individual or orchestrator")
+        if mode not in (OFF, INDIVIDUAL, ORCHESTRATOR):
+            sys.exit("herdr-ai: --mode takes off, individual or orchestrator")
         del argv[i:i + (1 if "=" in argv[i] else 2)]
     if argv[:1] == ["--setup"] or (argv and argv[0].startswith("--setup=")):
         if argv[0] == "--setup" and len(argv) < 2:

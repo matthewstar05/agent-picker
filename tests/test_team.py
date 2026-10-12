@@ -54,6 +54,30 @@ class TeamTests(unittest.TestCase):
         for name, text in expected.items():
             self.assertEqual(team.summary(self.agents[name], team.INDIVIDUAL), text, name)
 
+    def test_plain_summaries_say_plain(self):
+        self.assertEqual(team.summary(self.agents["Claude"], team.OFF), "5 × opus · plain")
+
+    def test_system_prompt_off_launches_the_strongest_model_with_no_instructions(self):
+        for name in TEAM:
+            agent = self.agents[name]
+            before = json.loads(json.dumps(agent))
+            prepared, args = team.prepare(agent, ["--picker-plain", "--extra"])
+            self.assertEqual(agent, before, name)
+            self.assertEqual(args, ["--extra"], name)   # no opening prompt either
+            text = " ".join(prepared["argv"])
+            for brief in ("--append-system-prompt", "developer_instructions", "herdr agent", "standing instructions"):
+                self.assertNotIn(brief, text, name)
+            values = provider_defaults.current(prepared)
+            self.assertEqual(values["model"], team.individual_config(agent)["model"], name)
+        claude, _ = team.prepare(self.agents["Claude"], ["--picker-plain"])
+        self.assertEqual(provider_defaults.current(claude)["effort"], "medium")
+        self.assertIn("--settings", claude["argv"])   # iMCP still stays out
+
+    def test_m_cycles_off_individual_orchestrator(self):
+        for current, following in (("off", "individual"), ("individual", "orchestrator"), ("orchestrator", "off")):
+            with patch.object(team, "mode", return_value=current):
+                self.assertEqual(team.next_mode(), following)
+
     def peer(self, name, me="w:p2", peers="w:p2,w:p3,w:p4,w:p5,w:p6"):
         agent = self.agents[name]
         before = json.loads(json.dumps(agent))

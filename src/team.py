@@ -1,11 +1,12 @@
 """Single-provider teams for herdr-ai, and the menu herdr-ai opens to pick a setup.
 
-A provider's setup runs in one of two modes, the "Team mode" setting (m in the
-menu toggles it). Individual, the default, opens five peers that each work for
-the user directly, all on the provider's strongest model at its picker effort
-(Claude: Opus at the picker's effort). They share context through one notes file
-per tab and can read each other's panes, but nobody delegates. Orchestrator mode
-is the lead and crew below.
+A provider's setup follows the "System prompt" setting (m in the menu cycles it).
+Off and individual both open five agents that each work for the user directly,
+all on the provider's strongest model at its picker effort (Claude: Opus at the
+picker's effort). Off gives them no herdr-ai instructions at all. Individual, the
+default, tells them about each other: they share context through one notes file
+per tab and can read each other's panes, but nobody delegates.
+Orchestrator-crew is the lead and crew below.
 
 A team is one lead agent beside four crew agents. The lead always runs Sol or
 Opus: the provider's strongest model, or for Antigravity, whose Gemini Flash
@@ -57,16 +58,24 @@ HINTS = [" ↑↓ move · ⏎ lay out · m mode · s settings · esc quit ", " �
 LAST = ap.STATE / "herdr-ai-setup"
 SHARED = ap.STATE / "herdr-ai-shared"   # one context notes file per tab for individual peers
 
-INDIVIDUAL, ORCHESTRATOR = "individual", "orchestrator"
+OFF, INDIVIDUAL, ORCHESTRATOR = "off", "individual", "orchestrator"
 MODE = preferences.Setting(
-    "herdr_ai.mode", "Herdr AI", "Team mode", [INDIVIDUAL, ORCHESTRATOR], INDIVIDUAL,
-    hint="Individual: five peers on the strongest model, sharing context. Orchestrator: a lead and four cheaper crew.",
-    names={INDIVIDUAL: "all individual", ORCHESTRATOR: "lead + crew"})
+    "herdr_ai.system_prompt", "Herdr AI", "System prompt", [OFF, INDIVIDUAL, ORCHESTRATOR], INDIVIDUAL,
+    hint="Off: five plain agents on the strongest model. Individual: the same, sharing context. "
+         "Orchestrator-crew: a lead and four cheaper crew.",
+    names={OFF: "off", INDIVIDUAL: "individual", ORCHESTRATOR: "orchestrator-crew"})
 
 
 def mode():
     preferences.register(MODE)
-    return ORCHESTRATOR if preferences.get(MODE.key) == ORCHESTRATOR else INDIVIDUAL
+    value = preferences.get(MODE.key)
+    return value if value in MODE.choices else INDIVIDUAL
+
+
+def next_mode():
+    """The mode after the current one, for the menu's m key."""
+    choices = MODE.choices
+    return choices[(choices.index(mode()) + 1) % len(choices)]
 
 
 def individual_config(agent):
@@ -97,9 +106,11 @@ def nick(agent, model):
 
 
 def summary(agent, kind=None):
-    """'opus → haiku': the lead's model, then the crew's. Individual: '5 × opus'."""
-    if (kind or mode()) == INDIVIDUAL:
-        return "5 × " + nick(agent, individual_config(agent)["model"])
+    """'opus → haiku': the lead's model, then the crew's. Individual: '5 × opus';
+    with the system prompt off: '5 × opus · plain'."""
+    kind = kind or mode()
+    if kind in (INDIVIDUAL, OFF):
+        return "5 × " + nick(agent, individual_config(agent)["model"]) + (" · plain" if kind == OFF else "")
     if "lead" not in agent["team"]:   # led by another provider's Sol or Opus
         return "sol/opus → " + nick(agent, agent["team"]["crew"]["model"])
     lead, crew = (nick(agent, agent["team"][r]["model"]) for r in ("lead", "crew"))
@@ -277,9 +288,12 @@ def prepare(agent, args):
     """The profile and arguments for a herdr-ai agent, from the first of args:
     --picker-lead PANES [--picker-crew-of NAME] [--picker-gemini PANE] [--picker-usage-pane PANE],
     --picker-crew PANE [--picker-usage-pane PANE], --picker-peer PANE --picker-peers PANES
-    [--picker-usage-pane PANE] (an individual peer), or --picker-solo (a Standard pane)."""
+    [--picker-usage-pane PANE] (an individual peer), --picker-plain (a peer with the
+    system prompt off), or --picker-solo (a Standard pane)."""
     if args[:1] == ["--picker-peer"]:
         return prepare_peer(agent, args)
+    if args[:1] == ["--picker-plain"]:
+        return prepare_plain(agent, args)
     solo = args[:1] == ["--picker-solo"]
     if solo and (agent["name"] == "Star" or not handoff.enabled()):
         # StarCLI routes its own turns, and with handoff off a solo pane has no brief.
@@ -312,21 +326,38 @@ def prepare(agent, args):
     return instruct(agent, args, brief, opening=lead or solo, shared=not solo)
 
 
-def prepare_peer(agent, args):
-    """An individual peer: the team's strongest model, told who its peers are."""
-    if len(args) < 2:
-        raise ValueError("--picker-peer needs its pane id")
-    me, (extra, args) = args[1], options(list(args[2:]), ("--picker-peers", "--picker-usage-pane"))
-    peers = [p for p in (extra.get("--picker-peers") or me).split(",") if p]
+def strongest(agent, label):
+    """A copy of agent on the team's strongest model (see individual_config)."""
     agent = copy.deepcopy(agent)
     config = individual_config(agent)
     if not config:
         raise ValueError(f"{agent['name']} has no team in agents.json")
     if provider_defaults.current(agent) is not None:
         provider_defaults.apply(agent, config)
-    agent["detail"] = "peer · " + agent.get("detail", "")
+    agent["detail"] = label + " · " + agent.get("detail", "")
+    return agent
+
+
+def prepare_peer(agent, args):
+    """An individual peer: the team's strongest model, told who its peers are."""
+    if len(args) < 2:
+        raise ValueError("--picker-peer needs its pane id")
+    me, (extra, args) = args[1], options(list(args[2:]), ("--picker-peers", "--picker-usage-pane"))
+    peers = [p for p in (extra.get("--picker-peers") or me).split(",") if p]
+    agent = strongest(agent, "peer")
     brief = peer_brief(agent, me, peers, extra.get("--picker-usage-pane"))
     return instruct(agent, args, brief, opening=True, shared=True)
+
+
+def prepare_plain(agent, args):
+    """A peer with the system prompt off: the strongest model and no instructions.
+    Only iMCP stays out, since five panes start at once."""
+    agent = strongest(agent, "plain")
+    if agent["name"] == "Claude":
+        agent["argv"] += ["--settings", claude_settings()]
+    elif agent["name"] == "Codex":
+        agent["argv"] += ["-c", "mcp_servers.iMCP.enabled=false"]
+    return agent, list(args[1:])
 
 
 def instruct(agent, args, brief, opening, shared):
@@ -441,7 +472,7 @@ def choose(settings_only=False):
                 settings_open = True
                 writer.reset()
             elif key == "m":
-                preferences.put(MODE.key, ORCHESTRATOR if mode() == INDIVIDUAL else INDIVIDUAL)
+                preferences.put(MODE.key, next_mode())
                 options[:] = setups()
             elif key in ("up", "k"):
                 selected = (selected - 1) % len(options)

@@ -721,6 +721,19 @@ class HerdrAiTests(unittest.TestCase):
         self.assertIn("Codex", commands["crew2"])
         self.assertIn("Claude", commands["crew1"])
 
+    def test_system_prompt_off_runs_five_plain_agents(self):
+        self.team_plan.side_effect = lambda team, mode=None: {"lead": team, "gemini": False, "mode": "off"}
+        self.run_cli(INSIDE, setup="Claude")
+        entry = self.team_panes()
+        panes, runs = entry["panes"], self.fake.runs()
+        self.assertEqual(entry["mode"], "off")
+        for role in herdr_ai.PEERS:
+            self.assertTrue(runs[panes[role]][0].endswith("--picker-return --picker-launch Claude --picker-plain"), role)
+        self.assertTrue(runs[panes["usage"]][0].endswith("--picker-only Claude"))
+        self.fake.start_agents()
+        _, jobs = self.handoff(panes["crew1"], ("Codex", "ok"))
+        self.assertTrue(jobs[0]["lines"][panes["crew1"]].endswith("--picker-launch Codex --picker-plain"))
+
     def test_mode_flag_refuses_a_tab_laid_out_in_the_other_mode(self):
         self.individual()
         with self.assertRaises(SystemExit) as raised:
@@ -983,8 +996,10 @@ class TeamPlanTests(unittest.TestCase):
         import team
         with patch.object(preferences, "get", return_value=None):
             self.assertEqual(team.mode(), "individual")
-        with patch.object(preferences, "get", return_value="orchestrator"):
-            self.assertEqual(team.mode(), "orchestrator")
+        for value in ("off", "orchestrator"):
+            with patch.object(preferences, "get", return_value=value):
+                self.assertEqual(team.mode(), value)
+        self.assertEqual(herdr_ai.team_plan("Codex", "off"), {"lead": "Codex", "gemini": False, "mode": "off"})
 
 if __name__ == "__main__":
     unittest.main()

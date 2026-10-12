@@ -82,11 +82,15 @@ In the five Standard agent panes, quitting an agent (`/quit`, `/exit`, or Ctrl+C
 
 `herdr-ai` first opens a menu drawn like the agent selector, with each provider's usage beside it. **Standard** (sakura pink) is the workbench above, unchanged. Choosing a provider lays out five agents of that provider instead: one on the right, four in a 2x2 grid on the left, the terminal under them, and a short usage panel for that provider alone under the right-hand agent. The launch animation and key bindings match the selector; Esc quits without touching the tab, and the menu remembers your last choice. `herdr-ai --setup NAME [label]` skips the menu (`standard`, `claude`, `codex`, `antigravity`, `cursor`, `kiro`), and without a terminal to draw in it lays out Standard.
 
-How those five agents work is the **Team mode** setting. Press `m` in the setup menu to toggle it (each row's summary changes to match), change it under `s` or `herdr-ai --settings`, or pass `--mode individual|orchestrator` for one layout.
+How those five agents work is the **System prompt** setting: **off**, **individual** (the default), or **orchestrator-crew**. Press `m` in the setup menu to cycle it (each row's summary changes to match), change it under `s` or `herdr-ai --settings`, or pass `--mode off|individual|orchestrator` for one layout.
 
-**All individual** (the default) runs five independent peers. Each works for you directly, nobody delegates, and every one runs the provider's strongest model at the picker's effort, never the cheaper crew model: Claude peers run Opus 5.5 at the Claude picker effort (medium by default), Codex peers Sol, Cursor and Kiro peers Opus, and Antigravity peers Gemini Flash. The peers share context through one notes file per tab in the local state directory (`herdr-ai-shared/<tab>.md`): each reads it before a task, appends a line when it starts (the task and the files it is touching) and when it finishes or learns something the others need, and checks a peer's pane with `herdr agent read` before editing a file that peer has claimed. They do not prompt each other. Quitting a peer reopens the selector, as in Standard. With handoff on, a peer near its limit hands off only its own pane. All five appear in the Agents sidebar.
+**Off** and **individual** both run five independent agents. Each works for you directly, nobody delegates, and every one runs the provider's strongest model at the picker's effort, never the cheaper crew model: Claude runs Opus 5.5 at the Claude picker effort (medium by default), Codex Sol, Cursor and Kiro Opus, and Antigravity Gemini Flash. Quitting one reopens the selector, as in Standard, and all five appear in the Agents sidebar.
 
-**Lead + crew** (orchestrator) is the lead and four cheaper crew described below.
+With **off**, herdr-ai adds no instructions at all: no appended system prompt, developer instructions, or opening prompt. The agents start exactly as the picker would start them, on that model. Only the iMCP server stays out of Claude and Codex, since five panes connect at once.
+
+With **individual**, the agents share context through one notes file per tab in the local state directory (`herdr-ai-shared/<tab>.md`). Each reads it before a task, appends a line when it starts (the task and the files it is touching) and when it finishes or learns something the others need, and checks a peer's pane with `herdr agent read` before editing a file that peer has claimed. They do not prompt each other. With handoff on, an agent near its limit hands off only its own pane.
+
+**Orchestrator-crew** is the lead and four cheaper crew described below.
 
 Team leads always run Sol 6.1 or Opus 5.5. Claude, Codex, Cursor and Kiro lead their own crew on their team model. Antigravity's Gemini Flash never orchestrates: an Antigravity team is led by the first provider with quota in the order Codex, Claude, then Cursor or Kiro (whichever resets sooner), with all four crew on Gemini Flash. Other teams put Gemini Flash in crew4 when Antigravity is installed, so trivial work (finding files, running commands and summarizing output, exactly specified edits) runs on Antigravity's separate quota. The lead is told which workers are which and to keep design, debugging and review away from Gemini. A team's usage pane shows every provider on the team.
 
@@ -132,7 +136,7 @@ The selector and usage panel reload on every refresh so local UI fixes appear im
 
 `herdr-reset` closes every other pane on the current tab, agents included, and leaves only the pane you run it from, usually the bottom terminal, with its history and directory intact. Run `herdr-ai` from there to lay the tab out again.
 
-To switch a tab between Standard and a team, to a different team, or between the two team modes, run `herdr-reset` and then `herdr-ai`; `herdr-ai --setup` refuses a tab laid out differently, and a team whose lead pane was closed is not rerouted.
+To switch a tab between Standard and a team, to a different team, or between system prompt modes, run `herdr-reset` and then `herdr-ai`; `herdr-ai --setup` refuses a tab laid out differently, and a team whose lead pane was closed is not rerouted.
 
 Rerouting stops the agents, so unsaved conversation state in them is lost. herdr-ai remembers each tab's panes in `herdr-ai-tabs.json` in the local state directory.
 

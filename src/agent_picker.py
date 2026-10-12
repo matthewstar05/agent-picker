@@ -1311,8 +1311,8 @@ def main():
     if args[:1] == ["--picker-help"]:
         print("agent [CLI arguments]                 open picker; forward arguments")
         print("agent --picker-launch NAME [args]     launch a provider directly")
-        print("agent --picker-launch NAME --picker-lead PANES|--picker-crew PANE|--picker-peer PANE")
-        print("                                      launch as a herdr-ai team lead, worker or individual peer")
+        print("agent --picker-launch NAME --picker-lead PANES|--picker-crew PANE|--picker-peer PANE|--picker-plain")
+        print("                                      launch as a herdr-ai team lead, worker, peer or plain peer")
         print("agent --picker-return [--picker-launch NAME]")
         print("                                      reopen the selector when the agent quits")
         print("agent --picker-launch NAME --picker-solo  launch with herdr-ai's usage and handoff rules")
@@ -1372,7 +1372,7 @@ def main():
         os.execv(sys.executable, [sys.executable, str(Path(__file__).resolve()),
                                   "--picker-return", "--picker-launch", AGENTS[index]["name"], *solo, *args])
     agent = AGENTS[index]
-    if args[:1] in (["--picker-lead"], ["--picker-crew"], ["--picker-peer"], ["--picker-solo"]):
+    if args[:1] in (["--picker-lead"], ["--picker-crew"], ["--picker-peer"], ["--picker-plain"], ["--picker-solo"]):
         import team
         agent, args = team.prepare(agent, args)
     argv = resolve_argv(agent)

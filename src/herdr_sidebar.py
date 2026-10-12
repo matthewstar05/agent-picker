@@ -69,8 +69,8 @@ def mark_roles(panes, call=request):
 def restore_roles(state, path, live, call):
     """Migrate saved layouts, checking terminal identity so reused panes stay visible."""
     for key, entry in state.items():
-        if not key.startswith(path + "|") or not entry.get("team") or entry.get("mode") == "individual":
-            continue   # individual peers have no lead or crew; all stay visible
+        if not key.startswith(path + "|") or not entry.get("team") or entry.get("mode") in ("off", "individual"):
+            continue   # these five agents have no lead or crew; all stay visible
         panes = {r: p for r, p in entry.get("panes", {}).items()
                  if p in live and live[p].get("terminal_id") == entry.get("terminals", {}).get(p)}
         mark_roles(panes, call)
