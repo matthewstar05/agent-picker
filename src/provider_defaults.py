@@ -92,6 +92,9 @@ def current(agent):
     if name == "Codex":
         config = {key: value for _, _, key, value in codex_configs(argv)}
         values["fast_mode"] = config.get("service_tier") in ("fast", "priority")
+    if name == "Antigravity":
+        values["system_prompts"] = agent.get("defaults", {}).get(
+            "system_prompts", agent.get("system_prompts", True))
     return values
 
 
@@ -111,6 +114,8 @@ def apply(agent, values):
         raise ValueError("Bypass Permissions must be on or off")
     if agent["name"] == "Codex" and not isinstance(values["fast_mode"], bool):
         raise ValueError("Fast Mode must be on or off")
+    if agent["name"] == "Antigravity" and not isinstance(values["system_prompts"], bool):
+        raise ValueError("System Prompts must be on or off")
     name = agent["name"]
     if name == "Antigravity" and not str(model).startswith("gemini"):
         model = CURSOR_EFFORT.sub("", model)
@@ -207,7 +212,7 @@ def save(agent, values, path):
 
 class Menu:
     LABELS = {"model": "Model", "effort": "Effort", "bypass_permissions": "Bypass Permissions",
-              "fast_mode": "Fast Mode"}
+              "fast_mode": "Fast Mode", "system_prompts": "System Prompts"}
 
     def __init__(self, agent):
         self.agent = agent
@@ -226,7 +231,7 @@ class Menu:
 
     @staticmethod
     def shown(key, value):
-        return ("On" if value else "Off") if key in ("bypass_permissions", "fast_mode") else str(value)
+        return ("On" if value else "Off") if key in ("bypass_permissions", "fast_mode", "system_prompts") else str(value)
 
     def review(self):
         """(label, new) for the model and effort to keep, then (label, old, new) for each change."""
@@ -242,8 +247,10 @@ class Menu:
         if self.agent["name"] == "Codex":
             return ("model", "effort", "bypass_permissions", "fast_mode")
         if str(self.values.get("model", "")).startswith("gemini"):
-            return ("model", "bypass_permissions")
-        return ("model", "effort", "bypass_permissions")
+            fields = ("model", "bypass_permissions")
+        else:
+            fields = ("model", "effort", "bypass_permissions")
+        return fields + (("system_prompts",) if self.agent["name"] == "Antigravity" else ())
 
     def models(self):
         return self.model_rows

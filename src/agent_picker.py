@@ -881,6 +881,8 @@ def render_defaults(menu, cols, rows, t):
         out.append(("gap", "", 0))
         if field == "fast_mode":
             out.append(note("Faster replies use more quota.", bw, accent))
+        if field == "system_prompts":
+            out.append(note("agy context only; herdr-ai adds its own instructions.", bw, accent))
         if menu.error:
             out.append(note(menu.error, bw, HOT))
         elif menu.changed:
@@ -1414,14 +1416,16 @@ def main():
         raise RuntimeError(f"{agent['name']} is not installed. Run --picker-doctor.")
     if args[:1] == ["--"]:
         args = args[1:]
+    import agy_prompts
+    argv = agy_prompts.prepare(agent, argv + args)
     save_last(index)
     defaults = provider_defaults.current(agent)
     if os.environ.get("AGENT_PICKER_NO_PRETRUST") != "1" and (defaults is None or defaults["bypass_permissions"]):
         pretrust(agent)
     print_launch_banner(agent)
     if returning:
-        return launch_and_return(argv + args)
-    return launch(argv + args)
+        return launch_and_return(argv)
+    return launch(argv)
 
 
 def launch_and_return(argv):

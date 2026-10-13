@@ -65,7 +65,7 @@ SHARED = ap.STATE / "herdr-ai-shared"   # one context notes file per tab for ind
 OFF, INDIVIDUAL, ORCHESTRATOR = "off", "individual", "orchestrator"
 MODE = preferences.Setting(
     "herdr_ai.system_prompt", "Herdr AI", "System prompt", [OFF, INDIVIDUAL, ORCHESTRATOR], INDIVIDUAL,
-    hint="Off: five plain agents on the agent picker's model. Individual: the same, sharing context. "
+    hint="Herdr instructions only; provider prompt settings are separate. Off: five plain agents. Individual: sharing context. "
          "Orchestrator-crew: a lead and four crew on herdr-ai's own team models.",
     names={OFF: "off", INDIVIDUAL: "individual", ORCHESTRATOR: "orchestrator-crew"})
 

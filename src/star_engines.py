@@ -110,6 +110,9 @@ class Engine:
     def native(self, session):
         """argv that opens this session in the provider's own interactive UI."""
         base = list(resolve_argv(self.agent) or [])
+        if self.name == "Antigravity" and base:
+            import agy_prompts
+            base = agy_prompts.prepare(self.agent, base)
         if not session:
             return base
         if self.name == "Codex":
@@ -508,7 +511,8 @@ class AntigravityEngine(Engine):
         argv += ["--mode", "plan"] if plan else ["--dangerously-skip-permissions"]
         if session:
             argv += ["--conversation", session]
-        return argv
+        import agy_prompts
+        return agy_prompts.prepare(self.agent, argv)
 
     def parse(self, d, state):
         kind = d.get("event")

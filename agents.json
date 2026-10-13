@@ -185,6 +185,7 @@
   },
   {
     "name": "Antigravity",
+    "system_prompts": true,
     "pastel": "rainbow",
     "gradient": "rainbow",
     "bar_gradient": [
