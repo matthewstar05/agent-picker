@@ -20,7 +20,8 @@ Settings › Visibility lists every provider found on this computer under Usage 
 Each one's card is off, or counts its agents in every Herdr workspace (the
 default), this workspace or this tab, or is always shown, even with none open.
 A card appears once its provider is open in this tab, or wider with universal
-display. Off cards still show while Tab is held.
+display. Off cards still show while Tab is held, except for a CLI hidden on the
+Visibility page.
 
 Keys: t / → next theme, T / ← previous, r refresh now, a toggle animation,
 hold Tab to see every connected provider until it's let go, s settings,
@@ -586,7 +587,7 @@ class View:
         peek = self.peeking()
         with LOCK:
             return [a for a in self.installed if a["name"] in PRESENT
-                    or (peek and (a["name"] in ap.FETCHERS or a["name"] == STAR))
+                    or (peek and (a["name"] in ap.FETCHERS or a["name"] == STAR) and ap.is_shown(a))
                     or card_mode(a["name"]) == "always"]
 
     def peeking(self):

@@ -124,8 +124,11 @@ def star_setup():
 
 
 def setups():
+    """The setup menu's rows. A CLI hidden on the Visibility page is left out,
+    as in the agent selector; --setup NAME still lays it out."""
     star = star_setup()
-    return [STANDARD] + [option(a) for a in providers()] + ([star] if star else [])
+    return ([STANDARD] + [option(a) for a in providers() if ap.is_shown(a)]
+            + ([star] if star and ap.is_shown(star) else []))
 
 
 def find(name):

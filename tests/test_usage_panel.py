@@ -415,6 +415,11 @@ class CardScopeTests(unittest.TestCase):
         panel.handle(self.view, "release:\t", [], releases=True)
         self.assertEqual(self.names(), [])
 
+    def test_holding_tab_leaves_out_clis_hidden_on_the_visibility_page(self):
+        preferences.put("shown.Codex", False)
+        panel.handle(self.view, "\t", [], releases=True)
+        self.assertEqual(set(self.names()), set(panel.ap.FETCHERS) - {"Codex"})
+
     def test_without_release_events_key_repeat_keeps_the_peek_open(self):
         with patch.object(panel.time, "time", return_value=1000.0):
             panel.handle(self.view, "\t", [])

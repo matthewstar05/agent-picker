@@ -305,7 +305,16 @@ class TeamTests(unittest.TestCase):
             self.assertEqual(team.find("ANTIGRAVITY"), "Antigravity")
             with self.assertRaisesRegex(ValueError, "unknown setup 'nope'.*standard, star, claude"):
                 team.find("nope")
-            self.assertEqual([s["name"] for s in team.setups()], ["Standard"] + list(TEAM) + ["Star"])
+            with tempfile.TemporaryDirectory() as folder, \
+                    patch.object(picker.preferences, "PATH", Path(folder) / "preferences.json"), \
+                    patch.object(picker.preferences, "_values", None):
+                # Star starts hidden, as in the agent selector; --setup star still finds it.
+                self.assertEqual([s["name"] for s in team.setups()], ["Standard"] + list(TEAM))
+                self.assertEqual(team.find("star"), "Star")
+                picker.preferences.put(picker.shown_setting(self.agents["Star"]).key, True)
+                picker.preferences.put(picker.shown_setting(self.agents["Codex"]).key, False)
+                self.assertEqual([s["name"] for s in team.setups()],
+                                 ["Standard"] + [n for n in TEAM if n != "Codex"] + ["Star"])
 
     def test_main_launches_crew_with_fake_cli(self):
         with tempfile.TemporaryDirectory(prefix="team test ") as folder:

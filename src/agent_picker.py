@@ -169,9 +169,10 @@ def shown_setting(agent):
     """The Visibility row that hides an installed CLI from the agent selector.
     An agents.json entry with "shown": false starts hidden until the user shows it."""
     return preferences.register(preferences.Setting(
-        SHOWN_KEY + agent["name"], "Agent selector", agent["name"], [True, False],
+        SHOWN_KEY + agent["name"], "Agent selector and herdr-ai", agent["name"], [True, False],
         agent.get("shown", True) is not False,
-        hint="Hide a CLI from the selector. --picker-launch and herdr-ai still run it.",
+        hint="Hide a CLI from the selector, herdr-ai's setup menu and the usage Tab peek. "
+             "--picker-launch and herdr-ai --setup still run it.",
         names={True: "shown", False: "hidden"}), parent=VISIBILITY)
 
 
@@ -185,9 +186,15 @@ def visibility_rows(agents):
         usage_panel.card_setting(agent["name"])
 
 
+def is_shown(agent):
+    """Whether the Visibility page lists this CLI: the selector, herdr-ai's
+    setup menu and the usage panel's Tab peek all follow it."""
+    return preferences.get(shown_setting(agent).key) is True
+
+
 def shown(agents):
     """The agents the selector lists: all but the hidden ones, or all if every one is hidden."""
-    return [a for a in agents if preferences.get(shown_setting(a).key)] or list(agents)
+    return [a for a in agents if is_shown(a)] or list(agents)
 
 
 # ---- usage limits -----------------------------------------------------------
