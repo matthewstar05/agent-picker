@@ -26,7 +26,11 @@ def load_agents():
     if unknown:
         raise ValueError("unknown agent overrides: " + ", ".join(sorted(unknown)))
     for agent in agents:
-        agent.update(overrides.get("agents", {}).get(agent["name"], {}))
+        override = dict(overrides.get("agents", {}).get(agent["name"], {}))
+        if isinstance(override.get("team"), dict) and agent.get("team"):
+            # herdr-ai's team models: each saved role replaces only that role.
+            override["team"] = dict(agent["team"], **override["team"])
+        agent.update(override)
         command = agent.pop("command", None)
         if command is not None:
             if not isinstance(command, str) or not command:

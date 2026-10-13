@@ -40,24 +40,24 @@ class TeamTests(unittest.TestCase):
         self.assertEqual(agent, before, "prepare must not change the shared profile")
         return prepared, args
 
-    def test_summaries_name_lead_then_crew(self):
-        expected = {"Claude": "opus → haiku", "Codex": "sol → luna", "Antigravity": "sol/opus → flash high",
-                    "Cursor": "opus → grok", "Kiro": "opus → sonnet"}
+    def test_orchestrator_summaries_name_the_orchestrators_model(self):
+        expected = {"Claude": "claude-opus-5-5", "Codex": "gpt-6.1-sol", "Antigravity": "gpt-6.1-sol",
+                    "Cursor": "claude-opus-5-5", "Kiro": "claude-opus-5.5"}
         for name, text in expected.items():
-            with patch.object(team, "mode", return_value=team.ORCHESTRATOR):
+            with patch.object(team, "mode", return_value=team.ORCHESTRATOR), \
+                 patch.object(team.handoff, "orchestrator", return_value="Codex"):
                 self.assertEqual(team.summary(self.agents[name]), text, name)
                 self.assertEqual(team.option(self.agents[name])["short"], text, name)
 
-    def test_individual_summaries_name_the_strongest_model(self):
-        expected = {"Claude": "5 × opus", "Codex": "5 × sol", "Antigravity": "5 × flash high",
-                    "Cursor": "5 × opus", "Kiro": "5 × opus"}
+    def test_individual_and_plain_summaries_name_the_picker_model(self):
+        # Fixture picker defaults (Claude's "opus" alias); the label shows the model as launched.
+        expected = {"Claude": "opus", "Codex": "gpt-6.1-sol", "Antigravity": "gemini-3.8-flash-high",
+                    "Cursor": "grok-4.7", "Kiro": "claude-opus-5.5"}
         for name, text in expected.items():
-            self.assertEqual(team.summary(self.agents[name], team.INDIVIDUAL), text, name)
+            for kind in (team.INDIVIDUAL, team.OFF):
+                self.assertEqual(team.summary(self.agents[name], kind), text, name)
 
-    def test_plain_summaries_say_plain(self):
-        self.assertEqual(team.summary(self.agents["Claude"], team.OFF), "5 × opus · plain")
-
-    def test_system_prompt_off_launches_the_strongest_model_with_no_instructions(self):
+    def test_system_prompt_off_launches_the_picker_model_with_no_instructions(self):
         for name in TEAM:
             agent = self.agents[name]
             before = json.loads(json.dumps(agent))
@@ -68,7 +68,7 @@ class TeamTests(unittest.TestCase):
             for brief in ("--append-system-prompt", "developer_instructions", "herdr agent", "standing instructions"):
                 self.assertNotIn(brief, text, name)
             values = provider_defaults.current(prepared)
-            self.assertEqual(values["model"], team.individual_config(agent)["model"], name)
+            self.assertEqual(values, provider_defaults.current(agent), name)
         claude, _ = team.prepare(self.agents["Claude"], ["--picker-plain"])
         self.assertEqual(provider_defaults.current(claude)["effort"], "medium")
         self.assertIn("--settings", claude["argv"])   # iMCP still stays out
@@ -90,11 +90,11 @@ class TeamTests(unittest.TestCase):
         self.assertEqual(agent, before, "prepare must not change the shared profile")
         return prepared, args, str(notes)
 
-    def test_individual_peers_run_the_strongest_model_at_picker_effort(self):
+    def test_individual_peers_run_the_picker_model_and_effort(self):
         claude, _, _ = self.peer("Claude")
         values = provider_defaults.current(claude)
-        self.assertEqual(values["model"], "claude-opus-5-5")
-        self.assertEqual(values["effort"], "medium")   # the picker's Claude effort, not the lead's high
+        self.assertEqual(values["model"], "opus")      # the picker's Claude model, not the lead's
+        self.assertEqual(values["effort"], "medium")   # and its effort, not the lead's high
         self.assertTrue(values["bypass_permissions"])
         codex, _, _ = self.peer("Codex")
         self.assertEqual(provider_defaults.current(codex)["model"], "gpt-6.1-sol")
@@ -115,14 +115,73 @@ class TeamTests(unittest.TestCase):
         kiro, args, _ = self.peer("Kiro")
         self.assertIn("nobody leads", args[-1])   # flagless CLIs read it as the opening prompt
 
-    def test_nick_shortens_model_ids(self):
+    def test_peers_follow_a_model_changed_in_the_picker(self):
+        provider_defaults.apply(self.agents["Claude"], {"model": "claude-sonnet-5-5", "effort": "low"})
+        for args in (["--picker-plain"], ["--picker-peer", "w:p2"]):
+            with tempfile.TemporaryDirectory() as folder, patch.object(team, "SHARED", Path(folder)):
+                prepared, _ = team.prepare(self.agents["Claude"], args)
+            values = provider_defaults.current(prepared)
+            self.assertEqual((values["model"], values["effort"]), ("claude-sonnet-5-5", "low"), args)
+        self.assertEqual(team.summary(self.agents["Claude"], team.INDIVIDUAL), "claude-sonnet-5-5")
+        lead, _ = self.prepare("Claude", "--picker-lead", "w:p2")   # the team keeps its own models
+        self.assertEqual(provider_defaults.current(lead)["model"], "claude-opus-5-5")
+
+    def test_right_arrow_opens_picker_defaults_or_team_models_by_mode(self):
+        with patch.object(team, "providers", return_value=list(self.agents.values())[1:6]):
+            for kind in (team.OFF, team.INDIVIDUAL):
+                with patch.object(team, "mode", return_value=kind):
+                    menu = team.models_menu("Claude")
+                self.assertIs(type(menu), provider_defaults.Menu, kind)
+                self.assertIs(menu.agent, self.agents["Claude"], "edits the picker's own profile")
+            with patch.object(team, "mode", return_value=team.ORCHESTRATOR):
+                self.assertIsInstance(team.models_menu("Claude"), team.TeamMenu)
+            self.assertIsNone(team.models_menu("Standard"))
+
+    def test_team_menu_edits_lead_and_crew_and_saves_locally(self):
         claude = self.agents["Claude"]
-        self.assertEqual(team.nick(claude, "claude-opus-5-5"), "opus")
-        self.assertEqual(team.nick(claude, "gpt-6.1-sol"), "sol")
-        self.assertEqual(team.nick(claude, "gpt-6-luna"), "luna")
-        self.assertEqual(team.nick(claude, "gemini-3.8-flash-high"), "flash high")
-        self.assertEqual(team.nick(claude, "grok-4.7"), "grok")
-        self.assertEqual(team.nick(claude, "claude-haiku-4.5"), "haiku")
+        menu = team.TeamMenu(claude)
+        self.assertEqual(menu.fields(), ("role", "model", "effort"))
+        self.assertEqual((menu.values["model"], menu.values["effort"]), ("claude-opus-5-5", "high"))
+        menu.handle("down"); menu.handle("down"); menu.handle("right")   # lead effort high -> xhigh
+        menu.index = 0
+        menu.handle("right")                                            # role: crew
+        self.assertEqual(menu.values["model"], "claude-haiku-5-5")
+        menu.handle("down"); menu.handle("\r")                          # browse models
+        menu.model_index = next(i for i, r in enumerate(menu.models()) if r["id"] == "claude-opus-5-5")
+        menu.handle("\r")
+        self.assertTrue(menu.changed)
+        _, delta = menu.review()
+        self.assertEqual(delta, [("Lead effort", "high", "xhigh"), ("Crew model", "claude-haiku-5-5", "claude-opus-5-5")])
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "config.json"
+            path.write_text(json.dumps({"agents": {"Claude": {"defaults": {"model": "opus", "effort": "low",
+                                                                          "bypass_permissions": True}}}}))
+            menu.save(path)
+            data = json.loads(path.read_text())["agents"]["Claude"]
+            self.assertEqual(data["defaults"]["model"], "opus", "the picker's defaults stay put")
+            self.assertEqual(data["team"], {"lead": {"model": "claude-opus-5-5", "effort": "xhigh"},
+                                            "crew": {"model": "claude-opus-5-5", "effort": "high"}})
+            self.assertFalse(menu.changed)
+            with patch.dict(os.environ, {"AGENT_PICKER_CONFIG": str(path)}):
+                loaded = {a["name"]: a for a in settings.load_agents()}
+        self.assertEqual(loaded["Claude"]["team"]["lead"]["effort"], "xhigh")
+        self.assertEqual(provider_defaults.current(loaded["Claude"])["model"], "opus")
+        self.assertEqual(claude["team"]["crew"]["model"], "claude-opus-5-5")   # the running menu sees it too
+        lead, _ = team.prepare(claude, ["--picker-lead", "w:p2"])
+        self.assertEqual(provider_defaults.current(lead)["effort"], "xhigh")
+
+    def test_saved_team_role_leaves_the_other_role_shared(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "config.json"
+            path.write_text(json.dumps({"agents": {"Codex": {"team": {"crew": {"model": "gpt-6.1-sol", "effort": "low"}}}}}))
+            with patch.dict(os.environ, {"AGENT_PICKER_CONFIG": str(path)}):
+                codex = {a["name"]: a for a in settings.load_agents()}["Codex"]
+        self.assertEqual(codex["team"]["lead"], self.agents["Codex"]["team"]["lead"])
+        self.assertEqual(codex["team"]["crew"], {"model": "gpt-6.1-sol", "effort": "low"})
+
+    def test_antigravity_team_menu_has_only_its_crew(self):
+        menu = team.TeamMenu(self.agents["Antigravity"])
+        self.assertEqual(menu.fields(), ("model",))   # one role, and Gemini encodes its effort
 
     def test_lead_and_crew_models_and_effort(self):
         for name in TEAM:

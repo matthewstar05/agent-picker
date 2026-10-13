@@ -2,11 +2,14 @@
 
 A provider's setup follows the "System prompt" setting (m in the menu cycles it).
 Off and individual both open five agents that each work for the user directly,
-all on the provider's strongest model at its picker effort (Claude: Opus at the
-picker's effort). Off gives them no herdr-ai instructions at all. Individual, the
-default, tells them about each other: they share context through one notes file
-per tab and can read each other's panes, but nobody delegates.
-Orchestrator-crew is the lead and crew below.
+all on the model and effort the agent picker launches that provider with: the
+picker's defaults screen and herdr-ai's (→ on the row) edit the same setting.
+Off gives them no herdr-ai instructions at all. Individual, the default, tells
+them about each other: they share context through one notes file per tab and can
+read each other's panes, but nobody delegates.
+Orchestrator-crew is the lead and crew below, with models of its own: → on the
+row edits the lead's and the crew's model and effort, saved as the provider's
+"team" in the local config, apart from the picker's defaults.
 
 A team is one lead agent beside four crew agents. The lead always runs Sol or
 Opus: the provider's strongest model, or for Antigravity, whose Gemini Flash
@@ -18,7 +21,7 @@ The lead
 is told to hand searches, test runs, and well specified edits to the crew
 panes through herdr, so its own context and quota stay small. The crew are told
 to answer in a short summary the lead can read cheaply. Each provider's pair of
-models is the "team" entry of its profile in agents.json.
+models is the "team" entry of its profile in agents.json, or the local config's.
 
 Instructions reach each CLI the way it supports: Claude appends them to its
 system prompt, Codex takes them as developer instructions. Kiro, Cursor and
@@ -39,6 +42,7 @@ import time
 
 import agent_picker as ap
 import handoff
+import model_catalog
 import provider_defaults
 import preferences
 import herdr_sidebar
@@ -53,16 +57,16 @@ STANDARD = {
     "model": "every provider", "short": "every provider",
     "aside": ["Claude · Codex · Antigravity", "Cursor/Kiro · selector · usage"],
 }
-HINTS = [" ↑↓ move · ⏎ lay out · m mode · s settings · esc quit ", " ⏎ lay out · m mode · esc quit ",
-         " ⏎ lay out ", ""]
+HINTS = [" ↑↓ move · → models · ⏎ lay out · m mode · s settings · esc quit ",
+         " → models · ⏎ lay out · m mode · esc quit ", " ⏎ lay out ", ""]
 LAST = ap.STATE / "herdr-ai-setup"
 SHARED = ap.STATE / "herdr-ai-shared"   # one context notes file per tab for individual peers
 
 OFF, INDIVIDUAL, ORCHESTRATOR = "off", "individual", "orchestrator"
 MODE = preferences.Setting(
     "herdr_ai.system_prompt", "Herdr AI", "System prompt", [OFF, INDIVIDUAL, ORCHESTRATOR], INDIVIDUAL,
-    hint="Off: five plain agents on the strongest model. Individual: the same, sharing context. "
-         "Orchestrator-crew: a lead and four cheaper crew.",
+    hint="Off: five plain agents on the agent picker's model. Individual: the same, sharing context. "
+         "Orchestrator-crew: a lead and four crew on herdr-ai's own team models.",
     names={OFF: "off", INDIVIDUAL: "individual", ORCHESTRATOR: "orchestrator-crew"})
 
 
@@ -78,16 +82,10 @@ def next_mode():
     return choices[(choices.index(mode()) + 1) % len(choices)]
 
 
-def individual_config(agent):
-    """The model an individual peer runs: the team's strongest (its lead model, or the
-    only model a lead-less team has) at the provider's picker effort, so a Claude peer
-    runs Opus at the effort the picker launches Claude with."""
-    team = agent.get("team") or {}
-    config = team.get("lead") or team.get("crew")
-    if not config:
-        return None
+def picker_model(agent):
+    """The model an off or individual agent runs: the one the agent picker launches."""
     values = provider_defaults.current(agent) or {}
-    return {"model": config["model"], "effort": values.get("effort") or config.get("effort", "provider default")}
+    return values.get("model") or agent.get("model", "")
 
 
 def providers():
@@ -95,29 +93,18 @@ def providers():
     return [a for a in ap.AGENTS if a.get("team") and ap.installed(a)]
 
 
-def nick(agent, model):
-    """A model's family in a word or two: claude-opus-5-5 -> opus, gpt-6.1-sol -> sol."""
-    name = model.lower()
-    if name.startswith("gemini-"):
-        return " ".join(name.split("-")[2:]) or name   # gemini-3.8-flash-high -> flash high
-    name = re.sub(r"^(claude|cursor|gpt)-", "", name)
-    words = [w for w in re.split(r"[-_ ]", name) if w and not re.match(r"^[\d.]+$", w)]
-    return words[-1] if model.lower().startswith("gpt-") and words else (words[0] if words else model)
-
-
 def summary(agent, kind=None):
-    """'opus → haiku': the lead's model, then the crew's. Individual: '5 × opus';
-    with the system prompt off: '5 × opus · plain'."""
+    """The exact model name: the picker's model with the system prompt off or
+    individual, or the orchestrator's model in orchestrator-crew."""
     kind = kind or mode()
     if kind in (INDIVIDUAL, OFF):
-        return "5 × " + nick(agent, individual_config(agent)["model"]) + (" · plain" if kind == OFF else "")
+        return picker_model(agent)
     if "lead" not in agent["team"]:   # led by another provider's Sol or Opus
-        return "sol/opus → " + nick(agent, agent["team"]["crew"]["model"])
-    lead, crew = (nick(agent, agent["team"][r]["model"]) for r in ("lead", "crew"))
-    shared = lead.split(" ")[0]
-    if " " in lead and crew.startswith(shared + " "):
-        crew = crew[len(shared) + 1:]   # flash high → low
-    return f"{lead} → {crew}"
+        lead = handoff.orchestrator(usage=handoff.read_usage([], refresh=False))
+        agent = next((a for a in ap.AGENTS if a["name"] == lead and "lead" in a.get("team", {})), None)
+        if agent is None:
+            return "sol/opus"
+    return agent["team"]["lead"]["model"]
 
 
 def option(agent):
@@ -326,33 +313,28 @@ def prepare(agent, args):
     return instruct(agent, args, brief, opening=lead or solo, shared=not solo)
 
 
-def strongest(agent, label):
-    """A copy of agent on the team's strongest model (see individual_config)."""
+def as_picked(agent, label):
+    """A copy of agent as the picker launches it, its model and effort included."""
     agent = copy.deepcopy(agent)
-    config = individual_config(agent)
-    if not config:
-        raise ValueError(f"{agent['name']} has no team in agents.json")
-    if provider_defaults.current(agent) is not None:
-        provider_defaults.apply(agent, config)
     agent["detail"] = label + " · " + agent.get("detail", "")
     return agent
 
 
 def prepare_peer(agent, args):
-    """An individual peer: the team's strongest model, told who its peers are."""
+    """An individual peer: the picker's model, told who its peers are."""
     if len(args) < 2:
         raise ValueError("--picker-peer needs its pane id")
     me, (extra, args) = args[1], options(list(args[2:]), ("--picker-peers", "--picker-usage-pane"))
     peers = [p for p in (extra.get("--picker-peers") or me).split(",") if p]
-    agent = strongest(agent, "peer")
+    agent = as_picked(agent, "peer")
     brief = peer_brief(agent, me, peers, extra.get("--picker-usage-pane"))
     return instruct(agent, args, brief, opening=True, shared=True)
 
 
 def prepare_plain(agent, args):
-    """A peer with the system prompt off: the strongest model and no instructions.
+    """A peer with the system prompt off: the picker's model and no instructions.
     Only iMCP stays out, since five panes start at once."""
-    agent = strongest(agent, "plain")
+    agent = as_picked(agent, "plain")
     if agent["name"] == "Claude":
         agent["argv"] += ["--settings", claude_settings()]
     elif agent["name"] == "Codex":
@@ -377,6 +359,111 @@ def instruct(agent, args, brief, opening, shared):
         opening = brief + "\n\nThese are your standing instructions for this session. Reply only: ready."
         args += ["-i", opening] if name == "Antigravity" else [opening]
     return agent, args
+
+
+# ---- team models ---------------------------------------------------------------
+
+ROLES = ("lead", "crew")
+
+
+class TeamMenu(provider_defaults.Menu):
+    """The orchestrator-crew models of a provider: the picker's defaults screen with a
+    Role row that switches between editing the lead and the crew."""
+    LABELS = dict(provider_defaults.Menu.LABELS, role="Role")
+    TITLE = "{} team models"
+
+    def __init__(self, agent):
+        self.agent = agent
+        team = agent.get("team") or {}
+        self.roles = [r for r in ROLES if r in team]
+        self.role = self.roles[0]
+        self.originals = {r: {"role": r, "model": team[r]["model"],
+                              "effort": team[r].get("effort", "provider default")} for r in self.roles}
+        self.edits = copy.deepcopy(self.originals)
+        self.model_rows = model_catalog.options(agent, "")
+        for r in reversed(self.roles):   # both roles' current models stay choosable
+            model = self.edits[r]["model"]
+            if not any(row["id"] == model for row in self.model_rows):
+                self.model_rows.insert(0, {"id": model, "name": model + " (current)",
+                                           "efforts": [] if model.startswith("gemini") else None})
+        self.index = 0
+        self.error = ""
+        self.browsing = False
+        self.model_index = 0
+        model_catalog.request(agent)
+
+    @property
+    def values(self):
+        return self.edits[self.role]
+
+    @property
+    def original(self):
+        return self.originals[self.role]
+
+    @property
+    def changed(self):
+        return self.edits != self.originals
+
+    def fields(self):
+        effort = () if str(self.values["model"]).startswith("gemini") else ("effort",)
+        return (("role",) if len(self.roles) > 1 else ()) + ("model",) + effort
+
+    def handle(self, key):
+        if not self.browsing and key in ("left", "right", "\r", "\n", " "):
+            self.index = min(self.index, len(self.fields()) - 1)
+            if self.fields()[self.index] == "role":
+                step = -1 if key == "left" else 1
+                self.role = self.roles[(self.roles.index(self.role) + step) % len(self.roles)]
+                self.error = ""
+                return None
+        return super().handle(key)
+
+    def review(self):
+        selection, delta = [], []
+        for r in self.roles:
+            new, old = self.edits[r], self.originals[r]
+            selection.append((f"{r.title()} model", f"{new['model']} · {new['effort']}"))
+            delta += [(f"{r.title()} {self.LABELS[k].lower()}", old[k], new[k])
+                      for k in ("model", "effort") if old[k] != new[k]]
+        return selection, delta
+
+    def save(self, path=None):
+        save_team(self.agent, {r: {k: self.edits[r][k] for k in ("model", "effort")} for r in self.roles}, path)
+        self.originals = copy.deepcopy(self.edits)
+
+
+def save_team(agent, roles, path=None):
+    """Store a provider's orchestrator-crew models in the local config, and in agent."""
+    import settings
+    path = path or settings.config_path()
+    for config in roles.values():
+        model = config.get("model")
+        if not isinstance(model, str) or not model.strip() or any(ord(c) < 32 for c in model):
+            raise ValueError(f"{agent['name']}: model must be a nonempty model identifier")
+    data = json.loads(path.read_text(encoding="utf-8-sig")) if path.exists() else {}
+    saved = data.setdefault("agents", {}).setdefault(agent["name"], {}).setdefault("team", {})
+    for role, config in roles.items():
+        saved[role] = dict(config)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=".team-", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write(json.dumps(data, indent=2) + "\n")
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+    agent["team"] = dict(agent.get("team") or {}, **{r: dict(c) for r, c in roles.items()})
+
+
+def models_menu(name):
+    """→ on a setup row: the picker's defaults for off and individual, which their
+    agents launch with, or the team's own models for orchestrator-crew. None for a
+    row with neither (Standard, Star)."""
+    agent = next((a for a in providers() if a["name"] == name), None)
+    if agent is None:
+        return None
+    return TeamMenu(agent) if mode() == ORCHESTRATOR else provider_defaults.Menu(agent)
 
 
 # ---- the setup menu ----------------------------------------------------------
@@ -425,14 +512,24 @@ def choose(settings_only=False):
     start = time.monotonic()
     menu = preferences.Menu([preferences.register(s) for s in (*herdr_sidebar.SETTINGS, ap.BARS, handoff.AUTO, MODE)])
     settings_open = settings_only
+    models = None          # a provider's models screen (models_menu), while open
+    confirming, choice = False, 0
     notices = []
 
     def draw(sweep=None):
         cols, rows = shutil.get_terminal_size((80, 24))
         t = time.monotonic() - start
         lines = (ap.render_settings(menu, cols, rows, t, STANDARD) if settings_open else
+                 ap.render_back_confirmation(models, choice, cols, rows, t) if confirming else
+                 ap.render_defaults(models, cols, rows, t) if models else
                  ap.render(selected, available, t, cols, rows, sweep, options, title="herdr-ai", hints=HINTS))
         writer.show(ap.centered(lines, cols, rows), cols, rows)
+
+    def close_models():
+        nonlocal models, confirming
+        models, confirming = None, False
+        options[:] = setups()   # the summaries name the models
+        writer.reset()
 
     out.write(f"{ap.ESC}[?1049h{ap.ESC}[?25l{ap.ESC}[?7l")  # alt screen, hide cursor, no autowrap
     out.flush()
@@ -468,9 +565,47 @@ def choose(settings_only=False):
                     writer.reset()
                 draw()
                 continue
+            if confirming:
+                if key in ("left", "right", "up", "down", "\t"):
+                    choice = 1 - choice
+                elif key in ("s", "S", "y", "Y") or (key in ("\r", "\n", " ") and choice == 0):
+                    try:
+                        if isinstance(models, TeamMenu):
+                            models.save()
+                        else:
+                            import settings
+                            provider_defaults.save(models.agent, models.values, settings.config_path())
+                        close_models()
+                    except (OSError, ValueError) as exc:
+                        models.error, confirming = f"Could not save: {exc}", False
+                        writer.reset()
+                elif key in ("\r", "\n", " ", "d", "D", "n", "N"):
+                    close_models()
+                elif key in ("esc", "q"):
+                    confirming = False
+                    writer.reset()
+                elif key in ("\x03", "\x04"):
+                    return None
+                draw()
+                continue
+            if models:
+                if key in ("\x03", "\x04"):
+                    return None
+                if models.handle(key) == "save":
+                    if models.changed:
+                        confirming, choice = True, 0
+                        writer.reset()
+                    else:
+                        close_models()
+                draw()
+                continue
             if key == "s":
                 settings_open = True
                 writer.reset()
+            elif key == "right":
+                models = models_menu(options[selected]["name"])
+                if models:
+                    writer.reset()
             elif key == "m":
                 preferences.put(MODE.key, next_mode())
                 options[:] = setups()

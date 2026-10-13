@@ -22,13 +22,12 @@ best provider with quota.
 A provider's setup follows the "System prompt" setting (m in the menu cycles it,
 or herdr-ai --settings): off, individual, or orchestrator-crew. Off and
 individual put five independent agents in the grid below, every one on the
-provider's strongest model (Claude: Opus at the picker's effort), with no lead
-and no cheaper crew. Off gives them no herdr-ai instructions at all. Individual,
+model the agent picker launches the provider with, with no lead and no crew. Off gives them no herdr-ai instructions at all. Individual,
 the default, has them share context through a notes file for the tab and read
 each other's panes (see team.peer_brief). Orchestrator-crew is the lead and crew:
 
 A provider's team is a lead agent on Sol or Opus beside four crew agents on a
-cheaper model (the "team" entry in agents.json). The lead is the provider's own
+cheaper model (the "team" entry in agents.json, which herdr-ai's → edits locally). The lead is the provider's own
 strongest model, except that an Antigravity team, whose Gemini Flash should not
 orchestrate, is led by Codex, Claude, Cursor or Kiro, whichever has quota first.
 Other teams put Gemini Flash in crew4, on Antigravity's separate quota, for

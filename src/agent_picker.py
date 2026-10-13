@@ -821,14 +821,15 @@ def render_defaults(menu, cols, rows, t):
     accent = tuple(agent.get("pastel")) if isinstance(agent.get("pastel"), list) else agent["color"]
     if menu.browsing:
         return render_models(menu, cols, rows, t, accent)
+    title = getattr(menu, "TITLE", "{} defaults").format(name)
     if menu.original is None:
         message = "Defaults are managed by this provider."
-        return panel(f"{name} defaults", lambda bw: [note(message, bw)], [" esc back ", ""], cols, rows, t,
-                     [(f"{name} defaults", True), (message, False)])
+        return panel(title, lambda bw: [note(message, bw)], [" esc back ", ""], cols, rows, t,
+                     [(title, True), (message, False)])
     fields = menu.fields()
     menu.index = min(menu.index, len(fields) - 1)
     field = fields[menu.index]
-    hint = {"model": "⏎ browse models", "effort": "←→ cycle effort"}.get(field, "←→ toggle")
+    hint = {"model": "⏎ browse models", "effort": "←→ cycle effort", "role": "←→ lead or crew"}.get(field, "←→ toggle")
 
     def body(bw):
         out = [("row", "  " + fg(agent["color"]) + "●" + RESET + " " + fg(accent) + BOLD + clip(name, bw - 2) + RESET,
@@ -855,11 +856,11 @@ def render_defaults(menu, cols, rows, t):
             out.append(note("✓ saved locally", bw, OK))
         return out
 
-    plain = [(f"{name} defaults", False)] + [
+    plain = [(title, False)] + [
         (("❯ " if i == menu.index else "  ") + menu.LABELS[k] + ": " + menu.shown(k, menu.values[k]), i == menu.index)
         for i, k in enumerate(fields)] + [(menu.error or hint, False)]
     hints = [f" ↑↓ move · {hint} · esc back ", f" {hint} · esc back ", " esc back ", ""]
-    return panel(f"{name} defaults", body, hints, cols, rows, t, plain)
+    return panel(title, body, hints, cols, rows, t, plain)
 
 
 def render_models(menu, cols, rows, t, accent):
