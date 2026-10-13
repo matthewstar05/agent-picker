@@ -75,7 +75,7 @@ class SidebarTests(unittest.TestCase):
         self.assertEqual(preferences.get(sidebar.ORDER.key), "priority")
         terminal = MagicMock()
         terminal.wait.return_value = True
-        terminal.read_key.side_effect = ["down", "left", "esc"]
+        terminal.read_key.side_effect = ["down", "down", "left", "esc"]   # past Visibility
         with patch.object(team, "Terminal", return_value=terminal), \
              patch.object(team.ap, "Screen", return_value=Mock()), \
              patch.object(team.sys, "stdout", io.StringIO()), \
@@ -208,7 +208,7 @@ class SidebarTests(unittest.TestCase):
     def test_settings_only_exits_without_launch_or_usage_fetch(self):
         terminal = MagicMock()
         terminal.wait.return_value = True
-        terminal.read_key.side_effect = ["left", "esc"]
+        terminal.read_key.side_effect = ["down", "left", "esc"]
         with patch.object(team, "Terminal", return_value=terminal), \
              patch.object(team.ap, "Screen", return_value=Mock()), \
              patch.object(team, "refresh_usage") as refresh, \
@@ -219,10 +219,29 @@ class SidebarTests(unittest.TestCase):
         sync.assert_called_once()
         refresh.assert_not_called()
 
+    def test_herdr_ai_settings_open_the_shared_visibility_page(self):
+        terminal = MagicMock()
+        terminal.wait.return_value = True
+        terminal.read_key.side_effect = ["\r", "esc", "esc"]
+        menus = []
+        real = preferences.Menu
+        with patch.object(team, "Terminal", return_value=terminal), \
+             patch.object(team.ap, "Screen", return_value=Mock()), \
+             patch.object(team.ap, "installed", side_effect=lambda a: a["name"] in ("Star", "Codex")), \
+             patch.object(team.preferences, "Menu", side_effect=lambda *a: menus.append(real(*a)) or menus[-1]), \
+             patch.object(team.sys, "stdout", io.StringIO()), \
+             patch.object(sidebar, "sync"):
+            self.assertIsNone(team.choose(settings_only=True))
+        self.assertIs(menus[0].items[0], ap.VISIBILITY)
+        keys = [s.key for s in ap.VISIBILITY.children]
+        self.assertIn("shown.Star", keys)
+        self.assertIn("usage.card.Codex", keys)
+        self.assertFalse(preferences.get("shown.Star"))   # hidden until shown
+
     def test_bars_setting_is_in_herdr_ai_settings_without_resyncing_sidebar(self):
         terminal = MagicMock()
         terminal.wait.return_value = True
-        terminal.read_key.side_effect = ["down", "down", "right", "esc"]
+        terminal.read_key.side_effect = ["down", "down", "down", "right", "esc"]
         with patch.object(team, "Terminal", return_value=terminal), \
              patch.object(team.ap, "Screen", return_value=Mock()), \
              patch.object(team.sys, "stdout", io.StringIO()), \

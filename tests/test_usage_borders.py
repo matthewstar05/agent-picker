@@ -33,7 +33,7 @@ class UsageBorderTests(unittest.TestCase):
         if hasattr(panel, "preferences"):
             for patcher in (patch.object(panel.preferences, "PATH", Path(folder.name) / "preferences.json"),
                             patch.object(panel.preferences, "_values", {}),
-                            patch.object(panel.CARDS_PAGE, "children", list(panel.CARDS_PAGE.children))):
+                            patch.object(panel.ap.VISIBILITY, "children", list(panel.ap.VISIBILITY.children))):
                 patcher.start()
                 self.addCleanup(patcher.stop)
         self.saved = dict(panel.USAGE), dict(panel.WORKING)

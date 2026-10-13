@@ -510,7 +510,9 @@ def choose(settings_only=False):
     writer = ap.Screen(terminal)
     out = sys.stdout
     start = time.monotonic()
-    menu = preferences.Menu([preferences.register(s) for s in (*herdr_sidebar.SETTINGS, ap.BARS, handoff.AUTO, MODE)])
+    ap.visibility_rows([a for a in ap.AGENTS if ap.installed(a)])
+    menu = preferences.Menu([preferences.register(s) for s in
+                             (ap.VISIBILITY, *herdr_sidebar.SETTINGS, ap.BARS, handoff.AUTO, MODE)])
     settings_open = settings_only
     models = None          # a provider's models screen (models_menu), while open
     confirming, choice = False, 0

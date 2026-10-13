@@ -321,8 +321,8 @@ a.main()
             ready, acknowledged = root / "ready", root / "keys"
             process = subprocess.Popen([sys.executable, "-c", code, str(ROOT / "src"), str(ready), str(acknowledged)], stdin=slave, stdout=slave, stderr=slave, env=env)
             output = b""
-            # Star leads the selector; one Down reaches Claude.
-            keys = [b"\x1b[B", b"\x1b[C", b"\x1b[B", b"\x1b[D", b"\x1b[B", b"\x1b[D", b"\x1b", b"\r", b"\x1b"]
+            # Star starts hidden, so Claude leads the selector.
+            keys = [b"\x1b[C", b"\x1b[B", b"\x1b[D", b"\x1b[B", b"\x1b[D", b"\x1b", b"\r", b"\x1b"]
             start, sent = time.monotonic(), 0
             try:
                 while time.monotonic() - start < 15:

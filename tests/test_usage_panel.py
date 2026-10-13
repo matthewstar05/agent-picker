@@ -399,8 +399,8 @@ class CardScopeTests(unittest.TestCase):
         panel.rescope()
         self.assertEqual(panel.WORKING, {"Claude": 1})
         self.assertEqual(self.names(), ["Claude", "Cursor"])
-        for name in panel.ap.FETCHERS:
-            preferences.put(panel.CARD_KEY + name, "tab")
+        for setting in panel.card_settings():
+            preferences.put(setting.key, "tab")
         panel.rescope()
         self.assertEqual(panel.SCOPE, panel.SCOPES["tab"])
 
@@ -450,15 +450,16 @@ class CardScopeTests(unittest.TestCase):
                                         "OpenCode": {"panes": 1, "working": 0}, "Kiro": {"panes": 1, "working": 1}})
         self.assertEqual(working, {"Codex": {"w:p3"}, "Kiro": {"v:p6"}})
 
-    def test_card_settings_live_on_the_provider_cards_page(self):
+    def test_card_settings_live_on_the_visibility_page(self):
         sections = [s.section for s in preferences.SETTINGS]
         usage = [i for i, s in enumerate(sections) if s == "Usage panel"]
         self.assertEqual(usage, list(range(usage[0], usage[-1] + 1)))
-        keys = [preferences.SETTINGS[i].key for i in usage]
-        self.assertEqual(keys[:2], [panel.THEME.key, panel.ANIMATE.key])
-        self.assertIn(panel.CARDS_PAGE.key, keys)
+        keys = [s.key for s in preferences.SETTINGS]
+        self.assertEqual(keys[usage[0]:usage[0] + 2], [panel.THEME.key, panel.ANIMATE.key])
+        self.assertIn(agent_picker.VISIBILITY.key, keys)
         self.assertNotIn(panel.CARD_KEY + "Codex", keys)
-        self.assertIn(panel.CARD_KEY + "Codex", [c.key for c in panel.CARDS_PAGE.children])
+        self.assertIn(panel.CARD_KEY + "Codex", [c.key for c in panel.card_settings()])
+        self.assertEqual({c.section for c in panel.card_settings()}, {"Usage cards"})
         self.assertEqual(preferences.get(panel.CARD_KEY + "Codex"), "all")
 
     def test_turning_a_card_off_hides_it_until_tab_is_held(self):
@@ -466,30 +467,33 @@ class CardScopeTests(unittest.TestCase):
         preferences.put(panel.CARD_KEY + "Codex", "off")
         panel.rescope()
         self.assertEqual(self.names(), ["Claude", "Kiro"])
-        self.assertEqual(panel.CARDS_PAGE.show(), f"{len(panel.CARDS_PAGE.children) - 1} of "
-                                                  f"{len(panel.CARDS_PAGE.children)} on")
+        cards = len(panel.card_settings())
+        self.assertIn(f"{cards - 1} of {cards} cards", agent_picker.VISIBILITY.show())
         self.view.peek_until = time.time() + 60
         self.assertIn("Codex", self.names())
 
-    def test_provider_cards_page_opens_toggles_and_closes(self):
+    def test_visibility_page_opens_toggles_and_closes(self):
+        page = agent_picker.VISIBILITY
         menu = preferences.Menu()
-        menu.index = preferences.SETTINGS.index(panel.CARDS_PAGE)
+        menu.index = preferences.SETTINGS.index(page)
         menu.handle("\r")
-        self.assertIs(menu.page, panel.CARDS_PAGE)
-        self.assertEqual(menu.items, panel.CARDS_PAGE.children)
-        key = menu.items[0].key
+        self.assertIs(menu.page, page)
+        self.assertEqual(menu.items, page.children)
+        menu.index = menu.items.index(panel.card_settings()[0])
+        key = menu.items[menu.index].key
         menu.handle("right")
         self.assertEqual(preferences.get(key), "workspace")
         menu.handle(" ")
         self.assertEqual(preferences.get(key), "off")
         menu.handle(" ")
         self.assertEqual(preferences.get(key), "workspace")   # back to what it was
-        text = ANSI.sub("", "\n".join(agent_picker.render_settings(menu, 80, 30, 0.5, panel.BRAND_FRAME)))
-        self.assertIn("settings › provider cards", text)
+        text = ANSI.sub("", "\n".join(agent_picker.render_settings(menu, 80, 40, 0.5, panel.BRAND_FRAME)))
+        self.assertIn("settings › visibility", text)
+        self.assertIn("USAGE CARDS", text)
         self.assertIn("on · this workspace", text)
         self.assertIsNone(menu.handle("esc"))   # back to the top level, still open
         self.assertIsNone(menu.page)
-        self.assertIs(menu.items[menu.index], panel.CARDS_PAGE)
+        self.assertIs(menu.items[menu.index], page)
         self.assertEqual(menu.handle("esc"), "close")
 
 
@@ -543,11 +547,12 @@ class SettingsTests(unittest.TestCase):
 
     def test_settings_list_every_registered_setting_and_persist(self):
         keys = [s.key for s in preferences.SETTINGS]
-        self.assertEqual(keys[:3], ["start", "usage.theme", "usage.animate"])
+        self.assertEqual(keys[:4], ["start", "visibility", "usage.theme", "usage.animate"])
         menu = preferences.Menu()
         self.assertEqual(preferences.get("start"), "agents")
         menu.handle("right")
         self.assertEqual(preferences.get("start"), "usage")
+        menu.handle("down")
         menu.handle("down")
         menu.handle("down")
         menu.handle("right")

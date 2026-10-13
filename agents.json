@@ -1,6 +1,7 @@
 [
   {
     "name": "Star",
+    "shown": false,
     "pastel": [
       255,
       232,

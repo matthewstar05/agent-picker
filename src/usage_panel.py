@@ -16,7 +16,7 @@ far ahead of pace the usage is. The Bars setting switches to filling bars, lit u
 to what's been used. A limit turns a muted red only when it is 70% used with its
 reset still far off (see concerning()).
 
-Provider cards (a settings page) lists every provider found on this computer.
+Settings › Visibility lists every provider found on this computer under Usage cards.
 Each one's card is off, or counts its agents in every Herdr workspace (the
 default), this workspace or this tab, or is always shown, even with none open.
 A card appears once its provider is open in this tab, or wider with universal
@@ -113,28 +113,24 @@ COUNT = preferences.register(preferences.Setting(
     hint="The number beside a provider's name: its agents open anywhere, in this workspace, or in this tab.",
     names={"all": "all workspaces", "workspace": "this workspace", "tab": "single tab"}))
 
-CARD_KEY = "usage.card."
+CARD_KEY = ap.CARD_KEY
 CARD_NAMES = {"all": "on · all workspaces", "workspace": "on · this workspace", "tab": "on · this tab",
               "always": "on · always shown", "off": "off"}
 
 
-def cards_summary(children):
-    on = sum(preferences.get(s.key) != "off" for s in children)
-    return f"{on} of {len(children)} on"
-
-
-CARDS_PAGE = preferences.register(preferences.Page(
-    "usage.cards", "Usage panel", "Provider cards",
-    hint="Turn each provider found on this computer on or off. ⏎ opens.", summary=cards_summary))
 STAR_RESETS = preferences.register(ap.STAR_RESETS)
 
 
 def card_setting(name):
-    """The Provider cards row: off, or which agents a provider's card counts."""
+    """The Visibility page's Usage cards row: off, or which agents a provider's card counts."""
     return preferences.register(preferences.Setting(
-        CARD_KEY + name, "Provider cards", name, list(CARD_NAMES), "all",
+        CARD_KEY + name, "Usage cards", name, list(CARD_NAMES), "all",
         hint=f"⏎ turns {name}'s card on or off. ←→ picks where its agents count.",
-        names=CARD_NAMES, off="off"), parent=CARDS_PAGE)
+        names=CARD_NAMES, off="off"), parent=ap.VISIBILITY)
+
+
+def card_settings():
+    return [s for s in ap.VISIBILITY.children if s.key.startswith(CARD_KEY)]
 
 
 def card_mode(name):
@@ -421,7 +417,7 @@ def rescope():
                 if slot["working"]:
                     WORKING[name] = slot["working"]
         # A card needs its provider both within reach and within its own scope.
-        modes = [preferences.get(s.key) for s in CARDS_PAGE.children]
+        modes = [preferences.get(s.key) for s in card_settings()]
         widest = max((min(SCOPE_ORDER.index(reach), SCOPE_ORDER.index(m)) for m in modes
                       if m in SCOPE_ORDER),
                      default=SCOPE_ORDER.index(reach))

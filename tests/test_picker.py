@@ -106,7 +106,7 @@ class PickerTests(unittest.TestCase):
                 patch.object(picker.preferences, "_values", None):
             self.assertEqual([a["name"] for a in picker.shown(found)], ["Codex", "Kiro", "OpenCode"])
             key = picker.shown_setting(found[2]).key
-            self.assertIn(key, [s.key for s in picker.preferences.SETTINGS])
+            self.assertIn(key, [s.key for s in picker.VISIBILITY.children])
             picker.preferences.cycle(key)
             self.assertEqual([a["name"] for a in picker.shown(found)], ["Codex", "Kiro"])
             for agent in found[:2]:
@@ -114,6 +114,16 @@ class PickerTests(unittest.TestCase):
             self.assertEqual(len(picker.shown(found)), 3)   # never an empty selector
             picker.preferences._values = None   # saved choices survive a restart
             self.assertFalse(picker.preferences.get(key))
+
+    def test_star_starts_hidden_until_shown(self):
+        star = [a for a in picker.AGENTS if a["name"] == "Star"]
+        others = [a for a in picker.AGENTS if a["name"] == "Codex"]
+        with tempfile.TemporaryDirectory() as folder, \
+                patch.object(picker.preferences, "PATH", Path(folder) / "preferences.json"), \
+                patch.object(picker.preferences, "_values", None):
+            self.assertEqual([a["name"] for a in picker.shown(star + others)], ["Codex"])
+            picker.preferences.put(picker.shown_setting(star[0]).key, True)
+            self.assertEqual([a["name"] for a in picker.shown(star + others)], ["Star", "Codex"])
 
     def test_missing_providers_report_clear_error(self):
         with patch.object(picker, "installed", return_value=False):

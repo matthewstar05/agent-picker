@@ -144,12 +144,45 @@ def installed(agent):
     return resolve_argv(agent) is not None
 
 
+SHOWN_KEY = "shown."
+CARD_KEY = "usage.card."    # usage_panel's Usage cards rows
+
+
+def visibility_summary(children):
+    listed = [s for s in children if s.key.startswith(SHOWN_KEY)]
+    cards = [s for s in children if s.key.startswith(CARD_KEY)]
+    parts = [f"{sum(preferences.get(s.key) is True for s in listed)} of {len(listed)} listed"] if listed else []
+    if cards:
+        parts.append(f"{sum(preferences.get(s.key) != 'off' for s in cards)} of {len(cards)} cards")
+    return " · ".join(parts) or "nothing installed"
+
+
+# One page for what each CLI shows up in, shared by the agent selector's,
+# the usage panel's and herdr-ai's settings: the selector's list, then the usage cards.
+VISIBILITY = preferences.register(preferences.Page(
+    "visibility", "General", "Visibility",
+    hint="Which CLIs the agent selector lists and which providers get a usage card. ⏎ opens.",
+    summary=visibility_summary))
+
+
 def shown_setting(agent):
-    """The settings row that hides an installed CLI from the agent selector."""
+    """The Visibility row that hides an installed CLI from the agent selector.
+    An agents.json entry with "shown": false starts hidden until the user shows it."""
     return preferences.register(preferences.Setting(
-        "shown." + agent["name"], "Agents", agent["name"], [True, False], True,
+        SHOWN_KEY + agent["name"], "Agent selector", agent["name"], [True, False],
+        agent.get("shown", True) is not False,
         hint="Hide a CLI from the selector. --picker-launch and herdr-ai still run it.",
-        names={True: "shown", False: "hidden"}))
+        names={True: "shown", False: "hidden"}), parent=VISIBILITY)
+
+
+def visibility_rows(agents):
+    """Fill the Visibility page for these CLIs, for a settings screen that
+    opens without the selector or the usage panel (herdr-ai's)."""
+    import usage_panel   # registers the card rows; imported here so it can import this module
+    for agent in agents:
+        shown_setting(agent)
+    for agent in agents:
+        usage_panel.card_setting(agent["name"])
 
 
 def shown(agents):
