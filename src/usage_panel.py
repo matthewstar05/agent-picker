@@ -63,6 +63,19 @@ THEMES = [
 ]
 BRAND_FRAME = {"color": (190, 190, 198)}
 
+
+def rainbow_reference():
+    """Use Agy's configured colors rather than a second, more saturated palette."""
+    return next(agent for agent in ap.AGENTS if agent["name"] == "Antigravity")
+
+
+def border_style(view, i):
+    stops = THEMES[view.theme]["stops"]
+    if stops is None:
+        return view.agents[i]
+    return rainbow_reference() if stops == "rainbow" else view.style(i)
+
+
 WHITE, TEXT = (255, 255, 255), (232, 232, 238)
 LABEL, SOFT, TRACK = ap.LABEL, ap.SOFT, ap.TRACK
 AHEAD = (104, 104, 114)       # track up to where an even pace would be by now
@@ -602,12 +615,17 @@ class View:
         if stops is None:
             # bars can use a lighter gradient than the picker's highlight
             return dict(agent, gradient=agent["bar_gradient"]) if agent.get("bar_gradient") else agent
+        if stops == "rainbow":
+            reference = rainbow_reference()
+            return dict(reference, gradient=reference["bar_gradient"])
         theme = {"gradient": stops}
         return {"gradient": stops, "glow": 1.0,
                 "color": ap.grad(theme, i / max(1, len(self.agents)) * 0.85)}
 
     def frame_style(self):
         stops = THEMES[self.theme]["stops"]
+        if stops == "rainbow":
+            return rainbow_reference()
         return BRAND_FRAME if stops is None else {"gradient": stops}
 
 
@@ -700,7 +718,7 @@ def _spark(name, n, now):
 def title_color(style, pos, t):
     """One readable text gradient, shared by every provider in a theme."""
     phase = pos / 11 - t * 0.24
-    if style.get("gradient") == "rainbow":
+    if style.get("gradient") == "rainbow" or style.get("pastel") == "rainbow":
         return ap.rainbow_rgb(phase, 0.2)
     return mix(ap.grad(style, phase), WHITE, 0.2)
 
@@ -719,7 +737,7 @@ def put_name(line, agent, t, bold=True, panes=None, style=None):
         line.put(name, color, bold=bold).put(suffix, color)
 
 
-def draw_bar(line, w, bar, st, t, live, stale, now, offset, pulses=1, white=False):
+def draw_bar(line, w, bar, st, t, live, stale, now, offset, pulses=1):
     """pulses: how many bright waves run along the bar, one per working instance."""
     pct = min(100.0, w["pct"])
     concern = concerning(w, now)
@@ -736,9 +754,6 @@ def draw_bar(line, w, bar, st, t, live, stale, now, offset, pulses=1, white=Fals
     ahead = round(frac * bar) if frac is not None else 0
     for x in range(bar):
         if x < filled:
-            if white:
-                line.put("▰", WHITE)
-                continue
             c = ap.grad(st, x / max(1, bar) * st.get("bar_span", 0.5) + offset - bar_t * 0.08)
             if concern:
                 c = mix(c, CONCERN, 0.45)
@@ -840,13 +855,12 @@ def _card(view, i, cw, t, now, entry, fetching, working, dots=None, rows=3, pane
         lead = len(str(working)) + 1
         for k, ch in enumerate(status):
             if ch.isdigit():
-                color = title_color(st, k, clock) if themed else count_color
+                color = title_color(st, k, clock) if themed and not rainbow else count_color
             else:
                 pos = k - lead
-                if themed:
+                if themed and not rainbow:
                     color = title_color(st, pos, clock)
-                    if not rainbow:
-                        color = mix(color, WHITE, 0.3 * wave(pos, clock))
+                    color = mix(color, WHITE, 0.3 * wave(pos, clock))
                 else:
                     hue = ap.grad(st, pos / 7 * 0.7 - clock * 0.15)
                     color = mix(hue, WHITE, 0.2 + 0.3 * wave(pos, clock))
@@ -856,7 +870,7 @@ def _card(view, i, cw, t, now, entry, fetching, working, dots=None, rows=3, pane
     lines = [head.pad(cw)]
 
     if name == STAR:
-        lines += star_lines(cw, t, now, live, view.anim, st if themed and not rainbow else None)
+        lines += star_lines(cw, t, now, live, view.anim, st if themed else None, rainbow)
     elif not entry:
         if name not in ap.FETCHERS:
             msg = "no usage reader for this CLI yet"
@@ -876,7 +890,7 @@ def _card(view, i, cw, t, now, entry, fetching, working, dots=None, rows=3, pane
             if bar >= 3:
                 draw_bar(line, w, bar, st, t if view.anim else 0, live and view.anim, stale, now,
                          0 if themed else i * 0.13,
-                         pulses=max(1, min(working, 4)), white=rainbow and not live)
+                         pulses=max(1, min(working, 4)))
             pcol = pct_color(w, st, now)
             pcol = WHITE if rainbow else (mix(pcol, SOFT, 0.5) if stale else pcol)
             line.put(f" {shown_pct(pct):3.0f}%", pcol, bold=True)
@@ -908,7 +922,7 @@ def star_info(now):
     return star_meter, info, driving
 
 
-def star_lines(cw, t, now, live, anim, style=None):
+def star_lines(cw, t, now, live, anim, style=None, rainbow=False):
     """Star's card body: its estimated limit as one bar split by provider, in the
     order their limits reset and in their own colors (the providers StarCLI is
     driving shimmer), then, when that setting is on, each provider's countdown."""
@@ -925,7 +939,7 @@ def star_lines(cw, t, now, live, anim, style=None):
         for glyph, color in cells:
             line.put(glyph, color)
     shown = info["now"] if left else 100 - info["now"]
-    line.put(f" {shown:3.0f}%", meter.pct_color(-t * 0.1 if live and anim else 0.0), bold=True)
+    line.put(f" {shown:3.0f}%", WHITE if rainbow else meter.pct_color(-t * 0.1 if live and anim else 0.0), bold=True)
     if tail_w and info["soonest"]:
         line.put("  ↻ " + until(info["soonest"]["resets"]), TEXT if live else SOFT)
     if not ap.star_resets():   # the cooldown dots are opt-in (settings, Star section)
@@ -966,11 +980,11 @@ def compact_row(view, i, width, t, now):
         bar = min(24, width - len(line.cells) - 6)
         if bar >= 3:
             cells, _ = meter.bar(info, bar, depleting(), t if view.anim else 0.0, driving, bool(working and view.anim),
-                                 style=None if brand or rainbow else st)
+                                 style=None if brand else st)
             for glyph, color in cells:
                 line.put(glyph, color)
         shown = info["now"] if depleting() else 100 - info["now"]
-        line.put(f"{shown:4.0f}%", meter.pct_color(), bold=True)
+        line.put(f"{shown:4.0f}%", WHITE if rainbow else meter.pct_color(), bold=True)
     elif entry:
         windows = entry["windows"][:2]
         credits = ap.credits_text(windows[0]) if len(windows) == 1 else None
@@ -986,9 +1000,9 @@ def compact_row(view, i, width, t, now):
             line.put(" " + w["label"].ljust(2) + " ", LABEL)
             bar = min(16, share - 9)
             if bar >= 2:
-                draw_bar(line, w, bar, st, t if view.anim else 0, False, False, now,
-                         i * 0.13 if brand else 0,
-                         white=rainbow and not working)
+                draw_bar(line, w, bar, st, t if view.anim else 0,
+                         bool(rainbow and working and view.anim), False, now,
+                         i * 0.13 if brand else 0, pulses=max(1, min(working, 4)))
             line.put(f"{shown_pct(w['pct']):4.0f}%", WHITE if rainbow else pct_color(w, st, now), bold=True)
             line.pad(max(len(line.cells), seg_start + share))
         if credits:
@@ -998,7 +1012,7 @@ def compact_row(view, i, width, t, now):
     content = line.pad(width).paint()
     if border_space:
         if working:
-            ring = ap.border_ring(agent if brand else st, t, width)
+            ring = ap.border_ring(border_style(view, i), t, width)
             return ring[(1, 0)] + RESET + content + ring[(1, width + 1)] + RESET
         return " " + content + " "
     return content
@@ -1036,8 +1050,7 @@ def working_card(view, i, width, t, now, lids=True, active=True, height=None):
     height: total lines including lids; the card grows to fill it."""
     inner = 3 if height is None else max(3, height - (2 if lids else 0))
     content = card(view, i, width - 2, t, now, rows=inner)
-    agent = view.agents[i]
-    style = agent if THEMES[view.theme]["stops"] is None else view.style(i)
+    style = border_style(view, i)
     tick = t if view.anim else 0.4
     ring = ap.border_ring(style, tick, width - 2, len(content)) if active else None
     lines = [(ring[(y + 1, 0)] + RESET if active else " ") + line

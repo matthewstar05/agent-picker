@@ -176,18 +176,18 @@ class UsagePanelTests(unittest.TestCase):
                 for workers in (1, 3, 12):
                     first_count, first_wave = header(view, workers, 0.4)
                     next_count, next_wave = header(view, workers, 0.8)
-                    if theme == "brand":
-                        self.assertTrue(all(color == expected for _, color in first_count))
+                    if theme in ("brand", "rainbow"):
+                        self.assertTrue(all(color == (panel.WHITE if theme == "rainbow" else expected)
+                                            for _, color in first_count))
                         self.assertEqual(first_count, next_count)
                     else:
                         self.assertNotEqual(first_count, next_count)
-                        self.assertEqual(first_count[0][1], first_wave[0][1] if theme == "rainbow"
-                                         else panel.title_color(view.style(0), 0, 0.4))
+                        self.assertEqual(first_count[0][1], panel.title_color(view.style(0), 0, 0.4))
                     self.assertNotEqual(first_wave, next_wave)
                     self.assertGreater(len({color for _, color in first_wave}), 1)
                     if theme == "rainbow":
                         for _, color in first_wave:
-                            self.assertAlmostEqual(1 - min(color) / max(color), 0.2, places=2)
+                            self.assertLessEqual(1 - min(color) / max(color), 0.34)
                     waves.append(first_wave)
                 self.assertEqual(waves[0], waves[1])
                 self.assertEqual(waves[1], waves[2])

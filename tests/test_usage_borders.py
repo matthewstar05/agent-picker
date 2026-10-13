@@ -211,10 +211,7 @@ class UsageBorderTests(unittest.TestCase):
                                 drawn = cells(line)
                                 bar_colors = [color for ch, color in drawn if ch == "▰"]
                                 if name == "rainbow" and bar_colors:
-                                    if workers:
-                                        self.assertTrue(any(color != panel.WHITE for color in bar_colors))
-                                    else:
-                                        self.assertTrue(all(color == panel.WHITE for color in bar_colors))
+                                    self.assertTrue(any(color != panel.WHITE for color in bar_colors))
                                 plain = "".join(ch for ch, _ in drawn)
                                 for match in re.finditer(r"\d+%", plain):
                                     percentages.append([color for _, color in drawn[match.start():match.end()]])
@@ -225,6 +222,36 @@ class UsageBorderTests(unittest.TestCase):
                                 self.assertEqual(percentages[1], [panel.mix(panel.CONCERN, panel.SOFT, 0.5)
                                                                  if stale else panel.CONCERN] * 3)
                                 self.assertEqual(percentages[3], [panel.CONCERN] * 3)
+
+    def test_rainbow_matches_agy_bars_working_glow_and_borders(self):
+        reference = next(a for a in panel.ap.AGENTS if a["name"] == "Antigravity")
+        reference_view = panel.View([reference], pinned=True)
+        view = self.view()
+        now = time.time()
+        entry = panel.USAGE["Antigravity"]
+        def backgrounds(text):
+            return re.findall(r"\x1b\[48;2;[0-9;]+m", text)
+
+        def status(text):
+            return painted_cells(text)[-11:-1]
+
+        for anim in (False, True):
+            for workers in (0, 1, 3):
+                for tick in (0.0, 1.5, 2.5):
+                    self.select_theme(reference_view, "brand")
+                    panel.preferences.put(panel.ANIMATE.key, anim)
+                    baseline = panel._card(reference_view, 0, 50, tick, now, entry, False, workers)
+                    self.select_theme(view, "rainbow")
+                    panel.preferences.put(panel.ANIMATE.key, anim)
+                    for i, agent in enumerate(view.agents):
+                        sample = panel._card(view, i, 50, tick, now, entry, False, workers)
+                        self.assertEqual(sample[1:], baseline[1:])
+                        if workers:
+                            # Working text and every background cell match Agy exactly.
+                            self.assertEqual(backgrounds(sample[0]), backgrounds(baseline[0]))
+                            self.assertEqual(status(sample[0]), status(baseline[0]))
+                        self.assertEqual(panel.border_style(view, i), reference)
+                    self.assertEqual(view.frame_style(), reference)
 
     def test_theme_palette_is_shared_by_every_provider_in_both_layouts(self):
         view = panel.View(panel.ap.AGENTS, pinned=True)
