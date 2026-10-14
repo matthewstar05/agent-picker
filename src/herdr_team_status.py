@@ -225,6 +225,9 @@ def run():
             return
         refreshed, spaces_refreshed, previous_settings = {}, {}, None
         seen_path = state_dir() / ("herdr-ai-seen-" + hashlib.sha256(path.encode()).hexdigest()[:16] + ".json")
+        import herdr_return   # imports herdr_ai, which imports this module lazily
+        herdr = herdr_return.client()
+        returns = herdr_return.Watch(herdr, path) if herdr else None
         try:
             seen = json.loads(seen_path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
@@ -241,6 +244,8 @@ def run():
                                call, symbols=symbols)
                 if seen != before_seen:
                     seen_path.write_text(json.dumps(seen) + "\n", encoding="utf-8")
+                if returns:
+                    returns.tick(snapshot)
                 install_indicators(call)
                 preferences._values = None
                 for setting in sidebar.SETTINGS:
