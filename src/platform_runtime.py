@@ -72,6 +72,17 @@ class Terminal:
         if not ch:
             return "esc"
         if ch != b"\x1b":
+            # Prompt editors need complete UTF-8 characters, not one byte of
+            # a multibyte character per key. Other screens ignore these keys.
+            size = 2 if 0xc2 <= ch[0] <= 0xdf else 3 if 0xe0 <= ch[0] <= 0xef else 4 if 0xf0 <= ch[0] <= 0xf4 else 1
+            for _ in range(size - 1):
+                if not self.wait(0.1):
+                    break
+                byte = self._byte()
+                if not byte or not 0x80 <= byte[0] <= 0xbf:
+                    self._pending = byte + self._pending
+                    break
+                ch += byte
             return ch.decode(errors="ignore")
         # Long enough that an arrow split by a slow link (SSH, a busy machine)
         # is not read as Esc, which quits; short enough that Esc still feels instant.
@@ -96,6 +107,23 @@ class Terminal:
                 if self.wait(0.03):
                     self._byte()
             return ""
+        if seq == b"200~" and prefix == b"[":
+            # Keep a multiline paste in one event so its newlines cannot
+            # submit a form or trigger menu actions. Bound retained content.
+            pasted = bytearray()
+            tail = b""
+            while self.wait(0.5):
+                byte = self._byte()
+                if not byte:
+                    break
+                tail += byte
+                if tail.endswith(b"\x1b[201~"):
+                    return "paste:" + (pasted + tail[:-6]).decode("utf-8", errors="replace")
+                if len(tail) > 6:
+                    if len(pasted) < 1048576:
+                        pasted += tail[:1]
+                    tail = tail[1:]
+            return "paste:" + (pasted + tail).decode("utf-8", errors="replace")
         if not seq:
             return "esc"
         key, event = decode_key(prefix, seq.decode(errors="ignore"))

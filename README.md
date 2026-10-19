@@ -36,9 +36,31 @@ agent --picker-catalog                every known CLI, its colors, and whether i
 agent --picker-help                   show picker help
 agent -- --picker-help                pass a management-looking argument to the CLI
 usage                                opens straight on the usage panel
+schedule                             open the local prompt scheduler
+agent --picker-schedule               the same scheduler inside agent
 ```
 
 Inside the command: `u` switches between the agent selector and the usage panel, and `s` opens general settings from either one.
+
+## Scheduled prompts
+
+Press `\` in the agent selector or usage panel, or run `schedule`. Tab switches between Claude, Codex, and Gemini. Gemini uses this picker's configured Antigravity (`agy`) CLI; a separately installed native `gemini` is used when Antigravity is unavailable. The menu shows the actual executable. Missing providers stay disabled, without installing or authenticating anything.
+
+Use ↑↓ to highlight a schedule and Enter to inspect it. `n` creates one, `e` edits it, `p` pauses or resumes it, `d` opens a removal confirmation with Keep selected, and `l` reads its latest run log. `\` or Esc returns to the selector; `q` exits. The scheduler uses the selector's gradients, moving glow, animated selection borders, and the usage panel's selected color theme.
+
+`t` / `T` cycles the shared color theme, and `a` toggles the shared animation setting. With animations off, the open menu redraws once a second. The background dispatcher has no animations.
+
+In a new schedule, choose a prompt, working directory, date, time, and frequency, then select **Save schedule**. Enter opens each field. The prompt editor supports multiline paste, Ctrl+N for a newline, Ctrl+U to clear, Enter to accept, and Esc to cancel the field. Esc in the form discards the unsaved draft. The calendar uses ←→ for days, ↑↓ for weeks, and `[` / `]` for months; you can also type `YYYY-MM-DD`. The time picker accepts `14:30`, `1430`, or `2:30 PM`; ↑↓ adjusts five minutes and ←→ adjusts an hour. Clear the existing time with Ctrl+U before typing a replacement. Under `s` settings, **Scheduler > Time display** switches military time and AM/PM.
+
+Frequencies are once, hourly, daily, weekdays, weekly, and monthly. Daily and longer repeats retain the chosen local clock time in the saved time zone through daylight-saving changes. Nonexistent times are skipped; an ambiguous fall-back time runs once, at its first occurrence. Monthly schedules retain the original day and use the last day in shorter months. Hourly means every elapsed hour. If several runs were missed during sleep, the dispatcher runs the prompt once and advances to the next future occurrence. Pausing leaves the current run alone; resuming an overdue schedule catches up once. Completed one-time schedules stay visible until edited to a new time or removed.
+
+Saving the first schedule enables a macOS LaunchAgent, independent of terminal windows. This Mac's setup can also enable it explicitly with `schedule --install-service`; `schedule --status` reports its status and paths. The Python dispatcher sleeps for 60 seconds between small local checks. It does not request system wake-ups, poll provider accounts, or require the menu to stay open. Due prompts start within about a minute while awake, including after opening the lid or logging back in. The Mac must be logged in, with the checkout and the provider available. Closing the lid during a run follows the CLI's normal sleep/network behavior.
+
+Schedules live in `~/.local/state/agent-picker/scheduler/schedules.json` with private permissions, atomic writes, and process locks. Output, errors, and logs stay in the same directory; none belong in Git. `AGENT_PICKER_STATE_HOME` or `XDG_STATE_HOME` relocates this state. The LaunchAgent lives at `~/Library/LaunchAgents/com.agent-picker.scheduler.plist`. Run logs are retained until you remove them locally; the menu shows the last 128 KB of the latest log.
+
+Each occurrence opens a fresh headless CLI run in its saved working directory, using that provider's current picker model, effort, and permission flags. The scheduler adds no permission bypass. Unattended CLIs cannot ask you to approve tools: a denied action or authentication/network problem is recorded in the run log for review. Up to three schedules can run concurrently, with no overlap for one schedule. A durable claim prevents automatic replay of a possibly interrupted run. Failed occurrences are recorded without automatic retries; repeating schedules continue at their next time. A lost or interrupted worker pauses its schedule so you can inspect its effects and choose a new time.
+
+To stop the dispatcher, run `launchctl bootout gui/$(id -u)/com.agent-picker.scheduler`. Saved schedules and logs remain local. `schedule --install-service` starts it again. Ordinary code updates use the live checkout; restart the service after an update with no prompts running to load changes to the dispatcher.
 
 In the agent selector, highlight a provider and press `→` to open its defaults. `↑↓` moves between **Model**, **Effort**, and **Bypass Permissions**. Arrow keys do not change the model. Enter opens a scrollable model list; `↑↓` or `←→` move through it and Enter chooses the model. On Effort, `←→` cycles levels; on Bypass Permissions the same keys toggle On/Off. Space or Enter also changes Effort or Bypass Permissions. Esc returns to the selector. If nothing changed, it returns immediately. If something changed, Esc shows the new model and effort, each changed value, and offers **Save settings** or **Discard changes**, with Save settings selected. Enter confirms the selected action and returns to the selector; Esc returns to editing. After saving or discarding, Esc or q exits the selector directly. The saved defaults remain when you reopen `agent`.
 

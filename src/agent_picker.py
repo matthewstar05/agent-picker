@@ -680,9 +680,9 @@ def border_ring(agent, t, bw, height=1, solid=None):
     return cells
 
 
-HINTS = [" ↑↓ move · → defaults · ⏎ launch · u usage · s settings · esc quit ",
-         " → defaults · ⏎ launch · u usage · s settings · esc quit ",
-         " → defaults · ⏎ launch · u · s · esc ", " → defaults · ⏎ launch ", ""]
+HINTS = [" ↑↓ move · → defaults · ⏎ launch · u usage · \\ schedule · s settings ",
+         " → defaults · ⏎ launch · u usage · \\ schedule · s settings ",
+         " → defaults · ⏎ launch · \\ schedule · s · esc ", " ⏎ launch · \\ schedule ", ""]
 
 
 def render(selected, available, t, cols, rows, sweep=None, agents=None, title="agent selector", hints=HINTS):
@@ -1110,15 +1110,16 @@ def choose(screen=None, only=None):
 
     only: provider names to show alone (a herdr-ai team's usage pane)."""
     import usage_panel   # registers its settings; imported here so it can import this module
+    import scheduler_menu
 
     # Only installed CLIs are listed; the rest of agents.json stays in the catalog
     # until its CLI shows up on this computer.
     found = [a for a in AGENTS if installed(a) and (only is None or a["name"] in only)]
-    if not found:
+    if not found and screen != "scheduler":
         raise RuntimeError("No supported CLI found. Run agent --picker-doctor and configure a provider.")
     # Hidden CLIs (settings) leave the selector only; usage still follows them.
-    listed = shown(found)
-    available = [True] * len(listed)
+    listed = shown(found) if found else AGENTS
+    available = [installed(a) for a in listed]
     providers = [a["name"] for a in found if a["name"] in FETCHERS]
     load_usage()
     usage_panel.start(providers)   # live readers feed both screens
@@ -1128,6 +1129,7 @@ def choose(screen=None, only=None):
     came_from = screen               # where the settings screen returns to
     selected = load_last(listed)
     defaults_menu = None
+    scheduler_view = scheduler_menu.Menu() if screen == "scheduler" else None
     quit_choice = 0
     terminal = Terminal()
     writer = Screen(terminal)
@@ -1142,6 +1144,8 @@ def choose(screen=None, only=None):
         terminal.keyboard(screen == "usage")   # key releases, for holding Tab there
         if screen == "usage":
             frame = usage_panel.render(usage, cols, rows, t)
+        elif screen == "scheduler":
+            frame = centered(scheduler_menu.render(scheduler_view, cols, rows, t), cols, rows)
         elif screen == "settings":
             frame = centered(render_settings(menu, cols, rows, t, usage.frame_style()), cols, rows)
         elif screen == "defaults":
@@ -1153,9 +1157,13 @@ def choose(screen=None, only=None):
         writer.show(frame, cols, rows)
 
     def go(name):
-        nonlocal screen, came_from
+        nonlocal screen, came_from, scheduler_view
         if name == "settings":
             came_from = screen
+        if name == "scheduler" and scheduler_view is None:
+            scheduler_view = scheduler_menu.Menu()
+        if (screen == "scheduler") != (name == "scheduler"):
+            terminal.write(f"{ESC}[?2004{'h' if name == 'scheduler' else 'l'}")
         screen = name
         writer.reset()
 
@@ -1167,21 +1175,24 @@ def choose(screen=None, only=None):
         # Settings may have hidden or shown CLIs; keep the same one selected if it is still listed.
         nonlocal listed, available, selected
         current = listed[selected]["name"]
-        listed = shown(found)
-        available = [True] * len(listed)
+        listed = shown(found) if found else AGENTS
+        available = [installed(a) for a in listed]
         selected = next((i for i, a in enumerate(listed) if a["name"] == current), 0)
 
     out.write(f"{ESC}[?1049h{ESC}[?25l{ESC}[?7l")  # alt screen, hide cursor, no autowrap
     out.flush()  # frames go straight to the fd after this
     try:
         terminal.__enter__()
+        if screen == "scheduler":
+            terminal.write(f"{ESC}[?2004h")
         draw()
         frame_at = time.monotonic()
         while True:
             # Frames on a fixed clock, so drawing time doesn't slow the rate:
             # 60 fps for the picker, less for the screens that sit open.
             step = (FRAME_TIME if screen == "agents" else
-                    usage_panel.frame_time(usage) if screen == "usage" else 1 / 30)
+                    usage_panel.frame_time(usage) if screen == "usage" else
+                    1 if screen == "scheduler" and not preferences.get(usage_panel.ANIMATE.key) else 1 / 30)
             frame_at += step
             wait = frame_at - time.monotonic()
             if wait < 0:
@@ -1192,7 +1203,15 @@ def choose(screen=None, only=None):
             key = terminal.read_key()
             if not key or (key.startswith("release:") and screen != "usage"):
                 continue
-            if screen == "usage":
+            if screen == "scheduler":
+                action = scheduler_view.handle(key)
+                if action == "quit":
+                    return None
+                if action:
+                    go(action)
+            elif key == "\\" and screen in ("agents", "usage"):
+                go("scheduler")
+            elif screen == "usage":
                 action = usage_panel.handle(usage, key, providers, getattr(terminal, "releases", False))
                 if action == "quit":
                     return None
@@ -1244,6 +1263,8 @@ def choose(screen=None, only=None):
             elif key == "s":
                 go("settings")
             elif key in ("\r", "\n"):
+                if not available[selected]:
+                    continue
                 launch = time.monotonic()
                 while (elapsed := time.monotonic() - launch) < 0.21:
                     draw(sweep=min(1.0, (elapsed / 0.18) ** 1.6))
@@ -1257,7 +1278,7 @@ def choose(screen=None, only=None):
         terminal.keyboard(False)
         if hasattr(terminal, "old") or hasattr(terminal, "modes"):
             terminal.__exit__()
-        out.write(f"{ESC}[?7h{ESC}[?25h{ESC}[?1049l")
+        out.write(f"{ESC}[?2004l{ESC}[?7h{ESC}[?25h{ESC}[?1049l")
         out.flush()
 
 
@@ -1345,6 +1366,9 @@ def main():
     if args[:1] == ["--picker-update"]:
         update_checkout()
         return 0
+    if args[:1] == ["--picker-schedule"]:
+        import prompt_scheduler
+        return prompt_scheduler.main(args[1:])
     if args[:1] == ["--picker-doctor"]:
         doctor()
         return 0
@@ -1366,6 +1390,8 @@ def main():
         print("agent --picker-catalog                every known CLI, its colors, and whether it is installed")
         print("agent --picker-help                   show this help")
         print("usage                                 opens on the usage panel; u switches screens")
+        print("schedule                              scheduled prompts; Tab switches provider")
+        print("agent --picker-schedule               open scheduler; \\ opens it in the selector")
         print("Prefix CLI args with -- to escape picker management commands.")
         return 0
     if args[:1] in (["--picker-launch-priority"], ["--picker-priority"]):
