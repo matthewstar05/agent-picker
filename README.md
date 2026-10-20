@@ -11,7 +11,7 @@ The picker preserves the original animated gradients, usage meters, remembered s
 - At least one provider CLI installed and signed in on that computer.
 - macOS and an interactive terminal. Windows is no longer supported.
 
-The installer installs this picker, not the provider CLIs or their account credentials. Providers missing from PATH are disabled in the menu. Credentials and usage caches remain local.
+The installer installs this picker and its bundled Grok Bot terminal client, without installing vendor CLIs or account credentials. Providers missing from PATH are disabled in the menu. Credentials and usage caches remain local.
 
 ## Setup
 
@@ -37,10 +37,36 @@ agent --picker-help                   show picker help
 agent -- --picker-help                pass a management-looking argument to the CLI
 usage                                opens straight on the usage panel
 schedule                             open the local prompt scheduler
+grok                                 open the Grok Bot terminal client
+grok -p "fix the failing test"        run one Grok Bot task headless
 agent --picker-schedule               the same scheduler inside agent
 ```
 
 Inside the command: `u` switches between the agent selector and the usage panel, and `s` opens general settings from either one.
+
+## Grok Bot CLI
+
+`grok` and `grokbot` run the bundled terminal client through Grok Bot's native gateway, using its included allowance. The installer creates both launchers and manages the `grok` shell alias. An existing `gbot` management CLI stays available under its original name. Re-run `python3 scripts/install-macos.py` once after updating an older installation to add the launchers.
+
+Sign in to Cursor and Grok Bot on this Mac, and enable the Mac's local connection in Grok Bot. `grok status` checks the gateway, registered machine, and existing local tool permission policy; `grok machines` lists connections. The CLI selects this Mac by hostname or an explicit `--machine ID`. An offline or ambiguous connection stops the task before submission. `--cloud` explicitly selects the bot's cloud computer instead.
+
+```sh
+grok --workspace ~/project
+grok -p "inspect and fix the failing tests" --workspace ~/project
+grok -p --output-format json "summarize the changes" --workspace ~/project
+printf '%s\n' 'Review this project without editing it' | grok -p --output-format stream-json
+grok --continue                      # last conversation in this workspace
+grok --resume SESSION_ID             # exact ID or unique prefix from grok ls
+grok usage
+```
+
+Print mode works without a Grok Bot terminal tab or open app window, accepts a prompt argument or piped stdin, and emits text, final JSON, or newline-delimited stream JSON. Local tools still need the signed-in Grok Bot background process connected to this Mac. Closing its window preserves that connection; quitting the app or disconnecting the Mac removes local execution. Cloud mode uses the bot's own computer. Headless runs never accept an approval automatically: a required approval remains pending in the app, with the session saved for continuation. The CLI does not change the machine's permission policy.
+
+The interactive editor has Cursor-style gray input borders, multiline paste, history, slash completion and `@` file completion. Use `/new`, `/resume`, `/sessions`, `/usage`, `/status`, `/stop`, `/help`, and `/quit`. Ctrl+C requests native interruption; a confirmed stop preserves earlier file edits. `-p` exits 0 on a correlated final reply, 1 on error or an unresolved approval, and 130 on interruption. `--timeout SECONDS` ends observation while preserving the pending request. Resume without a new prompt to keep watching, without submitting it twice.
+
+Each new CLI conversation creates its own bot and retains its native conversation across turns. Private session bindings and transcripts live under `~/.local/state/agent-picker/grokbot`, with file locks and atomic saves. Credentials are read from the existing `cursor-access-token` Keychain item or `CURSOR_ACCESS_TOKEN` and are never written into session records. The selected machine and workspace are retained when resuming.
+
+Grok Bot manages model selection, so `--model auto` is the supported choice. Native Cursor's model picker and plan-mode switches are not available through this gateway. The client uses Grok Bot's own local tools rather than invoking a different AI CLI. [Cursor's Grok Bot documentation](https://cursor.com/docs/grok-bot) describes its capabilities and [local work](https://cursor.com/docs/grok-bot/work).
 
 ## Scheduled prompts
 
@@ -217,6 +243,10 @@ Usage collection runs in background threads and never refreshes authentication t
 | Antigravity | Existing macOS Keychain token |
 
 Claude's [authentication documentation](https://code.claude.com/docs/en/authentication#credential-management) describes its platform-specific credential files. `CLAUDE_CONFIG_DIR` and `CODEX_HOME` are respected by the usage readers. Cursor and Antigravity usage endpoints and credential formats come from the original Mac implementation and may change. Login, expired credentials, provider-specific model access, and live usage accuracy need verification.
+
+Cursor's usage card has three bars: `cr` for Cursor models (Grok 4.7, Composer and Auto), `ex` for external models such as Opus, and `gb` for Grok Bot's separate weekly allowance. Each has its own reset. The Grok Bot bar stays visible by default, including an unavailable placeholder when its reading cannot be fetched. In `s` → **Usage panel → Transient Grok Bot bar**, On hides it when no reading is available; Off keeps it permanent. Grok Bot processes count on Cursor's card rather than creating a fourth provider card.
+
+While Cursor works, the whole card retains its animated background. Depletion pulses and moving bar gradients follow only the active model's pool. Several simultaneous model pools can animate independently, with one pulse per working instance up to four. The panel checks the native model footer to follow `/model` changes and falls back to the process's model argument. An unidentified model keeps the background moving without guessing which bar to animate. StarCLI reports its selected model directly. See Cursor's [Grok 4.7 allowance](https://prod.cursor.com/help/models-and-usage/grok-4-7) and [Grok Bot plan limits](https://cursor.com/help/grok-bot/plans).
 
 ## Agent catalog
 

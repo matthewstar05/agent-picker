@@ -809,12 +809,12 @@ class KeyWatch:
 
 # ---- the session ------------------------------------------------------------------
 
-def announce(provider, child):
+def announce(provider, child, model=None):
     """Tell the usage panel a turn is running: StarCLI (this pid) is driving provider."""
     path = LIVE / f"{os.getpid()}-{child}.json"
     try:
         LIVE.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps({"pid": os.getpid(), "child": child, "provider": provider,
+        path.write_text(json.dumps({"pid": os.getpid(), "child": child, "provider": provider, "model": model,
                                     "pane": os.environ.get("HERDR_PANE_ID"), "started": time.time()}),
                         encoding="utf-8")
     except OSError:
@@ -1143,7 +1143,7 @@ class Star:
             if folder:
                 shutil.rmtree(folder, ignore_errors=True)
             return "", session, str(exc), False, brief
-        live = announce(choice.provider, run.proc.pid)
+        live = announce(choice.provider, run.proc.pid, choice.model)
         task_line = prompt.strip().splitlines()[0][:120] if prompt.strip() else ""
         if self.member:
             self.member.beat(status="working", task=task_line, provider=choice.provider, ready=False, draft=False)

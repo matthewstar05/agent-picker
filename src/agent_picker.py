@@ -281,15 +281,28 @@ def usage_cursor():
     token = _keychain("cursor-access-token")
     if not token:
         return None
-    d = _http_json("https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage",
-                   {"Authorization": f"Bearer {token}", "Content-Type": "application/json",
-                    "Connect-Protocol-Version": "1"}, b"{}")
-    plan = d.get("planUsage", {})
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json",
+               "Connect-Protocol-Version": "1"}
+    windows = []
     # The monthly plan, split the way Cursor's own /usage splits it: "cr" is
-    # Auto (Cursor's models), "ex" is API (external models picked by name).
-    resets = int(d["billingCycleEnd"]) / 1000
-    windows = [{"label": label, "pct": float(plan[key]), "resets": resets}
-               for label, key in (("cr", "autoPercentUsed"), ("ex", "apiPercentUsed")) if key in plan]
+    # Cursor's models (Grok, Composer, Auto), "ex" is external models.
+    try:
+        d = _http_json("https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage", headers, b"{}")
+        plan = d.get("planUsage", {})
+        resets = int(d["billingCycleEnd"]) / 1000
+        windows = [{"label": label, "pct": float(plan[key]), "resets": resets}
+                   for label, key in (("cr", "autoPercentUsed"), ("ex", "apiPercentUsed")) if key in plan]
+    except (OSError, ValueError, TypeError, KeyError):
+        pass
+    # Grok Bot has its own weekly grant, independent of Cursor Agent's pools.
+    # These are the same fields used by the Grok Bot desktop usage screen.
+    try:
+        d = _http_json("https://api2.cursor.sh/aiserver.v1.DashboardService/GetSandUsageStatus", headers, b"{}")
+        if not d.get("usesPooledEnterpriseAllowance") and d.get("usagePercent") is not None and d.get("nextResetTimestampUtc"):
+            windows.append({"label": "gb", "pct": float(d["usagePercent"]),
+                            "resets": _epoch(d["nextResetTimestampUtc"])})
+    except (OSError, ValueError, TypeError, KeyError):
+        pass
     return windows or None
 
 
@@ -486,6 +499,19 @@ BARS = preferences.Setting(
     hint="Depleting bars start full and empty as a limit is used; filling bars grow toward 100%.",
     names={"left": "depleting", "used": "filling"})
 
+CURSOR_GROK_TRANSIENT = preferences.Setting(
+    "usage.cursor_grok_transient", "Usage panel", "Transient Grok Bot bar", [False, True], False,
+    hint="Off keeps Cursor's Grok Bot bar visible even when its reading is unavailable. On shows it only with a reading.",
+    names={False: "off · permanent", True: "on · when available"})
+
+
+def display_windows(name, entry):
+    windows = list((entry or {}).get("windows", []))[:3]
+    if name == "Cursor" and preferences.get(CURSOR_GROK_TRANSIENT.key) is not True:
+        if not any(w.get("label") == "gb" for w in windows):
+            windows.append({"label": "gb", "pct": None, "resets": None})
+    return windows
+
 
 def depleting():
     return preferences.get(BARS.key) != "used"
@@ -530,9 +556,15 @@ def usage_block(name, now_t, bar, reset):
     """Two lines of limit readouts for an agent: '5h ▰▰▱▱ 19%  ↻ 2h 31m'."""
     if name == "Star":
         return star_block(bar, reset)
+    profile = next((a for a in AGENTS if a["name"] == name), {})
+    source = profile.get("usage_provider", name)
     with USAGE_LOCK:
-        entry = USAGE.get(name)
-        pending = name in PENDING
+        entry = USAGE.get(source)
+        pending = source in PENDING
+    if entry and profile.get("usage_labels"):
+        entry = dict(entry, windows=[w for w in entry["windows"] if w["label"] in profile["usage_labels"]])
+        if not entry["windows"]:
+            entry = None
     lines = []
     if not entry:
         dots = "·" * (1 + int(now_t * 3) % 3) if pending else "-"

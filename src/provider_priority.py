@@ -6,6 +6,7 @@ import threading
 import time
 
 import provider_defaults
+from cursor_pools import model_pool
 
 DAY = 86400
 SOON = 5 * DAY
@@ -25,8 +26,7 @@ def allowance(agent, entry, now):
             return None
         defaults = provider_defaults.current(agent) or {}
         model = defaults.get("model", "").lower()
-        # Do not spend Auto's separate allowance when launching a named model.
-        label = "mo" if agent["name"] == "Kiro" else "cr" if model == "auto" else "ex"
+        label = "mo" if agent["name"] == "Kiro" else model_pool(model)
         if not isinstance(entry.get("windows"), list):
             return None
         window = next(w for w in entry["windows"] if isinstance(w, dict) and w.get("label") == label)

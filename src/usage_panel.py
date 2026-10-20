@@ -37,6 +37,7 @@ import time
 import urllib.error
 
 import agent_picker as ap
+import cursor_pools
 import preferences
 
 Line, mix, wave, clip, until = ap.Line, ap.mix, ap.wave, ap.clip, ap.until
@@ -106,6 +107,7 @@ ANIMATE = preferences.register(preferences.Setting(
     names={True: "on", False: "off"}))
 
 BARS = preferences.register(ap.BARS)
+CURSOR_GROK_TRANSIENT = preferences.register(ap.CURSOR_GROK_TRANSIENT)
 depleting = ap.depleting
 
 
@@ -159,6 +161,7 @@ USAGE = ap.USAGE     # provider -> {"windows": [...], "fetched": epoch}
 INFLIGHT = ap.PENDING  # providers being read right now
 PRESENT = {}         # provider -> its panes under the agent count setting: the cards drawn
 WORKING = {}         # provider -> those panes that are working (drawn as working)
+CURSOR_POOLS = {}    # cr / ex / gb -> working panes in Cursor's selected scope
 BUSY = {}            # provider -> its panes working anywhere (paces the reads)
 SESSIONS = {s: {} for s in SCOPE_ORDER}  # scope -> provider -> {"panes", "working"}
 SCOPES = {"tab": "this tab", "workspace": "this workspace", "all": "any workspace"}  # for the empty state
@@ -174,6 +177,7 @@ HISTORY_FILE = STATE / "history.json"
 STAR = "Star"
 STAR_LIVE = ap.STATE / "star" / "live"   # one file per turn StarCLI is running
 STAR_DRIVING = set()  # providers StarCLI is running a turn on right now
+STAR_POOLS = {}       # StarCLI pid -> the Cursor pool its current turn uses
 
 # Seconds between reads while one of its agents is working, when Herdr isn't
 # available to say, and while all of its agents are idle. Codex is a local file
@@ -187,7 +191,7 @@ INTERVALS = {
 }
 MIN_GAP = {"Claude": 20, "Codex": 2, "Cursor": 15, "Kiro": 60, "Antigravity": 20}
 SETTLE = 4           # seconds after an agent finishes a turn before re-reading
-WINDOW_LEN = {"5h": 5 * 3600, "wk": 7 * 86400}   # anything else is a month
+WINDOW_LEN = {"5h": 5 * 3600, "wk": 7 * 86400, "gb": 7 * 86400}   # anything else is a month
 
 
 def provider_of(agent):
@@ -201,7 +205,7 @@ def provider_of(agent):
     for profile in ap.AGENTS:
         for key in profile["detect"]:
             if a == key or a.startswith(key + "-"):
-                return profile["name"]
+                return profile.get("usage_provider", profile["name"])
     return None
 
 
@@ -270,6 +274,43 @@ def pane_agent(pane_id):
     return name
 
 
+_pool_cache = {}
+
+
+def cursor_pool(pane):
+    """Attribute a working pane without making the other two bars move."""
+    agent = str(pane.get("agent") or "").lower()
+    if agent in ("grok", "grokbot", "grok-bot"):
+        return "gb"
+    ident = pane["pane_id"]
+    session = (pane.get("agent_session") or {}).get("value")
+    key = (ident, session)
+    read_at, pool = _pool_cache.get(key, (0, None))
+    if time.time() - read_at < 6:
+        return pool
+    pool = None
+    try:
+        out = subprocess.run([HERDR, "agent", "read", ident, "--source", "detection", "--lines", "12"],
+                             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=2)
+        pool = cursor_pools.screen_pool(out.stdout)
+        if pool is None:
+            out = subprocess.run([HERDR, "pane", "process-info", "--pane", ident],
+                                 capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=2)
+            info = json.loads(out.stdout)["result"]["process_info"]
+            for process in info.get("foreground_processes", []):
+                argv = process.get("argv") or [process.get("name", "")]
+                if from_argv(argv) == "Cursor":
+                    program = " ".join(argv[:3]).lower()
+                    pool = "gb" if "grokbot" in program else cursor_pools.argv_pool(argv)
+                    if pool:
+                        break
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+        pass
+    # An unknown model still animates the card background, without guessing a bar.
+    _pool_cache[key] = (time.time(), pool)
+    return pool
+
+
 def herdr_sessions(me):
     """({scope: agents in this pane's tab, its workspace, every workspace},
     working pane ids per profile). Herdr lists every workspace's panes."""
@@ -287,6 +328,7 @@ def herdr_sessions(me):
         if not name:
             continue
         busy = pane.get("agent_status") == "working"
+        pool = cursor_pool(pane) if busy and name == "Cursor" else None
         if busy:
             working.setdefault(name, set()).add(pane["pane_id"])
         scopes = ["all"] + ["workspace"] * (pane.get("workspace_id") == space) + ["tab"] * (pane.get("tab_id") == tab)
@@ -294,6 +336,9 @@ def herdr_sessions(me):
             slot = found[scope].setdefault(name, {"panes": 0, "working": 0})
             slot["panes"] += 1
             slot["working"] += busy
+            if pool:
+                pools = slot.setdefault("pools", {})
+                pools[pool] = pools.get(pool, 0) + 1
 
     def reach(pane_id):
         pane = next((p for p in panes if p.get("pane_id") == pane_id), None)
@@ -309,6 +354,7 @@ def herdr_sessions(me):
 def star_turns():
     """[(provider, pane id, pid)] for each turn StarCLI is running right now."""
     turns = []
+    STAR_POOLS.clear()
     for path in STAR_LIVE.glob("*.json") if STAR_LIVE.is_dir() else ():
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
@@ -324,6 +370,8 @@ def star_turns():
                 pass
             continue
         turns.append((data.get("provider"), data.get("pane"), pid))
+        if data.get("provider") == "Cursor":
+            STAR_POOLS[pid] = cursor_pools.model_pool(data.get("model"))
     return turns
 
 
@@ -341,6 +389,10 @@ def add_star_turns(found, working, reach=lambda pane: list(SCOPE_ORDER)):
                     slot["panes"] = max(slot["panes"], 1)
                 else:
                     slot["panes"] += 1
+                if name == "Cursor" and STAR_POOLS.get(pid):
+                    pools = slot.setdefault("pools", {})
+                    pool = STAR_POOLS[pid]
+                    pools[pool] = pools.get(pool, 0) + 1
         for name in filter(None, (provider, STAR)):
             working.setdefault(name, set()).add(f"star:{pid}")
         if provider:
@@ -421,6 +473,7 @@ def rescope():
     with LOCK:
         PRESENT.clear()
         WORKING.clear()
+        CURSOR_POOLS.clear()
         for name in SESSIONS["all"]:
             mode = card_mode(name)
             if mode == "off":
@@ -430,6 +483,8 @@ def rescope():
                 PRESENT[name] = counted.get(name, {}).get("panes", 0)
                 if slot["working"]:
                     WORKING[name] = slot["working"]
+                    if name == "Cursor":
+                        CURSOR_POOLS.update(slot.get("pools", {}))
         # A card needs its provider both within reach and within its own scope.
         modes = [preferences.get(s.key) for s in card_settings()]
         widest = max((min(SCOPE_ORDER.index(reach), SCOPE_ORDER.index(m)) for m in modes
@@ -654,7 +709,7 @@ def pace(w, now):
 # A limit is flagged once it is 70% used while its reset is still further away
 # than this; a monthly limit that resets within five days is never flagged.
 CONCERN_PCT = 70
-CONCERN_LEFT = {"5h": 2 * 3600, "wk": 2 * 86400}   # anything else is monthly: 5 days
+CONCERN_LEFT = {"5h": 2 * 3600, "wk": 2 * 86400, "gb": 2 * 86400}   # anything else is monthly: 5 days
 
 
 def concerning(w, now):
@@ -786,12 +841,13 @@ def card(view, i, cw, t, now, rows=3):
         panes = PRESENT.get(name, 0)
         held = HOLDS.get(name, 0)
         driving = frozenset(STAR_DRIVING) if name == STAR else None
+        pools = tuple(sorted(CURSOR_POOLS.items())) if name == "Cursor" else ()
     held = held if held > now else 0
     # Working cards share the border's continuous 60 fps clock. Idle cards
     # still reuse their cached contents between countdown updates.
     step = t if working and view.anim else 0.0
     key = (i, name, cw, rows, view.theme, view.anim, depleting(), int(now), entry and entry["fetched"], fetching,
-           int(t * 3) % 3 if fetching else 0, working, len(HISTORY.get(name) or ()), step, panes, held, driving)
+           int(t * 3) % 3 if fetching else 0, working, len(HISTORY.get(name) or ()), step, panes, held, driving, pools)
     if CARDS.get(i, (None,))[0] != key:
         CARDS[i] = (key, _card(view, i, cw, step, now, entry, fetching, working,
                              dots=key[10], rows=rows, panes=panes, held=held))
@@ -878,9 +934,17 @@ def _card(view, i, cw, t, now, entry, fetching, working, dots=None, rows=3, pane
         else:
             msg = ("reading limits" + "·" * (1 + dots)) if fetching else f"no data · is {name} signed in?"
         lines.append(Line().put("   ").put(clip(msg, cw - 4), SOFT).pad(cw))
+        if any(w.get("label") == "gb" for w in ap.display_windows(name, entry)):
+            lines.append(Line().put("   gb  ", LABEL).put("unavailable", SOFT).pad(cw))
     else:
-        for k, w in enumerate(entry["windows"][:2]):
+        for k, w in enumerate(ap.display_windows(name, entry)):
             w = dict(w)
+            if w.get("pct") is None:
+                line = Line().put("   ").put(w["label"].ljust(2), LABEL).put(" ")
+                bar = min(40, max(0, cw - 23))
+                line.put("▱" * bar, TRACK).put("   —", SOFT)
+                lines.append(line.pad(cw))
+                continue
             if w.get("resets") and w["resets"] < now:
                 w["pct"] = 0  # rolled over since this was read
             pct = w["pct"]
@@ -889,9 +953,11 @@ def _card(view, i, cw, t, now, entry, fetching, working, dots=None, rows=3, pane
             tail_w = 12 if cw - 6 - 5 - 12 >= 6 else 0
             bar = min(40, cw - 6 - 5 - tail_w - 1)
             if bar >= 3:
-                draw_bar(line, w, bar, st, t if view.anim else 0, live and view.anim, stale, now,
+                active = CURSOR_POOLS.get(w["label"], 0) if name == "Cursor" else working
+                bar_t = t if view.anim and (active or name != "Cursor") else 0
+                draw_bar(line, w, bar, st, bar_t, bool(active and view.anim), stale, now,
                          0 if themed else i * 0.13,
-                         pulses=max(1, min(working, 4)))
+                         pulses=max(1, min(active, 4)))
             pcol = pct_color(w, st, now)
             pcol = WHITE if rainbow else (mix(pcol, SOFT, 0.5) if stale else pcol)
             line.put(f" {shown_pct(pct):3.0f}%", pcol, bold=True)
@@ -986,24 +1052,29 @@ def compact_row(view, i, width, t, now):
                 line.put(glyph, color)
         shown = info["now"] if depleting() else 100 - info["now"]
         line.put(f"{shown:4.0f}%", WHITE if rainbow else meter.pct_color(), bold=True)
-    elif entry:
-        windows = entry["windows"][:2]
+    elif entry or ap.display_windows(name, entry):
+        windows = ap.display_windows(name, entry)
         credits = ap.credits_text(windows[0]) if len(windows) == 1 else None
-        share = (width - len(line.cells)) // 2
+        share = (width - len(line.cells)) // max(2, len(windows))
         if credits:
             # the bar gives up whatever the credits need from the second half
             share = min(share, width - len(line.cells) - len(credits) - 1)
         for w in windows:
             w = dict(w)
+            if w.get("pct") is None:
+                line.put(" " + w["label"] + "  —", SOFT)
+                continue
             if w.get("resets") and w["resets"] < now:
                 w["pct"] = 0
             seg_start = len(line.cells)
             line.put(" " + w["label"].ljust(2) + " ", LABEL)
             bar = min(16, share - 9)
             if bar >= 2:
-                draw_bar(line, w, bar, st, t if view.anim else 0,
-                         bool(rainbow and working and view.anim), False, now,
-                         i * 0.13 if brand else 0, pulses=max(1, min(working, 4)))
+                active = CURSOR_POOLS.get(w["label"], 0) if name == "Cursor" else working
+                bar_t = t if view.anim and (active or name != "Cursor") else 0
+                draw_bar(line, w, bar, st, bar_t,
+                         bool(active and view.anim and (rainbow or name == "Cursor")), False, now,
+                         i * 0.13 if brand else 0, pulses=max(1, min(active, 4)))
             line.put(f"{shown_pct(w['pct']):4.0f}%", WHITE if rainbow else pct_color(w, st, now), bold=True)
             line.pad(max(len(line.cells), seg_start + share))
         if credits:
@@ -1049,7 +1120,8 @@ def overlay(cells, col, text, color, bold=False, style=None, t=0.0):
 def working_card(view, i, width, t, now, lids=True, active=True, height=None):
     """Reserve the selector's border space, drawing it only while working.
     height: total lines including lids; the card grows to fill it."""
-    inner = 3 if height is None else max(3, height - (2 if lids else 0))
+    minimum = card_rows(view.agents[i])
+    inner = minimum if height is None else max(minimum, height - (2 if lids else 0))
     content = card(view, i, width - 2, t, now, rows=inner)
     style = border_style(view, i)
     tick = t if view.anim else 0.4
@@ -1064,6 +1136,13 @@ def working_card(view, i, width, t, now, lids=True, active=True, height=None):
     return lines
 
 
+def card_rows(agent):
+    windows = ap.display_windows(agent["name"], USAGE.get(agent["name"]))
+    # Permanent mode reserves the third row even before the first read.
+    return max(4 if agent["name"] == "Cursor" and preferences.get(CURSOR_GROK_TRANSIENT.key) is not True else 3,
+               1 + len(windows))
+
+
 def fitted_rows(view, ncols, cw, nr, active, height, t, now):
     """Cards for panes too short for every card to reserve a border: each row
     of cards is three lines, the gaps between rows (and above and below them)
@@ -1073,7 +1152,8 @@ def fitted_rows(view, ncols, cw, nr, active, height, t, now):
     # gap k sits above row k (the last one is below every row); a border needs
     # one row on each side of its card
     need = [(k > 0 and live[k - 1]) + (k < nr and live[k]) for k in range(nr + 1)]
-    free = height - 3 * nr
+    row_heights = [max(card_rows(a) for a in view.agents[r * ncols:(r + 1) * ncols]) for r in range(nr)]
+    free = height - sum(row_heights)
     even = free // (nr + 1)
     if even >= max(need):
         gaps = [even] * (nr + 1)
@@ -1097,15 +1177,15 @@ def fitted_rows(view, ncols, cw, nr, active, height, t, now):
             if i >= len(view.agents):
                 continue
             if active[i]:
-                box = working_card(view, i, cw, t, now, True, True, height=5)
+                box = working_card(view, i, cw, t, now, True, True, height=row_heights[r] + 2)
                 for k, line in enumerate(box):
                     if 0 <= y - 1 + k < height:
                         lines[y - 1 + k][c] = line
             else:
-                for k, line in enumerate(working_card(view, i, cw, t, now, False, False, height=3)):
+                for k, line in enumerate(working_card(view, i, cw, t, now, False, False, height=row_heights[r])):
                     if y + k < height:
                         lines[y + k][c] = line
-        y += 3
+        y += row_heights[r]
     return lines
 
 
@@ -1177,13 +1257,14 @@ def render(view, cols, rows, t):
     #  fitted   only working cards get a border (5 rows, idle cards 3), for
     #           panes a little too short for uniform;
     #  bare     no lids at all, for very short panes.
-    fitted = [5 if live else 3 for live in active]
-    arrangement = plan(n, inner_w, inner_h, [5] * n)
+    heights = [card_rows(a) for a in view.agents]
+    fitted = [h + 2 if live else h for h, live in zip(heights, active)]
+    arrangement = plan(n, inner_w, inner_h, [h + 2 for h in heights])
     mode = "uniform"
     if arrangement is None and any(active):
         arrangement, mode = plan(n, inner_w, inner_h, fitted), "fitted"
     if arrangement is None:
-        arrangement, mode = plan(n, inner_w, inner_h), "bare"
+        arrangement, mode = plan(n, inner_w, inner_h, heights), "bare"
     lids = mode != "bare"
     if arrangement:
         ncols, cw, nr, gap = arrangement

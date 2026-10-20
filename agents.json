@@ -399,6 +399,67 @@
     ]
   },
   {
+    "name": "Grok Bot",
+    "pastel": [
+      225,
+      225,
+      235
+    ],
+    "gradient": [
+      [
+        245,
+        245,
+        250
+      ],
+      [
+        125,
+        130,
+        145
+      ],
+      [
+        235,
+        150,
+        160
+      ]
+    ],
+    "bar_gradient": [
+      [
+        230,
+        230,
+        240
+      ],
+      [
+        165,
+        170,
+        190
+      ],
+      [
+        255,
+        160,
+        165
+      ]
+    ],
+    "model": "provider-managed",
+    "short": "Grok Bot",
+    "color": [
+      225,
+      225,
+      235
+    ],
+    "detail": "Cursor Grok Bot usage \u00b7 local machine tools",
+    "argv": [
+      "grokbot"
+    ],
+    "detect": [
+      "grokbot",
+      "grok"
+    ],
+    "usage_provider": "Cursor",
+    "usage_labels": [
+      "gb"
+    ]
+  },
+  {
     "name": "OpenCode",
     "pastel": [
       255,

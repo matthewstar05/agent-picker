@@ -42,7 +42,7 @@
       "cost": 0.8,
       "tiers": {
         "light": {"model": "auto", "pool": "cr", "cost": 0.4},
-        "standard": {"model": "grok-4.7-high", "pool": "ex"},
+        "standard": {"model": "grok-4.7-high", "pool": "cr"},
         "heavy": {"model": "claude-opus-5-5-high", "pool": "ex"}
       },
       "quality": {"chat": 0.8, "search": 0.82, "mechanical": 0.85, "edit": 0.86, "build": 0.86,

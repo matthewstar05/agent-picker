@@ -63,6 +63,9 @@ def summary(usage, installed, agents, now=None):
         if name not in installed or name not in agents:
             continue
         found = star_router.windows(usage.get(name), now)
+        routed_pools = {tier.get("pool") for tier in spec.get("tiers", {}).values() if tier.get("pool")}
+        if routed_pools and found:
+            found = [window for window in found if window[0] in routed_pools]
         if not found:
             continue
         pools = bool(spec.get("pools"))

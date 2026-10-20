@@ -29,7 +29,8 @@ def install_herdr_ai(bindir):
     bindir.mkdir(parents=True, exist_ok=True)
     for name, script in (("herdr-ai", "herdr_ai.py"), ("agent-route", "agent_route.py"),
                          ("herdr-reset", "herdr_reset.py"), ("starcli", "starcli.py"),
-                         ("schedule", "prompt_scheduler.py")):
+                         ("schedule", "prompt_scheduler.py"), ("grokbot", "grokbot.py"),
+                         ("grok", "grokbot.py")):
         wrapper = bindir / name
         content = "#!/bin/sh\n# agent-picker managed launcher\nexec " + shlex.quote(sys.executable) + " " + shlex.quote(str(ROOT / "src" / script)) + ' "$@"\n'
         if not wrapper.exists() or wrapper.read_text(errors="ignore") != content:
@@ -63,11 +64,17 @@ def main():
     block = (START + "\n" + 'export PATH="$HOME/.local/bin:$PATH"\n'
              + "alias agent=" + alias + "\n" + "alias usage=" + shlex.quote(str(wrapper) + " --picker-usage") + "\n"
              + "alias star=" + shlex.quote(str(bindir / "starcli")) + "\n"
-             + "alias schedule=" + shlex.quote(str(bindir / "schedule")) + "\n" + END + "\n")
+             + "alias schedule=" + shlex.quote(str(bindir / "schedule")) + "\n"
+             + "alias grok=" + shlex.quote(str(bindir / "grokbot")) + "\n" + END + "\n")
     for rc in (Path.home() / ".zshrc", Path.home() / ".bashrc"):
         original = rc.read_text() if rc.exists() else ""
         text = re.sub(re.escape(START) + r".*?" + re.escape(END) + r"\n?", "", original, flags=re.S)
         text = re.sub(r'^alias agent=[\"\']agent-picker[\"\']\s*\n', "", text, flags=re.M)
+        # Migrate the earlier gbot management-CLI alias without touching a custom command.
+        old_grok = "alias grok=" + shlex.quote(str(bindir / "gbot"))
+        text = "\n".join(line for line in text.split("\n")
+                         if line not in (old_grok, "alias grok='" + str(bindir / "gbot") + "'",
+                                         'alias grok="' + str(bindir / "gbot") + '"'))
         # Keep Kiro's post integration at the bottom of the profile.
         marker = "# Kiro CLI post block. Keep at the bottom of this file."
         index = text.find(marker)
@@ -78,7 +85,7 @@ def main():
         if text != original:
             backup(rc)
             rc.write_text(text)
-    print("Installed. Open a new terminal, then run agent --picker-doctor. usage opens the usage panel; star opens StarCLI; schedule opens the scheduler.")
+    print("Installed. Open a new terminal, then run agent --picker-doctor. usage opens the usage panel; star opens StarCLI; schedule opens the scheduler; grok opens Grok Bot.")
     print(f"Updates are read directly from: {ROOT}")
 
 

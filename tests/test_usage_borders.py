@@ -33,6 +33,7 @@ class UsageBorderTests(unittest.TestCase):
         if hasattr(panel, "preferences"):
             for patcher in (patch.object(panel.preferences, "PATH", Path(folder.name) / "preferences.json"),
                             patch.object(panel.preferences, "_values", {}),
+                            patch.dict(panel.CURSOR_POOLS, {}, clear=True),
                             patch.object(panel.ap.VISIBILITY, "children", list(panel.ap.VISIBILITY.children))):
                 patcher.start()
                 self.addCleanup(patcher.stop)
@@ -44,6 +45,7 @@ class UsageBorderTests(unittest.TestCase):
         present.start()
         self.addCleanup(present.stop)
         now = time.time()
+        panel.preferences.put(panel.CURSOR_GROK_TRANSIENT.key, True)
         panel.USAGE.update({a["name"]: {"windows": [{"label": "5h", "pct": 15, "resets": now + 10800},
                                                     {"label": "wk", "pct": 6, "resets": now + 400000}],
                                         "fetched": now} for a in panel.ap.AGENTS})
@@ -237,7 +239,12 @@ class UsageBorderTests(unittest.TestCase):
 
         for anim in (False, True):
             for workers in (0, 1, 3):
+                # This palette comparison lights every synthetic Cursor window;
+                # selected-pool isolation is covered in test_cursor_pools.
+                panel.CURSOR_POOLS.clear()
+                panel.CURSOR_POOLS.update({"5h": workers, "wk": workers})
                 for tick in (0.0, 1.5, 2.5):
+                    tick = tick if workers else 0.0  # card() freezes idle cards' clock
                     self.select_theme(reference_view, "brand")
                     panel.preferences.put(panel.ANIMATE.key, anim)
                     baseline = panel._card(reference_view, 0, 50, tick, now, entry, False, workers)
@@ -262,6 +269,7 @@ class UsageBorderTests(unittest.TestCase):
             for workers in (0, 3):
                 with patch.dict(panel.PRESENT, {a["name"]: 12 for a in view.agents}, clear=True), \
                         patch.dict(panel.WORKING, {a["name"]: workers for a in view.agents}, clear=True), \
+                        patch.dict(panel.CURSOR_POOLS, {"5h": workers, "wk": workers}, clear=True), \
                         patch.dict(panel.USAGE, {a["name"]: entry for a in view.agents}, clear=True):
                     shared = []
                     for i, agent in enumerate(view.agents):
@@ -279,9 +287,14 @@ class UsageBorderTests(unittest.TestCase):
                         status = full[0][plain.index("3 working"):] if workers else []
                         shared.append(([color for _, color, _ in title[:4]], full[0][1][1], status,
                                        [color for ch, color, _ in full[1] if ch == "▰"],
-                                       [color for ch, color, _ in compact if ch == "▰"]))
+                                       # Cursor's compact bars now pulse in every
+                                       # theme; other compact providers pulse only in rainbow.
+                                       [color for ch, color, _ in compact if ch == "▰"]
+                                       if agent["name"] != "Cursor" or theme["name"] == "rainbow" else None))
                     for sample in shared[1:]:
-                        self.assertEqual(sample, shared[0], (theme["name"], workers))
+                        self.assertEqual(sample[:4], shared[0][:4], (theme["name"], workers))
+                        if sample[4] is not None:
+                            self.assertEqual(sample[4], shared[0][4], (theme["name"], workers))
 
     def test_themed_titles_and_counts_stay_still_when_animation_is_off(self):
         view = self.view()
