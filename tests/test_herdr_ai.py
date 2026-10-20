@@ -40,6 +40,8 @@ class FakeHerdr:
             pane = f"w9:p{self.next_id}"
             self.panes[pane] = {}
             result = {"pane": {"pane_id": pane}}
+        elif args[:2] == ["pane", "get"]:
+            result = {"pane": {"pane_id": args[2], "scroll": {"viewport_rows": 40}}}
         elif args[:2] == ["pane", "list"]:
             result = {"panes": [{"pane_id": p, "tab_id": "w9:t1", "terminal_id": "term_" + p,
                                  **{k: i[k] for k in ("agent", "agent_session", "agent_status", "cwd") if k in i}}
@@ -823,6 +825,28 @@ class HerdrAiTests(unittest.TestCase):
         usage = next(c for c in self.fake.calls if c[:3] == ["pane", "split", panes["lead"]])
         self.assertEqual(usage[usage.index("--direction") + 1], "down")
         self.assertGreater(float(usage[usage.index("--ratio") + 1]), 0.75)
+
+    def down_ratios(self, setup):
+        """The usage and terminal split ratios a team layout asks herdr for."""
+        self.run_cli(INSIDE, setup=setup)
+        panes = self.team_panes()["panes"]
+        found = {}
+        for c in self.fake.calls:
+            if c[:2] == ["pane", "split"] and c[c.index("--direction") + 1] == "down":
+                if c[2] == panes["lead"]:
+                    found["usage"] = float(c[c.index("--ratio") + 1])
+                elif c[2] == panes["terminal"]:
+                    found["terminal"] = float(c[c.index("--ratio") + 1])
+        return found
+
+    def test_team_usage_and_terminal_line_up(self):
+        self.assertEqual(self.down_ratios("Codex"), {"usage": 0.82, "terminal": 0.82})
+
+    def test_cursor_usage_and_terminal_start_one_row_higher(self):
+        self.assertEqual(self.down_ratios("Cursor"), {"usage": 0.795, "terminal": 0.795})
+
+    def test_grok_bot_usage_and_terminal_start_one_row_higher(self):
+        self.assertEqual(self.down_ratios("Grok Bot"), {"usage": 0.795, "terminal": 0.795})
 
     def test_rerun_resumes_each_team_member_without_replaying_the_lead_prompt(self):
         self.run_cli(INSIDE, setup="Kiro")

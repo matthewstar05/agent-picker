@@ -600,13 +600,33 @@ def build(herdr, root, cwd, team=None, plan=None):
     return panes
 
 
+# Teams whose usage pane shows Cursor's card, which has a third bar. Grok Bot's
+# quota is Cursor's, so its team shows the same card.
+TALL_USAGE = ("Cursor", "Grok Bot")
+
+
+def one_row(herdr, pane):
+    """One terminal row of pane's height as a split ratio; 0.04 when herdr does
+    not report the height."""
+    try:
+        rows = herdr("pane", "get", pane)["pane"]["scroll"]["viewport_rows"]
+    except (KeyError, TypeError):
+        rows = 0
+    return 1 / rows if isinstance(rows, int) and rows >= 10 else 0.04
+
+
 def build_team(herdr, root, split, team, plan):
     """The lead on the right over a short usage pane (one provider fits in a few
     rows), the crew in a 2x2 grid on the left, and the terminal under them."""
     panes = {"terminal": root}
     panes["lead"] = split(root, "right", 0.72)
-    panes["usage"] = split(panes["lead"], "down", 0.82)
-    panes["crew1"] = split(root, "down", 0.82)
+    ratio = 0.82
+    if team in TALL_USAGE:
+        # Cursor's card has three bars, so its usage pane and the terminal beside
+        # it start one row higher to keep the bars and the terminal lined up.
+        ratio -= one_row(herdr, root)
+    panes["usage"] = split(panes["lead"], "down", round(ratio, 4))
+    panes["crew1"] = split(root, "down", round(ratio, 4))
     # Swap so the caller's shell, which keeps focus, becomes the terminal.
     herdr("pane", "swap", "--source-pane", root, "--target-pane", panes["crew1"])
     panes["crew2"] = split(panes["crew1"], "right", 0.49)
