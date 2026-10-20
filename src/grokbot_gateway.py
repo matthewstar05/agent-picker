@@ -127,7 +127,7 @@ class Gateway:
     def agents(self):
         data = self.call("listAgents")
         rows = data if isinstance(data, list) else data.get("agents", []) if isinstance(data, dict) else None
-        if not isinstance(rows, list) or not all(isinstance(e, dict) for e in rows):
+        if not isinstance(rows, list):
             raise GrokError("Invalid Grok Bot roster.")
         return [row for row in rows if isinstance(row, dict) and row.get("id")]
 
@@ -165,7 +165,7 @@ class Gateway:
     def transcript(self, ident):
         data = self.call("getAgentTranscriptTail", {"id": ident, "limit": 200})
         rows = data.get("entries", []) if isinstance(data, dict) else []
-        if not isinstance(rows, list):
+        if not isinstance(rows, list) or not all(isinstance(e, dict) for e in rows):
             raise GrokError("Invalid Grok Bot transcript.")
         return rows
 

@@ -239,6 +239,12 @@ class GrokBotTests(unittest.TestCase):
         self.assertEqual(calls[-1][1], {"agentId": BOT, "prompt": "task", "clientNonce": "nonce", "machineId": "local"})
         self.assertEqual(calls[-1][2]["x-anyrun-network-token"], "network")
 
+    def test_malformed_transcript_is_reported_as_a_gateway_error(self):
+        g = gateway.Gateway()
+        with patch.object(g, "call", return_value={"entries": [None, "invalid"]}):
+            with self.assertRaisesRegex(gateway.GrokError, "Invalid Grok Bot transcript"):
+                g.transcript(BOT)
+
     def test_terminal_control_sequences_are_removed(self):
         self.assertEqual(cli.clean("hello\x1b]52;c;BAD\x07\x1b[31mworld\x00"), "helloworld")
 
