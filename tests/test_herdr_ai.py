@@ -842,11 +842,11 @@ class HerdrAiTests(unittest.TestCase):
     def test_team_usage_and_terminal_line_up(self):
         self.assertEqual(self.down_ratios("Codex"), {"usage": 0.82, "terminal": 0.82})
 
-    def test_cursor_usage_and_terminal_start_one_row_higher(self):
-        self.assertEqual(self.down_ratios("Cursor"), {"usage": 0.795, "terminal": 0.795})
+    def test_cursor_usage_and_terminal_start_two_rows_higher(self):
+        self.assertEqual(self.down_ratios("Cursor"), {"usage": 0.77, "terminal": 0.77})
 
-    def test_grok_bot_usage_and_terminal_start_one_row_higher(self):
-        self.assertEqual(self.down_ratios("Grok Bot"), {"usage": 0.795, "terminal": 0.795})
+    def test_grok_bot_usage_and_terminal_start_two_rows_higher(self):
+        self.assertEqual(self.down_ratios("Grok Bot"), {"usage": 0.77, "terminal": 0.77})
 
     def test_rerun_resumes_each_team_member_without_replaying_the_lead_prompt(self):
         self.run_cli(INSIDE, setup="Kiro")

@@ -623,8 +623,8 @@ def build_team(herdr, root, split, team, plan):
     ratio = 0.82
     if team in TALL_USAGE:
         # Cursor's card has three bars, so its usage pane and the terminal beside
-        # it start one row higher to keep the bars and the terminal lined up.
-        ratio -= one_row(herdr, root)
+        # it start two rows higher, keeping the bars and the terminal lined up.
+        ratio -= 2 * one_row(herdr, root)
     panes["usage"] = split(panes["lead"], "down", round(ratio, 4))
     panes["crew1"] = split(root, "down", round(ratio, 4))
     # Swap so the caller's shell, which keeps focus, becomes the terminal.
