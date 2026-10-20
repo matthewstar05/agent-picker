@@ -249,41 +249,47 @@ class UsagePanelTests(unittest.TestCase):
                 self.assertIn(name + " (3)", ANSI.sub("", text))
                 self.assertIn(suffix, re.sub(r"\x1b\[48;2;[0-9;]+m", "", text))
 
-    def test_working_card_keeps_its_full_border_in_a_tight_pane(self):
+    def test_tight_pane_gives_working_and_idle_cards_the_same_space(self):
         # Four agents in 19 rows: too short for every card to reserve a border
-        # (4 x 5 = 20), but the one working card still gets both of its lids.
-        names = ["Claude", "Codex", "Antigravity", "Cursor"]
+        # (4 x 5 = 20), so no card gets lids and the spacing stays even.
+        names = ["Claude", "Codex", "Antigravity", "Kiro"]
         panel.PRESENT.clear()
         panel.PRESENT.update({n: 1 for n in names})
         panel.WORKING.clear()
-        panel.WORKING["Claude"] = 1
-        now = time.time()
-        for n in names:
-            panel.USAGE[n] = {"windows": [{"label": "5h", "pct": 20, "resets": now + 9000}], "fetched": now}
-        view = panel.View([a for a in panel.ap.AGENTS if a["name"] in names])
-        plain = [ANSI.sub("", "".join(l) if isinstance(l, tuple) else l) for l in panel.render(view, 46, 21, 1.0)]
-        claude = next(y for y, line in enumerate(plain) if "Claude" in line)
-        self.assertIn("╭", plain[claude - 1])
-        bottom = next(y for y in range(claude, len(plain)) if "╰" in plain[y][:4])
-        self.assertLess(bottom, next(y for y, line in enumerate(plain) if "Codex" in line))
-
-    def test_tight_pane_spaces_cards_evenly_around_a_working_border(self):
-        names = ["Claude", "Codex", "Antigravity", "Cursor", "Kiro"]
-        panel.PRESENT.clear()
-        panel.PRESENT.update({n: 1 for n in names})
-        panel.WORKING.clear()
-        panel.WORKING["Antigravity"] = 1
+        panel.WORKING.update({"Claude": 1, "Codex": 1})
         now = time.time()
         for n in names:
             panel.USAGE[n] = {"windows": [{"label": "5h", "pct": 20, "resets": now + 9000},
                                           {"label": "wk", "pct": 5, "resets": now + 400000}], "fetched": now}
         view = panel.View([a for a in panel.ap.AGENTS if a["name"] in names])
-        plain = [ANSI.sub("", "".join(l) if isinstance(l, tuple) else l) for l in panel.render(view, 44, 25, 1.0)]
+        plain = [ANSI.sub("", "".join(l) if isinstance(l, tuple) else l) for l in panel.render(view, 44, 21, 1.0)]
         rows = [next(y for y, line in enumerate(plain) if n in line) for n in names]
         self.assertEqual(len({b - a for a, b in zip(rows, rows[1:])}), 1, rows)
-        working = rows[2]
-        self.assertIn("╭", plain[working - 1])
-        self.assertIn("╰", plain[working + 3])
+        self.assertFalse(any(c in line for line in plain[1:-1] for c in "╭╰"), plain)
+
+    def test_a_taller_card_keeps_the_same_gap_as_the_rest(self):
+        # A third limit makes Antigravity's card a row taller; the blank rows
+        # between every pair of cards still match.
+        names = ["Claude", "Codex", "Antigravity", "Cursor", "Kiro"]
+        panel.PRESENT.clear()
+        panel.PRESENT.update({n: 1 for n in names})
+        panel.WORKING.clear()
+        panel.WORKING.update({"Claude": 1, "Codex": 1})
+        now = time.time()
+        windows = [{"label": "5h", "pct": 20, "resets": now + 9000},
+                   {"label": "wk", "pct": 5, "resets": now + 400000},
+                   {"label": "mo", "pct": 10, "resets": now + 400000}]
+        for n in names:
+            panel.USAGE[n] = {"windows": windows if n == "Antigravity" else windows[:2], "fetched": now}
+        view = panel.View([a for a in panel.ap.AGENTS if a["name"] in names])
+        plain = [ANSI.sub("", "".join(l) if isinstance(l, tuple) else l) for l in panel.render(view, 46, 24, 1.0)]
+        self.assertIn(" mo ", "".join(plain))
+        rows = [next(y for y, line in enumerate(plain) if n in line) for n in names]
+        gaps = []
+        for start, nxt in zip(rows, rows[1:]):
+            last = max(y for y in range(start, nxt) if plain[y].strip("│ "))
+            gaps.append(nxt - last - 1)
+        self.assertEqual(len(set(gaps)), 1, plain)
 
     def test_idle_cards_center_when_the_last_card_is_short(self):
         names = ["Claude", "Codex", "Antigravity", "Cursor", "Kiro"]

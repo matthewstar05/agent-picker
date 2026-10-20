@@ -1148,52 +1148,6 @@ def card_rows(agent):
                1 + len(windows))
 
 
-def fitted_rows(view, ncols, cw, nr, active, height, t, now):
-    """Cards for panes too short for every card to reserve a border: each row
-    of cards is three lines, the gaps between rows (and above and below them)
-    are as even as possible, and a working card's border sits in the gap rows
-    right around it. Returns each line as one segment per column."""
-    live = [any(active[r * ncols:(r + 1) * ncols]) for r in range(nr)]
-    # gap k sits above row k (the last one is below every row); a border needs
-    # one row on each side of its card
-    need = [(k > 0 and live[k - 1]) + (k < nr and live[k]) for k in range(nr + 1)]
-    row_heights = [max(card_rows(a) for a in view.agents[r * ncols:(r + 1) * ncols]) for r in range(nr)]
-    free = height - sum(row_heights)
-    even = free // (nr + 1)
-    if even >= max(need):
-        gaps = [even] * (nr + 1)
-        left = free - even * (nr + 1)
-    else:
-        gaps = list(need)
-        left = free - sum(need)
-        for k in range(nr + 1):
-            gaps[k] += left // (nr + 1)
-        left -= left // (nr + 1) * (nr + 1)
-    # leftover rows go to the top and bottom first, alternating, then inward
-    order = sorted(range(nr + 1), key=lambda k: min(k, nr - k))
-    for k in order[:max(0, left)]:
-        gaps[k] += 1
-    lines = [[" " * cw for _ in range(ncols)] for _ in range(height)]
-    y = 0
-    for r in range(nr):
-        y += gaps[r]
-        for c in range(ncols):
-            i = r * ncols + c
-            if i >= len(view.agents):
-                continue
-            if active[i]:
-                box = working_card(view, i, cw, t, now, True, True, height=row_heights[r] + 2)
-                for k, line in enumerate(box):
-                    if 0 <= y - 1 + k < height:
-                        lines[y - 1 + k][c] = line
-            else:
-                for k, line in enumerate(working_card(view, i, cw, t, now, False, False, height=row_heights[r])):
-                    if y + k < height:
-                        lines[y + k][c] = line
-        y += row_heights[r]
-    return lines
-
-
 def empty_state(width, height):
     """Shown until an agent is open beside this pane."""
     title = f"no agents in {SCOPE}"
@@ -1256,21 +1210,16 @@ def render(view, cols, rows, t):
 
     inner_w, inner_h = cols - 4, rows - 2
     body = []
-    # Three ways to lay the cards out, best first:
+    # Two ways to lay the cards out, best first. Working and idle cards always
+    # get the same space, so the panel never bunches up around a border:
     #  uniform  every card reserves border space, so nothing moves when an
     #           agent starts or stops working;
-    #  fitted   only working cards get a border (5 rows, idle cards 3), for
-    #           panes a little too short for uniform;
-    #  bare     no lids at all, for very short panes.
+    #  bare     no lids at all, for panes too short for uniform.
     heights = [card_rows(a) for a in view.agents]
-    fitted = [h + 2 if live else h for h, live in zip(heights, active)]
     arrangement = plan(n, inner_w, inner_h, [h + 2 for h in heights])
-    mode = "uniform"
-    if arrangement is None and any(active):
-        arrangement, mode = plan(n, inner_w, inner_h, fitted), "fitted"
+    lids = arrangement is not None
     if arrangement is None:
-        arrangement, mode = plan(n, inner_w, inner_h, heights), "bare"
-    lids = mode != "bare"
+        arrangement = plan(n, inner_w, inner_h, heights)
     if arrangement:
         ncols, cw, nr, gap = arrangement
         # Cards tile the whole panel: bordered cards take every column and their
@@ -1288,28 +1237,28 @@ def render(view, cols, rows, t):
             text = (" " * gap_x).join(segs)
             return " " * left + text + " " * (inner_w - left - ap.visible_len(text))
 
-        if mode == "fitted":
-            body, pad_top = fitted_rows(view, ncols, cw, nr, active, inner_h, t, now), 0
-            body = [join(segs) for segs in body]
-        else:
-            # Every row of cards gets the same height; rows that don't divide
-            # evenly go above and below the cards rather than into one card.
-            slot = (inner_h - (nr - 1) * gap) // nr
-            cards = [working_card(view, i, cw, t, now, lids, active[i], height=slot) for i in range(n)]
-            for r in range(nr):
-                if r:
-                    body += [""] * gap
-                row_cards = cards[r * ncols:(r + 1) * ncols]
-                for y in range(max(len(c) for c in row_cards)):
-                    body.append(join([c[y] if y < len(c) else " " * cw for c in row_cards]))
-            if not lids:
-                # Center what shows, not the slots: a short last card (Kiro's
-                # single limit) would otherwise leave its spare rows at the bottom.
-                while body and not ap._ANSI.sub("", body[-1]).strip():
-                    body.pop()
-                while body and not ap._ANSI.sub("", body[0]).strip():
-                    body.pop(0)
-            pad_top = max(0, (inner_h - len(body)) // 2)
+        # Each row of cards is as tall as its tallest card (Cursor's extra
+        # limit) plus the same share of the spare rows, so every card gets the
+        # same breathing room; rows that don't divide evenly go above and below.
+        need = [h + 2 * lids for h in heights]
+        rows_h = [max(need[r * ncols:(r + 1) * ncols]) for r in range(nr)]
+        spare = max(0, inner_h - (nr - 1) * gap - sum(rows_h)) // nr
+        cards = [working_card(view, i, cw, t, now, lids, active[i], height=rows_h[i // ncols] + spare)
+                 for i in range(n)]
+        for r in range(nr):
+            if r:
+                body += [""] * gap
+            row_cards = cards[r * ncols:(r + 1) * ncols]
+            for y in range(max(len(c) for c in row_cards)):
+                body.append(join([c[y] if y < len(c) else " " * cw for c in row_cards]))
+        if not lids:
+            # Center what shows, not the slots: a short last card (Kiro's
+            # single limit) would otherwise leave its spare rows at the bottom.
+            while body and not ap._ANSI.sub("", body[-1]).strip():
+                body.pop()
+            while body and not ap._ANSI.sub("", body[0]).strip():
+                body.pop(0)
+        pad_top = max(0, (inner_h - len(body)) // 2)
     elif n:
         body = [compact_row(view, i, inner_w, t, now) for i in range(n)]
         pad_top = max(0, (inner_h - len(body)) // 2)
