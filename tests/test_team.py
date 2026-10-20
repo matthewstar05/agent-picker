@@ -296,7 +296,7 @@ class TeamTests(unittest.TestCase):
 
     def test_find_standard_and_providers(self):
         agents = list(self.agents.values())
-        expected = list(TEAM) + ["Grok Bot"]
+        expected = [*TEAM[:4], "Grok Bot", *TEAM[4:]]
         with patch.object(picker, "AGENTS", agents), patch.object(picker, "installed", return_value=True):
             self.assertEqual([a["name"] for a in team.providers()], expected)
             self.assertIsNone(team.find("standard"))
