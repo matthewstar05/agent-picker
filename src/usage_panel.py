@@ -628,6 +628,11 @@ def force_all(providers):
 
 class View:
     def __init__(self, agents, pinned=False):
+        # Provider-specific layouts can name Grok Bot; its quota still occupies
+        # Cursor's third bar, including in pinned herdr-ai usage panes.
+        profiles = {a["name"]: a for a in ap.AGENTS}
+        agents = list({a.get("usage_provider", a["name"]):
+                       profiles.get(a.get("usage_provider", a["name"]), a) for a in agents}.values())
         self.installed = agents   # every listed profile, in picker order
         self.pinned = pinned      # draw every listed profile, even ones not beside this pane
         self.toast_until = 0

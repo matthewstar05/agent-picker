@@ -296,8 +296,9 @@ class TeamTests(unittest.TestCase):
 
     def test_find_standard_and_providers(self):
         agents = list(self.agents.values())
+        expected = list(TEAM) + ["Grok Bot"]
         with patch.object(picker, "AGENTS", agents), patch.object(picker, "installed", return_value=True):
-            self.assertEqual([a["name"] for a in team.providers()], list(TEAM))
+            self.assertEqual([a["name"] for a in team.providers()], expected)
             self.assertIsNone(team.find("standard"))
             self.assertIsNone(team.find("STANDARD"))
             self.assertEqual(team.find("Codex"), "Codex")
@@ -309,12 +310,12 @@ class TeamTests(unittest.TestCase):
                     patch.object(picker.preferences, "PATH", Path(folder) / "preferences.json"), \
                     patch.object(picker.preferences, "_values", None):
                 # Star starts hidden, as in the agent selector; --setup star still finds it.
-                self.assertEqual([s["name"] for s in team.setups()], ["Standard"] + list(TEAM))
+                self.assertEqual([s["name"] for s in team.setups()], ["Standard"] + expected)
                 self.assertEqual(team.find("star"), "Star")
                 picker.preferences.put(picker.shown_setting(self.agents["Star"]).key, True)
                 picker.preferences.put(picker.shown_setting(self.agents["Codex"]).key, False)
                 self.assertEqual([s["name"] for s in team.setups()],
-                                 ["Standard"] + [n for n in TEAM if n != "Codex"] + ["Star"])
+                                 ["Standard"] + [n for n in expected if n != "Codex"] + ["Star"])
 
     def test_main_launches_crew_with_fake_cli(self):
         with tempfile.TemporaryDirectory(prefix="team test ") as folder:

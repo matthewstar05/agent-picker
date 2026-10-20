@@ -457,7 +457,15 @@
     "usage_provider": "Cursor",
     "usage_labels": [
       "gb"
-    ]
+    ],
+    "team": {
+      "lead": {
+        "model": "auto"
+      },
+      "crew": {
+        "model": "auto"
+      }
+    }
   },
   {
     "name": "OpenCode",

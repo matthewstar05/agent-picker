@@ -1152,7 +1152,8 @@ def choose(screen=None, only=None):
     # Hidden CLIs (settings) leave the selector only; usage still follows them.
     listed = shown(found) if found else AGENTS
     available = [installed(a) for a in listed]
-    providers = [a["name"] for a in found if a["name"] in FETCHERS]
+    providers = list(dict.fromkeys(a.get("usage_provider", a["name"]) for a in found
+                                  if a.get("usage_provider", a["name"]) in FETCHERS))
     load_usage()
     usage_panel.start(providers)   # live readers feed both screens
     usage = usage_panel.View(found, pinned=only is not None)

@@ -38,6 +38,7 @@ def command():
 
 def read_usage(names, refresh=True):
     """Cached meters for names, re-reading stale ones for up to REFRESH_WAIT seconds."""
+    names = list(dict.fromkeys((agent(name) or {}).get("usage_provider", name) for name in names))
     try:
         usage = json.loads(ap.USAGE_CACHE.read_text(encoding="utf-8"))
         usage = usage if isinstance(usage, dict) else {}
@@ -76,11 +77,20 @@ def windows(entry, now):
     return found
 
 
+def entry_for(name, usage):
+    profile = agent(name) or {}
+    entry = usage.get(profile.get("usage_provider", name))
+    labels = profile.get("usage_labels")
+    if entry and labels:
+        return dict(entry, windows=[w for w in entry.get("windows", []) if w.get("label") in labels])
+    return entry
+
+
 def state(name, usage, now=None):
     """(used, resets) for the window that limits name first, or None if unknown.
     Cursor and Kiro use the pool their configured model draws from."""
     now = time.time() if now is None else now
-    entry = usage.get(name)
+    entry = entry_for(name, usage)
     if name in provider_priority.PROVIDERS:
         allowance = provider_priority.allowance(agent(name) or {"name": name}, entry, now)
         return None if allowance is None else (100 - allowance[0], allowance[1])
@@ -144,14 +154,14 @@ def orchestrator(usage=None, installed=None, now=None):
 def report(me=None, usage=None, now=None):
     """The text `herdr-ai --usage` prints."""
     now = time.time() if now is None else now
-    names = [a["name"] for a in ap.AGENTS if ap.installed(a) and a["name"] in ap.FETCHERS]
+    names = [a["name"] for a in ap.AGENTS if ap.installed(a) and a.get("usage_provider", a["name"]) in ap.FETCHERS]
     usage = read_usage(names) if usage is None else usage
     width = max([len(n) for n in names] + [8])
     on = enabled()
     lines = ["Usage by provider (percent used, time to reset). " +
              (f"Hand off at {NEAR}%." if on else "Handoff is off (herdr-ai --settings).")]
     for name in names:
-        found = windows(usage.get(name), now)
+        found = windows(entry_for(name, usage), now)
         meters = "   ".join(f"{label} {pct:3.0f}% {ap.until(resets)}" for label, pct, resets in found) or "unknown"
         fit = usable(name, usage, now)
         flag = {True: "ok", False: "AT LIMIT", None: "?"}[fit]

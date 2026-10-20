@@ -133,6 +133,8 @@ def setups():
 
 def find(name):
     """The setup a --setup name means: None for standard, else a provider name."""
+    if name.lower() in ("grok", "grokbot", "grok-bot"):
+        name = "Grok Bot"
     if name.lower() == "standard":
         return None
     if name.lower() == "star" and star_setup():
@@ -464,7 +466,7 @@ def models_menu(name):
     agents launch with, or the team's own models for orchestrator-crew. None for a
     row with neither (Standard, Star)."""
     agent = next((a for a in providers() if a["name"] == name), None)
-    if agent is None:
+    if agent is None or name == "Grok Bot":
         return None
     return TeamMenu(agent) if mode() == ORCHESTRATOR else provider_defaults.Menu(agent)
 
@@ -491,7 +493,7 @@ def refresh_usage(options):
     """Cached limits at once, and a background read of any that are old."""
     ap.load_usage()
     for o in options:
-        name = o["name"]
+        name = o.get("usage_provider", o["name"])
         if name not in ap.FETCHERS:
             continue
         with ap.USAGE_LOCK:
@@ -515,7 +517,7 @@ def choose(settings_only=False):
     start = time.monotonic()
     ap.visibility_rows([a for a in ap.AGENTS if ap.installed(a)])
     menu = preferences.Menu([preferences.register(s) for s in
-                             (ap.VISIBILITY, *herdr_sidebar.SETTINGS, ap.BARS, handoff.AUTO, MODE)])
+                             (ap.VISIBILITY, *herdr_sidebar.SETTINGS, ap.BARS, ap.CURSOR_GROK_TRANSIENT, handoff.AUTO, MODE)])
     settings_open = settings_only
     models = None          # a provider's models screen (models_menu), while open
     confirming, choice = False, 0

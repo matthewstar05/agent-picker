@@ -15,9 +15,10 @@ NAMES = {
     "cursor": "Cursor", "cursor-agent": "Cursor", "cursor-cli": "Cursor",
     "kiro": "Kiro", "kiro-cli": "Kiro",
     "star": "Star", "starcli": "Star",
+    "grok": "Grok Bot", "grokbot": "Grok Bot", "grok-bot": "Grok Bot",
 }
 RESUME = {"Claude": "--resume", "Codex": "resume", "Cursor": "--resume",
-          "Kiro": "--resume-id", "Antigravity": "--conversation", "Star": "--resume-id"}
+          "Kiro": "--resume-id", "Antigravity": "--conversation", "Star": "--resume-id", "Grok Bot": "--resume"}
 # Unknown flags are deliberately refused before stopping a pane. We must know
 # which words are option values so an old opening prompt is never sent again.
 VALUES = {
@@ -30,6 +31,7 @@ VALUES = {
     "Antigravity": {"--model", "--effort", "--agent", "--project", "--mode", "--add-dir",
                     "--log-file"},
     "Star": {"--name", "--role", "--use", "--tier", "--timeout"},
+    "Grok Bot": {"--model", "--workspace", "--machine", "--timeout"},
 }
 FLAGS = {
     "Claude": {"--dangerously-skip-permissions", "--allow-dangerously-skip-permissions",
@@ -41,11 +43,13 @@ FLAGS = {
              "--v2", "--v3", "--require-mcp-startup"},
     "Antigravity": {"--dangerously-skip-permissions", "--sandbox", "--remote-control"},
     "Star": {"--plan"},
+    "Grok Bot": {"--cloud", "--dangerously-skip-permissions", "--yolo"},
 }
 OLD_SESSION = {
     "Claude": {"--resume", "-r", "--session-id"}, "Codex": set(),
     "Cursor": {"--resume"}, "Kiro": {"--resume-id"},
     "Antigravity": {"--conversation"}, "Star": {"--resume-id"},
+    "Grok Bot": {"--resume"},
 }
 # One-shot StarCLI flags. A refresh reopens the interactive conversation, so these
 # leave with the old command instead of turning the resumed pane into a print run.
@@ -70,10 +74,10 @@ def native_process(info, name):
     found = []
     for process in info.get("foreground_processes", []):
         argv = process.get("argv") or []
-        if name == "Star" and any(_label(word).startswith("agent_picker") for word in argv[:2]):
+        if name in ("Star", "Grok Bot") and any(_label(word).startswith("agent_picker") for word in argv[:2]):
             continue
         labels = [process.get("name"), process.get("argv0"), argv[0] if argv else None]
-        if name == "Star":
+        if name in ("Star", "Grok Bot"):
             labels += [word for word in argv[1:3] if not str(word).startswith("-")]
         if argv and any(provider(_label(label).removesuffix(".py").removesuffix(".cmd")) == name
                         for label in labels):
@@ -88,6 +92,15 @@ def stored(name, session, cwd):
     Claude and Cursor only resume a conversation from the directory it began in,
     and Claude reports a session ID before its first prompt writes a transcript.
     """
+    if name == "Grok Bot":
+        import grokbot_sessions
+        from grokbot_gateway import GrokError
+        if not grokbot_sessions.valid_id(session):
+            return False
+        try:
+            return grokbot_sessions.load(session, os.path.realpath(cwd))["id"] == session
+        except (GrokError, OSError, ValueError, TypeError):
+            return False
     if name == "Claude":
         slug = re.sub(r"[^A-Za-z0-9]", "-", cwd)
         if len(slug) > 200:   # Claude shortens long paths with a hash
@@ -169,7 +182,9 @@ def resume_argv(name, argv, session):
         prefix += ["agent"]
         words = words[1:]
     # python starcli.py: the script path is the program, not an old prompt.
-    if name == "Star" and words and not words[0].startswith("-"):
+    if words and not words[0].startswith("-") and (name == "Star" or
+            (name == "Grok Bot" and _label(prefix[0]).startswith(("python", "pypy"))
+             and _label(words[0]) == "grokbot.py")):
         prefix += words[:1]
         words = words[1:]
     if name == "Codex" and words[:1] in (["resume"], ["fork"]):
@@ -189,7 +204,7 @@ def resume_argv(name, argv, session):
         elif name == "Star" and option in STAR_DROPPED_VALUES:
             if "=" not in word and i + 1 < len(words) and not words[i + 1].startswith("-"):
                 i += 1
-        elif word in OLD_FLAGS or (name == "Claude" and word == "-c") or (name == "Kiro" and word in {"-r", "--resume"}) \
+        elif word in OLD_FLAGS or (name in ("Claude", "Grok Bot") and word == "-c") or (name == "Kiro" and word in {"-r", "--resume"}) \
                 or (name == "Star" and word in STAR_DROPPED):
             pass
         elif option in VALUES[name]:

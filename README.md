@@ -66,6 +66,8 @@ The interactive editor has Cursor-style gray input borders, multiline paste, his
 
 Each new CLI conversation creates its own bot and retains its native conversation across turns. Private session bindings and transcripts live under `~/.local/state/agent-picker/grokbot`, with file locks and atomic saves. Credentials are read from the existing `cursor-access-token` Keychain item or `CURSOR_ACCESS_TOKEN` and are never written into session records. The selected machine and workspace are retained when resuming.
 
+Grok Bot also appears in the `herdr-ai` setup menu. Use `herdr-ai --setup grokbot` (also `grok`, `grok-bot`, or `"Grok Bot"`) for five Grok Bot panes in the current project, with the existing Off, Individual, and Orchestrator-crew modes. Models stay provider-managed. Each pane owns a separate conversation; a context-preserving refresh resumes its exact saved session and keeps working or blocked panes running. The setup's usage pane shows Cursor's three bars, and `herdr-ai --usage` checks Grok Bot's `gb` allowance separately for handoff decisions.
+
 Grok Bot manages model selection, so `--model auto` is the supported choice. Native Cursor's model picker and plan-mode switches are not available through this gateway. The client uses Grok Bot's own local tools rather than invoking a different AI CLI. [Cursor's Grok Bot documentation](https://cursor.com/docs/grok-bot) describes its capabilities and [local work](https://cursor.com/docs/grok-bot/work).
 
 ## Scheduled prompts
