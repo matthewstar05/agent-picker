@@ -188,6 +188,25 @@ class GrokBotTests(unittest.TestCase):
         results = [json.loads(line) for line in output.getvalue().splitlines() if line.strip()]
         self.assertEqual([r["result"] for r in results], ["Verified."])
 
+    def test_first_message_waits_for_a_new_bots_greeting_turn(self):
+        busy = iter([True, True, False])
+        self.gateway.agent = lambda ident: {"id": ident, "isRunningTurn": next(busy, False), "isRunning": False}
+        c = self.conversation()
+        c.wait = lambda seconds: None
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            c.turn("First task")
+        self.assertEqual(len(self.gateway.sent), 1)
+        self.assertEqual(json.loads(output.getvalue())["result"], "Verified.")
+
+    def test_a_bot_that_stays_busy_is_still_refused(self):
+        self.gateway.agent = lambda ident: {"id": ident, "isRunningTurn": True, "isRunning": True}
+        c = self.conversation()
+        c.wait = lambda seconds: None
+        with patch.object(cli.time, "monotonic", side_effect=[0, 0] + [100] * 10):
+            with self.assertRaisesRegex(gateway.GrokError, "already working"):
+                c.turn("Task")
+        self.assertEqual(self.gateway.sent, [])
+
     def test_transcript_gap_never_reports_a_success(self):
         c = self.conversation()
         c.ensure_session()

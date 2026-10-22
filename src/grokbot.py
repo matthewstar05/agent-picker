@@ -210,6 +210,13 @@ class Conversation:
                 remote = self.gateway.agent(self.session["id"])
                 if not remote:
                     raise GrokError("This bot no longer exists. Start a new CLI session.")
+                # A new bot posts a greeting turn of its own; let a short turn like that finish.
+                deadline = time.monotonic() + 30
+                while remote and (remote.get("isRunningTurn") or remote.get("isRunning")) and time.monotonic() < deadline:
+                    self.wait(1)
+                    remote = self.gateway.agent(self.session["id"])
+                if not remote:
+                    raise GrokError("This bot no longer exists. Start a new CLI session.")
                 if remote.get("isRunningTurn") or remote.get("isRunning"):
                     raise GrokError("The bot is already working. Resume observation or stop it before submitting another task.")
                 pending = {"nonce": request_id(), "text": text, "root": None, "started": time.time(),
