@@ -152,14 +152,41 @@ class GrokBotTests(unittest.TestCase):
         self.assertEqual(self.gateway.sent, [])
         self.assertEqual(json.loads(output.getvalue())["result"], "Recovered")
 
-    def test_pending_task_rejects_a_second_prompt(self):
+    def test_new_prompt_closes_an_abandoned_request_without_repeating_it(self):
         c = self.conversation()
         c.ensure_session()
-        c.session["pending"] = {"nonce": "old", "text": "Do not repeat"}
+        c.session["pending"] = {"nonce": "old", "text": "Do not repeat", "root": None, "before": [], "shown": []}
         sessions.save(c.session)
-        with self.assertRaisesRegex(gateway.GrokError, "still pending"):
+        with contextlib.redirect_stdout(io.StringIO()) as output:
             c.turn("Another task")
-        self.assertEqual(self.gateway.sent, [])
+        self.assertEqual(len(self.gateway.sent), 1)
+        self.assertIn("Another task", self.gateway.sent[0][1])
+        self.assertNotIn("Do not repeat", self.gateway.sent[0][1])
+        saved = sessions.load(BOT)
+        self.assertIsNone(saved["pending"])
+        self.assertEqual([(m["user"], m.get("status")) for m in saved["messages"]],
+                         [("Do not repeat", "interrupted"), ("Another task", None)])
+        self.assertEqual(json.loads(output.getvalue())["result"], "Verified.")
+
+    def test_new_prompt_first_records_a_reply_that_already_arrived(self):
+        # The 2026-10-22 case: Esc's stop went unconfirmed, then the bot finished anyway.
+        c = self.conversation()
+        c.ensure_session()
+        nonce = gateway.request_id()
+        c.session["pending"] = {"nonce": nonce, "text": "test", "root": "u", "request_id": "original",
+                                "before": [], "shown": []}
+        sessions.save(c.session)
+        self.gateway.entries = [{"id": "u", "kind": "message", "role": "user", "clientNonce": nonce, "requestId": "original"},
+                                {"id": "a", "kind": "send-message", "requestId": "original",
+                                 "message": {"type": "text", "content": "Test worked. " + cli.marker(nonce)}}]
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            c.turn("Next task")
+        self.assertEqual(len(self.gateway.sent), 1)
+        saved = sessions.load(BOT)
+        self.assertEqual([(m["user"], m["assistant"]) for m in saved["messages"]],
+                         [("test", "Test worked."), ("Next task", "Verified.")])
+        results = [json.loads(line) for line in output.getvalue().splitlines() if line.strip()]
+        self.assertEqual([r["result"] for r in results], ["Verified."])
 
     def test_transcript_gap_never_reports_a_success(self):
         c = self.conversation()

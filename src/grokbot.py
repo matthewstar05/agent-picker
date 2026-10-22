@@ -201,7 +201,9 @@ class Conversation:
                 self.session["system"] = self.system
                 store.save(self.session)
             if self.session.get("pending") and text:
-                raise GrokError("A previous request is still pending. Resume it without a prompt before submitting more work.")
+                # An earlier turn was interrupted or lost its watch. Settle it first
+                # (its reply may already be there) instead of refusing every message.
+                self.settle()
             if not self.session.get("pending"):
                 if not text:
                     return
@@ -235,7 +237,26 @@ class Conversation:
             finally:
                 self.report("idle")
 
-    def observe(self):
+    def settle(self):
+        """Finish an earlier request before sending a new one: watch it if the bot is
+        still on it, show its final reply if it arrived, or close it as interrupted."""
+        pending = self.session["pending"]
+        remote = self.gateway.agent(self.session["id"])
+        if remote is None:
+            raise GrokError("This bot no longer exists. Start a new CLI session.")
+        final = any(e.get("kind") == "send-message" and marker(pending["nonce"]) in entry_text(e)
+                    for e in self.gateway.transcript(self.session["id"]))
+        if remote.get("isRunningTurn") or remote.get("isRunning") or final:
+            self.output.event({"type": "notice", "text": "Finishing the previous request first."})
+            self.observe(report=False)
+        else:
+            self.session["messages"].append({"user": pending["text"], "assistant": "", "at": time.time(),
+                                             "status": "interrupted"})
+            self.session["pending"] = None
+            store.save(self.session)
+        self.output.answer = ""
+
+    def observe(self, report=True):
         pending = self.session["pending"]
         deadline = time.monotonic() + self.timeout
         shown = set(pending.get("shown", []))
@@ -301,7 +322,8 @@ class Conversation:
                 self.session["pending"] = None
                 store.save(self.session)
                 self.output.answer = final_text
-                self.output.result(self.session)
+                if report:
+                    self.output.result(self.session)
                 return
             self.wait(self.poll)
         raise GrokError("Still waiting for a correlated final reply. The request is saved; use grokbot --continue to keep watching.")
@@ -350,7 +372,7 @@ class Conversation:
                     self.output.event({"type": "notice", "text": "Bot interrupted. Earlier file changes are preserved."})
                     return
                 time.sleep(0.5)
-            self.output.event({"type": "notice", "text": "Stop requested; the bot has not confirmed it yet. Resume to inspect the saved turn."})
+            self.output.event({"type": "notice", "text": "Stop requested; the bot has not confirmed it yet. Your next message waits for it to finish."})
 
 
 def usage():
