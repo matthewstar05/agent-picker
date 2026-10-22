@@ -114,5 +114,44 @@ class WorkingKeysTest(unittest.TestCase):
         self.assertEqual(self.keys(["tab", "esc"], "hello", working=False), ["tab", "esc"])
 
 
+class ImageTokenTest(unittest.TestCase):
+    """An [Image #n] placeholder deletes as one unit, so a half-erased one can't
+    be sent as plain text in place of the image."""
+
+    def type(self, initial, script, images=(1,)):
+        editor = ui.CursorInput([])
+        editor.images = {n: f"/tmp/image-{n}.png" for n in images}
+        def keys(fd, idle):
+            for key in script:
+                if isinstance(key, int):
+                    editor.pos = key        # place the cursor
+                    continue
+                yield key
+            yield ("wake", "done")
+        with patch("star_input.termios"), patch("star_input.tty"), patch("sys.stdin"), \
+                patch("sys.stdout", io.StringIO()), patch.object(editor, "keys", keys):
+            with self.assertRaises(Wake) as caught:
+                editor.read(initial=initial)
+        return caught.exception.text, editor.pos
+
+    def test_backspace_at_the_end_of_the_token_deletes_it_whole(self):
+        self.assertEqual(self.type("look [Image #1]", ["backspace"]), ("look ", 5))
+
+    def test_space_after_a_pasted_image_goes_first_then_the_token(self):
+        self.assertEqual(self.type("[Image #1] ", ["backspace"])[0], "[Image #1]")
+        self.assertEqual(self.type("[Image #1] ", ["backspace", "backspace"])[0], "")
+
+    def test_backspace_and_delete_inside_the_token_remove_it_whole(self):
+        self.assertEqual(self.type("a [Image #1] b", [8, "backspace"]), ("a  b", 2))
+        self.assertEqual(self.type("a [Image #1] b", [2, "delete"]), ("a  b", 2))
+
+    def test_kill_word_into_the_token_removes_it_whole(self):
+        self.assertEqual(self.type("see [Image #12]", ["kill-word"], images=(12,))[0], "see ")
+
+    def test_ordinary_text_still_deletes_one_character(self):
+        self.assertEqual(self.type("[Image] #1]", ["backspace"])[0], "[Image] #1")
+        self.assertEqual(self.type("abc", ["backspace"])[0], "ab")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -344,6 +344,14 @@ class Editor:
         paths = [self.images[int(n)] for n in TOKEN.findall(message) if int(n) in self.images]
         return list(dict.fromkeys(paths + image_paths(message)))
 
+    def token_span(self, start, end):
+        """Widen start..end to cover any [Image #n] it touches, so an image is
+        deleted whole, never left as stray text that sends instead of the image."""
+        for match in TOKEN.finditer(self.text):
+            if match.start() < end and start < match.end():
+                start, end = min(start, match.start()), max(end, match.end())
+        return start, end
+
     # ---- editing
     def insert(self, s):
         self.text = self.text[:self.pos] + s + self.text[self.pos:]
@@ -513,14 +521,16 @@ class Editor:
                     self.pos = len(self.text) if nl < 0 else nl
                 elif key == "backspace":
                     if self.pos:
-                        self.text = self.text[:self.pos - 1] + self.text[self.pos:]
-                        self.pos -= 1
+                        start, end = self.token_span(self.pos - 1, self.pos)
+                        self.text, self.pos = self.text[:start] + self.text[end:], start
                         self.sel = 0
                 elif key == "delete":
-                    self.text = self.text[:self.pos] + self.text[self.pos + 1:]
+                    if self.pos < len(self.text):
+                        start, end = self.token_span(self.pos, self.pos + 1)
+                        self.text, self.pos = self.text[:start] + self.text[end:], start
                 elif key == "kill-word":
-                    p = self.word_left()
-                    self.text, self.pos = self.text[:p] + self.text[self.pos:], p
+                    p, end = self.token_span(self.word_left(), self.pos)
+                    self.text, self.pos = self.text[:p] + self.text[end:], p
                 elif key == "kill-line":
                     start = self.text.rfind("\n", 0, self.pos) + 1
                     self.text, self.pos = self.text[:start] + self.text[self.pos:], start
