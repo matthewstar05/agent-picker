@@ -213,7 +213,7 @@ Changes are saved in the machine-local config as `agents.<Provider>.defaults`, p
 | Claude | opus | medium |
 | Codex | gpt-6.1-sol | high |
 | Cursor | grok-4.7-high | encoded in model argument |
-| Kiro | claude-opus-5.5 | medium |
+| Kiro | claude-opus-5.5 (`--v3` agent) | medium |
 | Antigravity | gemini-3.8-flash-high | encoded in model argument |
 
 The defaults retain the original permission bypass flags and automatic current-folder trust behavior. Turn **Bypass Permissions** Off in a provider's defaults to remove its bypass flags and skip new folder-trust writes for that launch. Claude explicitly uses its default permission mode; Codex uses on-request approvals with the workspace-write sandbox. Set `AGENT_PICKER_NO_PRETRUST=1` to skip all picker folder-trust writes. Only the selected provider's current directory is pre-trusted when bypass is On.
