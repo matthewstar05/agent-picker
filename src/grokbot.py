@@ -2,6 +2,7 @@
 """Cursor-style terminal conversations on Grok Bot's own included usage."""
 
 import argparse
+import contextlib
 import io
 import json
 import math
@@ -9,6 +10,7 @@ import os
 from pathlib import Path
 import re
 import select
+import shutil
 import socket
 import subprocess
 import sys
@@ -34,15 +36,22 @@ def marker(nonce):
     return "<!-- grokbot-cli:" + nonce + ":done -->"
 
 
+APP = Path("/Applications/Grok Bot.app")
+
+
+def this_mac(machine):
+    names = {socket.gethostname().lower(), socket.getfqdn().lower()}
+    names |= {n.rsplit(".local", 1)[0] for n in names}
+    label = str(machine.get("label", "")).lower()
+    return label in names or label.rsplit(".local", 1)[0] in names
+
+
 def select_machine(machines, requested=None):
     rows = [m for m in machines if m.get("connected") and m.get("kind", "desktop") not in ("ios", "android")]
     if requested:
         rows = [m for m in rows if m.get("machineId") == requested or m.get("label") == requested]
     else:
-        names = {socket.gethostname().lower(), socket.getfqdn().lower()}
-        names |= {n.removesuffix(".local") if hasattr(n, "removesuffix") else n.rsplit(".local", 1)[0] for n in names}
-        rows = [m for m in rows if str(m.get("label", "")).lower() in names
-                or str(m.get("label", "")).lower().rsplit(".local", 1)[0] in names]
+        rows = [m for m in rows if this_mac(m)]
     if len(rows) != 1:
         raise GrokError("No unique connected machine. Open Grok Bot on this Mac; use grokbot machines and --machine ID to select it.")
     if rows[0].get("localToolPermission") == "never":
@@ -50,23 +59,53 @@ def select_machine(machines, requested=None):
     return rows[0]
 
 
+def connect_machine(gateway, requested=None, wait=30, poll=1.5, app=APP, opener=subprocess.run):
+    """select_machine, but when this Mac is registered and offline because Grok Bot is
+    closed, open the app in the background and wait for it to connect."""
+    machines = gateway.machines()
+    try:
+        return select_machine(machines, requested)
+    except GrokError as exc:
+        mine = [m for m in machines if this_mac(m) and not m.get("connected")
+                and (not requested or requested in (m.get("machineId"), m.get("label")))]
+        if not mine or sys.platform != "darwin" or not Path(app).exists():
+            raise
+        error = exc
+    print("Opening Grok Bot to connect this Mac...", file=sys.stderr, flush=True)
+    opener(["open", "-g", "-j", "-a", str(app)], capture_output=True)
+    deadline = time.monotonic() + wait
+    while time.monotonic() < deadline:
+        time.sleep(poll)
+        try:
+            return select_machine(gateway.machines(), requested)
+        except GrokError as exc:
+            error = exc
+    raise error
+
+
 class Output:
     def __init__(self, kind="text", interactive=False, verbose=False):
         self.kind, self.interactive, self.verbose = kind, interactive, verbose
         self.answer = ""
         self.started = time.monotonic()
+        self.screen = None      # grokbot_ui.TurnScreen while an interactive turn runs
 
     def event(self, event):
         if self.kind == "stream-json":
             print(json.dumps(event, ensure_ascii=False), flush=True)
         elif self.kind == "text":
+            if self.screen:
+                self.screen.clear()     # the working line, never mixed into output
             if event["type"] == "assistant":
-                text = "".join(p.get("text", "") for p in event["message"]["content"])
-                print(clean(text), flush=True)
+                text = clean("".join(p.get("text", "") for p in event["message"]["content"]))
+                if self.interactive:
+                    from grokbot_ui import wrap
+                    text = "\n" + wrap(text, shutil.get_terminal_size((100, 30)).columns)
+                print(text, flush=True)
             elif event["type"] == "tool_call" and (self.interactive or self.verbose):
-                print("  ◇ " + clean(event["label"])[:180], file=sys.stdout if self.interactive else sys.stderr, flush=True)
+                print("  ⎿ " + clean(event["label"])[:180], file=sys.stdout if self.interactive else sys.stderr, flush=True)
             elif event["type"] == "notice":
-                print(clean(event["text"]), file=sys.stderr, flush=True)
+                print(("  " if self.interactive else "") + clean(event["text"]), file=sys.stderr, flush=True)
 
     def text(self, text, final=True):
         self.answer += ("\n\n" if self.answer else "") + text
@@ -94,6 +133,7 @@ class Conversation:
         self.timeout, self.poll = timeout, poll
         self.system = system    # --append-system-prompt: saved with the session, sent with every turn
         self.allowed = set()    # actions answered "always" this run, like the other agents' session approvals
+        self.wait = time.sleep  # the interactive CLI draws its working line while it waits
 
     def report(self, state):
         pane = os.environ.get("HERDR_PANE_ID")
@@ -257,7 +297,7 @@ class Conversation:
                 self.output.answer = final_text
                 self.output.result(self.session)
                 return
-            time.sleep(self.poll)
+            self.wait(self.poll)
         raise GrokError("Still waiting for a correlated final reply. The request is saved; use grokbot --continue to keep watching.")
 
     def approve(self, entry, card):
@@ -273,7 +313,8 @@ class Conversation:
         if not self.output.interactive:
             raise GrokError("Approval required in Grok Bot. The pending request is saved; resume after deciding in the app.")
         self.report("blocked")
-        answer = input("Allow this action? [y] once, [a] always this session, [N] deny ").strip().lower()
+        with self.output.screen.paused() if self.output.screen else contextlib.nullcontext():
+            answer = input("  Allow this action? [y] once, [a] always this session, [N] deny ").strip().lower()
         if answer == "a":
             self.allowed.add(key)
         # Refresh to avoid acting on a stale card.
@@ -394,7 +435,7 @@ def main(argv=None):
             return 0
         if command in ("status", "whoami"):
             gateway.connect()
-            machine = select_machine(gateway.machines(), args.machine)
+            machine = connect_machine(gateway, args.machine)
             print("Grok Bot gateway: connected\nLocal machine: " + clean(machine.get("label"))
                   + "\nLocal execution policy: " + machine.get("localToolPermission", "ask"))
             return 0
@@ -406,8 +447,8 @@ def main(argv=None):
             session = store.load(ident, str(cwd))
             if args.cloud and session.get("machine"):
                 raise GrokError("This is a local-machine conversation. Resume without --cloud, or start a new cloud conversation.")
-        machine = None if args.cloud or (session and not session.get("machine")) else select_machine(
-            gateway.machines(), args.machine or (session or {}).get("machine"))
+        machine = None if args.cloud or (session and not session.get("machine")) else connect_machine(
+            gateway, args.machine or (session or {}).get("machine"))
         conversation = Conversation(gateway, output, cwd, machine, session, args.timeout, system=args.system)
         prompt = " ".join(args.prompt).strip()
         if args.printing and not sys.stdin.isatty() and not (session and session.get("pending")) and (not prompt or piped()):
@@ -420,17 +461,28 @@ def main(argv=None):
             return 0
         if not sys.stdin.isatty():
             raise GrokError("Use --print for non-interactive tasks.")
-        from grokbot_ui import CursorInput
+        from grokbot_ui import CursorInput, TurnScreen
+        screen = TurnScreen()
+
+        def working(text=None):
+            """One turn, drawn like Claude Code: a working line, typing kept, a blank line after."""
+            output.screen, conversation.wait = screen, screen.wait
+            try:
+                with screen:
+                    conversation.turn(text)
+            finally:
+                output.screen, conversation.wait = None, time.sleep
+                print(flush=True)
         banner(cwd, session)
         editor = CursorInput(COMMANDS, history=[m["user"] for m in (session or {}).get("messages", [])],
                              image_dir=str(store.directory().parent / "attachments"))
         conversation.report("idle")
         if session and session.get("pending"):
-            conversation.turn()
+            working()
         while True:
             if not prompt:
                 try:
-                    prompt = editor.read(cwd=str(cwd), hint=lambda: ("Grok Bot · Auto", "Cloud" if machine is None
+                    prompt = editor.read(cwd=str(cwd), initial=screen.take(), hint=lambda: ("Grok Bot · Auto", "Cloud" if machine is None
                                          else "Local · " + machine.get("localToolPermission", "ask")))
                 except EOFError:
                     break
@@ -452,10 +504,10 @@ def main(argv=None):
                     print("New conversation. Your next task creates a separate bot.")
                 elif verb == "resume":
                     resumed = store.load(rest.strip() or None, str(cwd))
-                    machine = select_machine(gateway.machines(), resumed["machine"]) if resumed.get("machine") else None
+                    machine = connect_machine(gateway, resumed["machine"]) if resumed.get("machine") else None
                     conversation.session, conversation.machine = resumed, machine
                     if conversation.session.get("pending"):
-                        conversation.turn()
+                        working()
                     print("Resumed " + conversation.session["id"])
                 elif verb == "status":
                     print("Session: " + ((conversation.session or {}).get("id") or "new") + "\nWorkspace: " + str(cwd))
@@ -473,7 +525,7 @@ def main(argv=None):
                 if attachments:
                     prompt += "\nAttached local file paths: " + json.dumps(attachments)
                 try:
-                    conversation.turn(prompt)
+                    working(prompt)
                 except KeyboardInterrupt:
                     conversation.stop()
                 except GrokError as exc:
