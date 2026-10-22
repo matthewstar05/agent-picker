@@ -343,62 +343,6 @@
     ]
   },
   {
-    "name": "Kiro",
-    "pastel": [
-      210,
-      175,
-      255
-    ],
-    "gradient": [
-      [
-        144,
-        70,
-        255
-      ],
-      [
-        205,
-        80,
-        245
-      ],
-      [
-        255,
-        95,
-        190
-      ]
-    ],
-    "model": "opus-5.5",
-    "short": "opus",
-    "color": [
-      144,
-      70,
-      255
-    ],
-    "detail": "opus-5.5 \u00b7 medium",
-    "team": {
-      "lead": {
-        "model": "claude-opus-5.5",
-        "effort": "high"
-      },
-      "crew": {
-        "model": "claude-sonnet-5.5",
-        "effort": "low"
-      }
-    },
-    "argv": [
-      "kiro-cli",
-      "chat",
-      "--model",
-      "claude-opus-5.5",
-      "--effort",
-      "medium",
-      "--trust-all-tools"
-    ],
-    "detect": [
-      "kiro",
-      "kiro-cli"
-    ]
-  },
-  {
     "name": "Grok Bot",
     "pastel": [
       225,
@@ -466,6 +410,62 @@
         "model": "auto"
       }
     }
+  },
+  {
+    "name": "Kiro",
+    "pastel": [
+      210,
+      175,
+      255
+    ],
+    "gradient": [
+      [
+        144,
+        70,
+        255
+      ],
+      [
+        205,
+        80,
+        245
+      ],
+      [
+        255,
+        95,
+        190
+      ]
+    ],
+    "model": "opus-5.5",
+    "short": "opus",
+    "color": [
+      144,
+      70,
+      255
+    ],
+    "detail": "opus-5.5 \u00b7 medium",
+    "team": {
+      "lead": {
+        "model": "claude-opus-5.5",
+        "effort": "high"
+      },
+      "crew": {
+        "model": "claude-sonnet-5.5",
+        "effort": "low"
+      }
+    },
+    "argv": [
+      "kiro-cli",
+      "chat",
+      "--model",
+      "claude-opus-5.5",
+      "--effort",
+      "medium",
+      "--trust-all-tools"
+    ],
+    "detect": [
+      "kiro",
+      "kiro-cli"
+    ]
   },
   {
     "name": "OpenCode",

@@ -294,6 +294,11 @@ class TeamTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "no team"):
             team.prepare(plain, ["--picker-crew", "w:p1"])
 
+    def test_grok_bot_sits_between_cursor_and_kiro(self):
+        # One catalog order drives the selector, its settings, and herdr-ai.
+        names = list(self.agents)
+        self.assertEqual(names[names.index("Cursor") + 1:names.index("Cursor") + 3], ["Grok Bot", "Kiro"])
+
     def test_find_standard_and_providers(self):
         agents = list(self.agents.values())
         expected = [*TEAM[:4], "Grok Bot", *TEAM[4:]]

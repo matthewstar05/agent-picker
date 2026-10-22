@@ -89,15 +89,8 @@ def picker_model(agent):
 
 
 def providers():
-    """Installed teams, with Grok Bot immediately after Cursor and before Kiro."""
-    found = [a for a in ap.AGENTS if a.get("team") and ap.installed(a)]
-    names = [a["name"] for a in found]
-    if "Grok Bot" in names and ("Cursor" in names or "Kiro" in names):
-        grok = found.pop(names.index("Grok Bot"))
-        names = [a["name"] for a in found]
-        at = names.index("Cursor") + 1 if "Cursor" in names else names.index("Kiro")
-        found.insert(at, grok)
-    return found
+    """Installed teams, in picker order (Grok Bot sits between Cursor and Kiro)."""
+    return [a for a in ap.AGENTS if a.get("team") and ap.installed(a)]
 
 
 def summary(agent, kind=None):
