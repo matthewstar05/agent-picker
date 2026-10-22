@@ -2,7 +2,6 @@
 """Cursor-style terminal conversations on Grok Bot's own included usage."""
 
 import argparse
-import contextlib
 import io
 import json
 import math
@@ -17,12 +16,14 @@ import sys
 import time
 
 from grokbot_gateway import Gateway, GrokError, entry_text, request_id
+from grokbot_goal import Goal
 import grokbot_sessions as store
 
 VERSION = "0.1.0"
 COMMANDS = [("help", "", "show commands"), ("usage", "", "Cursor models, external models, and Grok Bot limits"),
             ("status", "", "account, machine and conversation"), ("new", "", "start a separate conversation"),
             ("clear", "", "start a separate conversation (same as /new)"), ("model", "", "show the model"),
+            ("goal", "<objective>", "keep working until it is done; /goal resume, /goal clear"),
             ("resume", "[id]", "resume a saved conversation"), ("sessions", "", "list saved conversations"),
             ("stop", "", "interrupt the current bot"), ("quit", "", "exit"), ("exit", "", "exit")]
 CONTROL = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\))|[\x00-\x08\x0b-\x1f\x7f]")
@@ -88,24 +89,28 @@ class Output:
         self.kind, self.interactive, self.verbose = kind, interactive, verbose
         self.answer = ""
         self.started = time.monotonic()
-        self.screen = None      # grokbot_ui.TurnScreen while an interactive turn runs
+        self.sink = None        # grokbot_ui.Working.emit while an interactive turn runs on its thread
+
+    def show(self, text, err=False):
+        if self.sink:
+            self.sink(text)
+        else:
+            print(text, file=sys.stderr if err else sys.stdout, flush=True)
 
     def event(self, event):
         if self.kind == "stream-json":
             print(json.dumps(event, ensure_ascii=False), flush=True)
         elif self.kind == "text":
-            if self.screen:
-                self.screen.clear()     # the working line, never mixed into output
             if event["type"] == "assistant":
                 text = clean("".join(p.get("text", "") for p in event["message"]["content"]))
                 if self.interactive:
                     from grokbot_ui import wrap
                     text = "\n" + wrap(text, shutil.get_terminal_size((100, 30)).columns)
-                print(text, flush=True)
+                self.show(text)
             elif event["type"] == "tool_call" and (self.interactive or self.verbose):
-                print("  ⎿ " + clean(event["label"])[:180], file=sys.stdout if self.interactive else sys.stderr, flush=True)
+                self.show("  ⎿ " + clean(event["label"])[:180], err=not self.interactive)
             elif event["type"] == "notice":
-                print(("  " if self.interactive else "") + clean(event["text"]), file=sys.stderr, flush=True)
+                self.show(("  " if self.interactive else "") + clean(event["text"]), err=True)
 
     def text(self, text, final=True):
         self.answer += ("\n\n" if self.answer else "") + text
@@ -133,7 +138,8 @@ class Conversation:
         self.timeout, self.poll = timeout, poll
         self.system = system    # --append-system-prompt: saved with the session, sent with every turn
         self.allowed = set()    # actions answered "always" this run, like the other agents' session approvals
-        self.wait = time.sleep  # the interactive CLI draws its working line while it waits
+        self.wait = time.sleep  # the interactive CLI's runner makes this interruptible
+        self.ask = lambda prompt: input(prompt)   # and routes approval questions to the main thread
 
     def report(self, state):
         pane = os.environ.get("HERDR_PANE_ID")
@@ -313,8 +319,7 @@ class Conversation:
         if not self.output.interactive:
             raise GrokError("Approval required in Grok Bot. The pending request is saved; resume after deciding in the app.")
         self.report("blocked")
-        with self.output.screen.paused() if self.output.screen else contextlib.nullcontext():
-            answer = input("  Allow this action? [y] once, [a] always this session, [N] deny ").strip().lower()
+        answer = self.ask("  Allow this action? [y] once, [a] always this session, [N] deny ").strip().lower()
         if answer == "a":
             self.allowed.add(key)
         # Refresh to avoid acting on a stale card.
@@ -461,29 +466,76 @@ def main(argv=None):
             return 0
         if not sys.stdin.isatty():
             raise GrokError("Use --print for non-interactive tasks.")
-        from grokbot_ui import CursorInput, TurnScreen
-        screen = TurnScreen()
-
-        def working(text=None):
-            """One turn, drawn like Claude Code: a working line, typing kept, a blank line after."""
-            output.screen, conversation.wait = screen, screen.wait
-            try:
-                with screen:
-                    conversation.turn(text)
-            finally:
-                output.screen, conversation.wait = None, time.sleep
-                print(flush=True)
+        from grokbot_ui import CursorInput, Working, fg as ui_fg
         banner(cwd, session)
         editor = CursorInput(COMMANDS, history=[m["user"] for m in (session or {}).get("messages", [])],
                              image_dir=str(store.directory().parent / "attachments"))
+        runner, draft = Working(editor), ""
+        goal = Goal((session or {}).get("goal"))
+
+        def hint():
+            return ("Grok Bot · Auto" + (" · " + goal.status() if goal.text else ""),
+                    ("Cloud" if machine is None else "Local · " + machine.get("localToolPermission", "ask")))
+
+        def save_goal():
+            if conversation.session:
+                conversation.session["goal"] = goal.data()
+                store.save(conversation.session)
+
+        def pursue():
+            """Take turns toward the goal until the bot reports it complete or blocked."""
+            while goal.state == "running":
+                if editor.queued:
+                    goal.pause("for your queued message")
+                    break
+                text = goal.prompt()
+                print(ui_fg("mode", f"◎ goal · step {goal.step}") + ui_fg("note", "  " + goal.text.splitlines()[0][:70]))
+                output.answer = ""
+                try:
+                    interrupted = working(text)
+                except GrokError as exc:
+                    print(clean(str(exc)), file=sys.stderr)
+                    goal.pause("after an error")
+                    break
+                if interrupted:
+                    goal.pause("interrupted")
+                    break
+                goal.finish(output.answer)
+                save_goal()
+            save_goal()
+            if goal.state == "complete":
+                print(ui_fg("mode", "✓ " + goal.status()) + ui_fg("note", "  " + goal.text.splitlines()[0][:70]) + "\n")
+            elif goal.state == "blocked":
+                print(ui_fg("mode", "Goal blocked: ") + clean(goal.detail) + ui_fg("note", "  (reply, then /goal resume)") + "\n")
+            elif goal.state == "paused":
+                print(ui_fg("note", "Goal paused " + goal.detail + ". /goal resume continues it.") + "\n")
+
+        def working(text=None):
+            """One turn on a thread with the input box still live (Codex style)."""
+            nonlocal draft
+            output.sink, conversation.wait, conversation.ask = runner.emit, runner.wait, runner.ask
+            try:
+                draft = runner.run(lambda: conversation.turn(text), draft, cwd=str(cwd), hint=hint)
+            finally:
+                output.sink, conversation.wait, conversation.ask = None, time.sleep, lambda prompt: input(prompt)
+            if isinstance(runner.error, KeyboardInterrupt):
+                # Interrupted: queued messages go back into the box instead of being sent.
+                draft = "\n".join(editor.queued + ([draft] if draft else []))
+                editor.queued.clear()
+                conversation.stop()
+            elif runner.error:
+                raise runner.error
+            return isinstance(runner.error, KeyboardInterrupt)
         conversation.report("idle")
         if session and session.get("pending"):
             working()
         while True:
-            if not prompt:
+            if not prompt and editor.queued:
+                prompt = editor.queued.pop(0)
+                editor.echo(prompt)
+            elif not prompt:
                 try:
-                    prompt = editor.read(cwd=str(cwd), initial=screen.take(), hint=lambda: ("Grok Bot · Auto", "Cloud" if machine is None
-                                         else "Local · " + machine.get("localToolPermission", "ask")))
+                    prompt, draft = editor.read(cwd=str(cwd), initial=draft, hint=hint), ""
                 except EOFError:
                     break
                 if prompt is None:
@@ -501,11 +553,13 @@ def main(argv=None):
                     list_sessions(cwd)
                 elif verb in ("new", "clear"):
                     conversation.session = None
+                    goal.clear()
                     print("New conversation. Your next task creates a separate bot.")
                 elif verb == "resume":
                     resumed = store.load(rest.strip() or None, str(cwd))
                     machine = connect_machine(gateway, resumed["machine"]) if resumed.get("machine") else None
                     conversation.session, conversation.machine = resumed, machine
+                    goal = Goal(resumed.get("goal"))
                     if conversation.session.get("pending"):
                         working()
                     print("Resumed " + conversation.session["id"])
@@ -513,6 +567,24 @@ def main(argv=None):
                     print("Session: " + ((conversation.session or {}).get("id") or "new") + "\nWorkspace: " + str(cwd))
                 elif verb == "stop":
                     conversation.stop()
+                elif verb == "goal":
+                    arg = rest.strip()
+                    if arg in ("clear", "stop", "off"):
+                        goal.clear()
+                        save_goal()
+                        print("Goal cleared.")
+                    elif arg == "resume":
+                        if goal.resume():
+                            pursue()
+                        else:
+                            print("No goal to resume. Start one with /goal <objective>.")
+                    elif arg:
+                        goal.start(arg)
+                        pursue()
+                    elif goal.text:
+                        print(goal.status() + ": " + clean(goal.text) + (" (" + clean(goal.detail) + ")" if goal.detail else ""))
+                    else:
+                        print("No goal. Start one with /goal <objective>.")
                 elif verb == "model":
                     print("Grok Bot · Auto. Grok Bot chooses the model for each turn.")
                 else:
@@ -526,8 +598,6 @@ def main(argv=None):
                     prompt += "\nAttached local file paths: " + json.dumps(attachments)
                 try:
                     working(prompt)
-                except KeyboardInterrupt:
-                    conversation.stop()
                 except GrokError as exc:
                     print(clean(str(exc)), file=sys.stderr)
             prompt = ""

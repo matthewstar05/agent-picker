@@ -1,15 +1,13 @@
 """Cursor-like input painting on the shared, tested terminal line editor."""
 
-import contextlib
-import os
-import select
+import queue
 import shutil
 import sys
-import termios
 import textwrap
+import threading
 import time
 
-from star_input import Editor, MENU_ROWS, cell_width
+from star_input import Editor, MENU_ROWS, Wake, cell_width
 
 RESET = "\x1b[0m"
 GRAY = "\x1b[38;2;45;44;46m"
@@ -43,105 +41,124 @@ def wrap(text, width, first="⏺ ", rest="  "):
     return "\n".join((first if i == 0 else rest) + line for i, line in enumerate(lines))
 
 
-class TurnScreen:
-    """While a turn runs: no raw echo of keystrokes, a one-line working indicator,
-    typed text kept for the next prompt, and Esc to interrupt (as in Claude Code)."""
+def elapsed(seconds):
+    seconds = int(seconds)
+    return f"{seconds // 3600}h {seconds // 60 % 60:02d}m {seconds % 60:02d}s" if seconds >= 3600 \
+        else f"{seconds // 60}m {seconds % 60:02d}s" if seconds >= 60 else f"{seconds}s"
 
-    def __init__(self, stream=None, stdin=None, color=True):
-        self.out, self.stdin, self.color = stream or sys.stdout, stdin or sys.stdin, color
-        self.typed, self.saved, self.shown, self.frame = "", None, False, 0
-        self.started = time.monotonic()
 
-    def __enter__(self):
-        self.started, self.typed = time.monotonic(), ""
-        try:
-            fd = self.stdin.fileno()
-            self.saved = termios.tcgetattr(fd)
-            attrs = termios.tcgetattr(fd)
-            attrs[3] &= ~(termios.ECHO | termios.ICANON)     # keep ISIG: ctrl-c still interrupts
-            attrs[6][termios.VMIN], attrs[6][termios.VTIME] = 0, 0
-            termios.tcsetattr(fd, termios.TCSANOW, attrs)
-        except (OSError, ValueError, termios.error):
-            self.saved = None
-        return self
+class Working:
+    """One turn on a thread while the input box stays live, as in Codex: output prints
+    above the box, Enter or Tab queues a message for after the turn, Esc interrupts."""
 
-    def __exit__(self, *exc):
-        self.clear()
-        if self.saved is not None:
-            termios.tcsetattr(self.stdin.fileno(), termios.TCSADRAIN, self.saved)
-            self.saved = None
-        return False
+    def __init__(self, editor, out=None):
+        self.editor, self.out = editor, out or sys.stdout
+        self.lines, self.questions = queue.Queue(), queue.Queue()
+        self.cancel, self.thread, self.error, self.drawn = threading.Event(), None, None, 0.0
 
-    def clear(self):
-        if self.shown:
-            self.out.write("\r\x1b[2K")
-            self.out.flush()
-            self.shown = False
+    # ---- called from the turn's thread
+    def emit(self, text):
+        self.lines.put(text)
 
-    def draw(self):
-        width = max(20, shutil.get_terminal_size((100, 30)).columns)
-        seconds = int(time.monotonic() - self.started)
-        line = SPINNER[self.frame % len(SPINNER)] + " Working… (" + str(seconds) + "s · esc to interrupt)"
-        if self.typed:
-            line += " · next: " + self.typed.replace("\n", " ")[-30:]
-        self.frame += 1
-        self.out.write("\r\x1b[2K" + fg("mode", line[:width - 1], self.color))
-        self.out.flush()
-        self.shown = True
-
-    def keys(self, data):
-        """Keep typing for the next prompt; Esc on its own interrupts the turn."""
-        if data == "\x1b":
-            raise KeyboardInterrupt
-        if data.startswith("\x1b"):
-            return      # arrows and other sequences mean nothing while working
-        for ch in data:
-            if ch in "\x7f\b":
-                self.typed = self.typed[:-1]
-            elif ch in "\r\n":
-                self.typed += "\n" if self.typed else ""
-            elif ch == "\x15":                 # ctrl-u
-                self.typed = ""
-            elif ch >= " ":
-                self.typed += ch
+    def ask(self, prompt):
+        reply = queue.Queue(1)
+        self.questions.put((prompt, reply))
+        return reply.get()
 
     def wait(self, seconds):
-        deadline = time.monotonic() + seconds
-        while True:
-            self.draw()
-            left = deadline - time.monotonic()
-            if left <= 0:
-                return
-            if self.saved is None:
-                time.sleep(min(0.1, left))
-                continue
-            ready, _, _ = select.select([self.stdin], [], [], min(0.1, left))
-            if ready:
-                data = os.read(self.stdin.fileno(), 1024).decode("utf-8", "replace")
-                self.keys(data)
+        if self.cancel.wait(seconds):
+            raise KeyboardInterrupt
 
-    @contextlib.contextmanager
-    def paused(self):
-        """Normal echoing line input for a question asked mid-turn (an approval)."""
-        self.clear()
-        saved = self.saved
-        if saved is not None:
-            current = termios.tcgetattr(self.stdin.fileno())
-            termios.tcsetattr(self.stdin.fileno(), termios.TCSADRAIN, saved)
+    # ---- the main thread
+    def flush(self, raw):
+        if self.lines.empty():
+            return
+        if raw:
+            self.editor._erase()
+        while not self.lines.empty():
+            text = self.lines.get()
+            self.out.write((text.replace("\n", "\r\n") if raw else text) + ("\r\n" if raw else "\n"))
+        self.out.flush()
+        if raw:
+            self.editor.draw()
+
+    def idle(self):
+        self.flush(raw=True)
+        if not self.questions.empty():
+            return "ask"
+        if not self.thread.is_alive() and self.lines.empty():
+            return "done"
+        if time.monotonic() - self.drawn > 0.1:
+            self.drawn = time.monotonic()
+            self.editor.draw()
+        return None
+
+    def run(self, job, initial="", **read):
+        """Run job() to the end and return what is left typed in the box."""
+        def target():
+            try:
+                job()
+            except BaseException as exc:      # handed to the main thread
+                self.error = exc
+        self.cancel.clear()
+        self.error, text = None, initial
+        self.editor.working = time.monotonic()
+        self.thread = threading.Thread(target=target, daemon=True)
+        self.thread.start()
         try:
-            yield
+            while True:
+                try:
+                    message = self.editor.read(initial=text, idle=self.idle, **read)
+                    text = ""
+                    if message.strip() == "/stop":
+                        self.cancel.set()           # a stop is for this turn, not the queue
+                    elif message.strip():
+                        self.editor.queued.append(message.strip())
+                except Wake as wake:
+                    text = wake.text
+                    if wake.payload == "done":
+                        break
+                    if wake.payload == "interrupt":
+                        self.cancel.set()
+                    elif wake.payload == "ask":
+                        self.flush(raw=False)
+                        prompt, reply = self.questions.get()
+                        try:
+                            reply.put(input(prompt))
+                        except EOFError:
+                            reply.put("")
+                except EOFError:
+                    self.cancel.set()     # ctrl-d twice on an empty box: stop this turn
         finally:
-            if saved is not None:
-                termios.tcsetattr(self.stdin.fileno(), termios.TCSADRAIN, current)
-
-    def take(self):
-        typed, self.typed = self.typed.strip("\n"), ""
-        return typed
+            self.thread.join()
+            self.flush(raw=False)
+            took, self.editor.working = time.monotonic() - self.editor.working, None
+        self.out.write("\n" + fg("note", "─ Worked for " + elapsed(took) + " · "
+                                  + time.strftime("%-I:%M %p") + " ─") + "\n\n")
+        self.out.flush()
+        return text
 
 
 class CursorInput(Editor):
     def __init__(self, commands, **kwargs):
         super().__init__(commands, colors=COLORS, **kwargs)
+        self.working = None     # when the running turn started; None between turns
+        self.queued = []        # messages to send after it, in order
+
+    def keys(self, fd, idle):
+        for key in super().keys(fd, idle):
+            if self.working is not None and not self.menu_items():
+                if key == "tab":
+                    key = "enter"                       # queue, as Codex's tab does
+                elif key == "esc" or (key == "ctrl-c" and not self.text):
+                    key = ("wake", "interrupt")
+            yield key
+
+    def echo(self, text):
+        """Show a sent message in the transcript the way a submitted prompt is left."""
+        self.text, self.pos, self.drawn_rows, self.cursor_row = text, len(text), 0, 0
+        self.draw(final=True)
+        self.text, self.pos = "", 0
 
     def draw(self, final=False):
         width = max(20, shutil.get_terminal_size((100, 30)).columns)
@@ -150,6 +167,11 @@ class CursorInput(Editor):
             out.append(f"\x1b[{self.cursor_row}A" if self.cursor_row else "")
         out.append("\r\x1b[J")
         rows, (cursor_row, cursor_col) = self.wrap(2, width)
+        if final and self.working is not None:
+            sys.stdout.write("".join(out))     # a queued message shows above the box, not as sent
+            sys.stdout.flush()
+            self.drawn_rows = self.cursor_row = 0
+            return
         if final:
             lines = [("→ " if kind == "first" else "  ") + self.fg("text", piece) for kind, piece in rows]
             sys.stdout.write("".join(out) + "\n".join(lines) + "\n")
@@ -161,7 +183,18 @@ class CursorInput(Editor):
         ghost = self.ghost(items)
         if not self.text:
             ghost = "Plan, search, build anything"
-        lines = [GRAY + "▄" * (width - 1) + RESET]
+        head = []   # the working line and queued messages, above the box
+        if self.working is not None:
+            took = time.monotonic() - self.working
+            head += ["", self.fg("mode", SPINNER[int(took * 10) % len(SPINNER)] + " ") + self.fg("note", "Working (" + elapsed(took))
+                    + self.fg("note", " · ") + self.fg("text", "esc") + self.fg("note", " to interrupt)")]
+            for message in self.queued[-4:]:
+                first = message.splitlines()[0]
+                head.append(self.fg("ghost", "  ↳ " + first[:width - 8] + (" …" if len(first) > width - 8 or "\n" in message else "")))
+            if len(self.queued) > 4:
+                head.append(self.fg("ghost", f"    and {len(self.queued) - 4} more queued"))
+            head.append("")
+        lines = head + [GRAY + "▄" * (width - 1) + RESET]
         for index, (kind, piece) in enumerate(rows):
             body = ("→ " if kind == "first" else "  ") + piece
             occupied = sum(cell_width(ch) for ch in body)
@@ -179,18 +212,19 @@ class CursorInput(Editor):
                              else self.fg("label", text))
         else:
             left, right = self.hint()
+            if self.working is not None and self.text.strip():
+                left = "tab to queue message"
             if self.notice:
-                import time
                 if time.time() < self.notice[1]:
                     left = self.notice[0]
             left = left[:max(0, width - len(right) - 4)]
             lines.append("  " + self.fg("note", left) + " " * max(1, width - 3 - len(left) - len(right))
                          + self.fg("mode", right))
         out.append("\r\n".join(lines))
-        up = len(lines) - 1 - (1 + cursor_row)
+        up = len(lines) - 1 - (len(head) + 1 + cursor_row)
         if up > 0:
             out.append(f"\x1b[{up}A")
         out.append("\r" + (f"\x1b[{cursor_col}C" if cursor_col else ""))
         sys.stdout.write("".join(out))
         sys.stdout.flush()
-        self.drawn_rows, self.cursor_row = len(lines), 1 + cursor_row
+        self.drawn_rows, self.cursor_row = len(lines), len(head) + 1 + cursor_row
