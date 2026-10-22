@@ -24,7 +24,8 @@ to answer in a short summary the lead can read cheaply. Each provider's pair of
 models is the "team" entry of its profile in agents.json, or the local config's.
 
 Instructions reach each CLI the way it supports: Claude appends them to its
-system prompt, Codex takes them as developer instructions. Kiro, Cursor and
+system prompt, Codex takes them as developer instructions, and Grok Bot saves
+them with its conversation (--append-system-prompt). Kiro, Cursor and
 Antigravity have no such flag, so their lead (or Standard pane) gets them as its
 opening prompt and their crew get the reply and usage rules inside each task.
 """
@@ -359,6 +360,8 @@ def instruct(agent, args, brief, opening, shared):
         agent["argv"] += ["-c", "developer_instructions=" + json.dumps(brief)]   # a TOML string
         if shared:
             agent["argv"] += ["-c", "mcp_servers.iMCP.enabled=false"]  # see CLAUDE_SETTINGS
+    elif name == "Grok Bot":
+        agent["argv"] += ["--append-system-prompt", brief]
     elif opening:
         # No system prompt flag: the agent reads its brief as the opening prompt.
         opening = brief + "\n\nThese are your standing instructions for this session. Reply only: ready."

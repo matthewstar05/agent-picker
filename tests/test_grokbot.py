@@ -189,6 +189,71 @@ class GrokBotTests(unittest.TestCase):
             c.approve({"id": "e"}, card)
         self.assertEqual(self.gateway.approved, [])
 
+    def test_print_text_mode_writes_only_the_final_answer_like_claude(self):
+        c = self.conversation("text")
+        with contextlib.redirect_stdout(io.StringIO()) as out, contextlib.redirect_stderr(io.StringIO()) as err:
+            c.turn("Fix the tests")
+        self.assertEqual(out.getvalue(), "Verified.\n")
+        self.assertEqual(err.getvalue(), "")
+        self.gateway.entries.clear()
+        c.output.verbose = True
+        with contextlib.redirect_stdout(io.StringIO()) as out, contextlib.redirect_stderr(io.StringIO()) as err:
+            c.turn("Again")
+        self.assertEqual(out.getvalue(), "Verified.\n")
+        self.assertIn("Checking files.", err.getvalue())
+
+    def test_json_result_reports_duration_and_turns(self):
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            self.conversation().turn("Fix the tests")
+        result = json.loads(output.getvalue())
+        self.assertIsInstance(result["duration_ms"], int)
+        self.assertEqual(result["num_turns"], 1)
+
+    def test_appended_system_prompt_is_saved_and_sent_every_turn(self):
+        c = self.conversation()
+        c.system = "Answer in one line."
+        with contextlib.redirect_stdout(io.StringIO()):
+            c.turn("First")
+        self.assertEqual(sessions.load(BOT)["system"], "Answer in one line.")
+        resumed = cli.Conversation(self.gateway, cli.Output("json"), self.root, MACHINE, sessions.load(BOT), timeout=1, poll=0)
+        self.gateway.entries.clear()
+        with contextlib.redirect_stdout(io.StringIO()):
+            resumed.turn("Second")
+        for sent in self.gateway.sent:
+            self.assertIn("Standing instructions for this session", sent[1])
+            self.assertIn("Answer in one line.", sent[1])
+        self.assertLess(self.gateway.sent[1][1].index("Answer in one line."), self.gateway.sent[1][1].index("Second"))
+
+    def test_piped_stdin_joins_a_prompt_argument(self):
+        with patch.object(cli, "Gateway", return_value=self.gateway), patch.object(cli, "select_machine", return_value=MACHINE), \
+             patch.object(cli.time, "sleep"), patch.object(cli.sys, "stdin", io.StringIO("def broken(): pass")), \
+             contextlib.redirect_stdout(io.StringIO()):
+            result = cli.main(["-p", "explain this file", "-C", str(self.root)])
+        self.assertEqual(result, 0)
+        self.assertIn("explain this file\n\ndef broken(): pass", self.gateway.sent[0][1])
+
+    def test_always_allows_the_same_action_for_the_rest_of_the_run(self):
+        c = self.conversation()
+        c.output.interactive = True
+        c.ensure_session()
+        entries = [{"id": i, "kind": "send-message", "message": {"type": "local-tool-permission",
+                    "ask": {"status": "pending", "requestId": i}}} for i in ("e1", "e2", "e3")]
+        self.gateway.entries += entries
+        same = {"status": "pending", "command": "npm test", "workingDirectory": "/p", "requestId": "r"}
+        with patch("builtins.input", side_effect=["a", "n"]) as answer, contextlib.redirect_stderr(io.StringIO()):
+            c.approve(entries[0], same)
+            c.approve(entries[1], dict(same, reason="again"))
+            c.approve(entries[2], dict(same, command="rm -rf build"))
+        self.assertEqual(answer.call_count, 2)
+        self.assertEqual(self.gateway.approved, [("e1", True), ("e2", True), ("e3", False)])
+
+    def test_claude_and_codex_style_aliases(self):
+        args = cli.parser().parse_args(["-r", "abc", "-C", "/tmp", "--verbose", "--append-system-prompt", "Be brief"])
+        self.assertEqual((args.resume, args.workspace, args.verbose, args.system), ("abc", Path("/tmp"), True, "Be brief"))
+        self.assertEqual(cli.parser().parse_args(["--cd", "/tmp"]).workspace, Path("/tmp"))
+        self.assertEqual(cli.parser().parse_args(["--workspace", "/tmp"]).workspace, Path("/tmp"))
+        self.assertIn("clear", [name for name, _, _ in cli.COMMANDS])
+
     def test_saved_session_is_private_and_has_one_writer(self):
         c = self.conversation()
         c.ensure_session()

@@ -85,6 +85,8 @@ class GrokBotHerdrTests(unittest.TestCase):
         expected = native["argv"][:6] + ["--resume", BOT]
         self.assertEqual(session_refresh.resume_argv("Grok Bot", native["argv"], BOT), expected)
         self.assertEqual(session_refresh.resume_argv("Grok Bot", ["grokbot", "old opening prompt"], BOT), ["grokbot", "--resume", BOT])
+        self.assertEqual(session_refresh.resume_argv("Grok Bot", ["grokbot", "--append-system-prompt", "brief", "-r", "old"], BOT),
+                         ["grokbot", "--append-system-prompt", "brief", "--resume", BOT])
         with self.assertRaises(ValueError):
             session_refresh.resume_argv("Grok Bot", ["grokbot", "-p", "old task"], BOT)
         grokbot_sessions.save({"id": BOT, "cwd": str(self.root), "messages": [], "pending": None})
@@ -118,6 +120,8 @@ class GrokBotHerdrTests(unittest.TestCase):
         saved = json.loads(output.read_text())
         self.assertEqual(saved["cwd"], str(self.root))
         self.assertIn("nobody leads", saved["argv"][-1])
+        # The brief is a standing instruction, like Claude's, not an opening chat turn.
+        self.assertEqual(saved["argv"][-2], "--append-system-prompt")
         self.assertFalse(any(word.startswith("--picker-") for word in saved["argv"]))
 
 

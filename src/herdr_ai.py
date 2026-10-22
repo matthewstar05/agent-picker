@@ -841,7 +841,7 @@ def handoff_main(argv, herdr=None, spawn=None):
         moved = "this pane"
     job = {"herdr": herdr.binary, "caller": me, "lead": me, "lines": lines, "cwd": cwd, "key": key,
            "update": update, "goal": handoff_goal(goal, caller, notes),
-           "opening": target not in ("Claude", "Codex")}
+           "opening": target not in ("Claude", "Codex", "Grok Bot")}
     log = state_dir() / "herdr-ai-handoff.log"
     log.parent.mkdir(parents=True, exist_ok=True)
     (spawn or spawn_runner)(job, log)

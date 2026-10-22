@@ -2,11 +2,13 @@
 """Cursor-style terminal conversations on Grok Bot's own included usage."""
 
 import argparse
+import io
 import json
 import math
 import os
 from pathlib import Path
 import re
+import select
 import socket
 import subprocess
 import sys
@@ -18,8 +20,9 @@ import grokbot_sessions as store
 VERSION = "0.1.0"
 COMMANDS = [("help", "", "show commands"), ("usage", "", "Cursor models, external models, and Grok Bot limits"),
             ("status", "", "account, machine and conversation"), ("new", "", "start a separate conversation"),
+            ("clear", "", "start a separate conversation (same as /new)"), ("model", "", "show the model"),
             ("resume", "[id]", "resume a saved conversation"), ("sessions", "", "list saved conversations"),
-            ("stop", "", "interrupt the current bot"), ("quit", "", "exit")]
+            ("stop", "", "interrupt the current bot"), ("quit", "", "exit"), ("exit", "", "exit")]
 CONTROL = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\))|[\x00-\x08\x0b-\x1f\x7f]")
 
 
@@ -48,9 +51,10 @@ def select_machine(machines, requested=None):
 
 
 class Output:
-    def __init__(self, kind="text", interactive=False):
-        self.kind, self.interactive = kind, interactive
+    def __init__(self, kind="text", interactive=False, verbose=False):
+        self.kind, self.interactive, self.verbose = kind, interactive, verbose
         self.answer = ""
+        self.started = time.monotonic()
 
     def event(self, event):
         if self.kind == "stream-json":
@@ -59,17 +63,23 @@ class Output:
             if event["type"] == "assistant":
                 text = "".join(p.get("text", "") for p in event["message"]["content"])
                 print(clean(text), flush=True)
-            elif event["type"] == "tool_call" and self.interactive:
-                print("  ◇ " + clean(event["label"])[:180], flush=True)
+            elif event["type"] == "tool_call" and (self.interactive or self.verbose):
+                print("  ◇ " + clean(event["label"])[:180], file=sys.stdout if self.interactive else sys.stderr, flush=True)
             elif event["type"] == "notice":
                 print(clean(event["text"]), file=sys.stderr, flush=True)
 
-    def text(self, text):
+    def text(self, text, final=True):
         self.answer += ("\n\n" if self.answer else "") + text
+        if self.kind == "text" and not self.interactive and not final:
+            # Like claude -p: stdout carries only the final answer; --verbose shows progress on stderr.
+            if self.verbose:
+                print(clean(text), file=sys.stderr, flush=True)
+            return
         self.event({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": text}]}})
 
     def result(self, session, status="success"):
         event = {"type": "result", "subtype": status, "is_error": status != "success",
+                 "duration_ms": int((time.monotonic() - self.started) * 1000), "num_turns": 1,
                  "session_id": session["id"], "result": self.answer}
         if self.kind == "json":
             print(json.dumps(event, ensure_ascii=False), flush=True)
@@ -78,10 +88,12 @@ class Output:
 
 
 class Conversation:
-    def __init__(self, gateway, output, cwd, machine=None, session=None, timeout=1800, poll=1.5):
+    def __init__(self, gateway, output, cwd, machine=None, session=None, timeout=1800, poll=1.5, system=None):
         self.gateway, self.output, self.cwd = gateway, output, str(Path(cwd).resolve())
         self.machine, self.session = machine, session
         self.timeout, self.poll = timeout, poll
+        self.system = system    # --append-system-prompt: saved with the session, sent with every turn
+        self.allowed = set()    # actions answered "always" this run, like the other agents' session approvals
 
     def report(self, state):
         pane = os.environ.get("HERDR_PANE_ID")
@@ -115,7 +127,7 @@ class Conversation:
                                   "Coding agent for the Grok Bot terminal CLI. Use the user's selected machine and project.")
         self.session = {"id": row["id"], "cwd": self.cwd, "machine": self.machine["machineId"] if self.machine else None,
                         "machine_label": self.machine.get("label") if self.machine else "cloud",
-                        "created": time.time(), "messages": [], "pending": None}
+                        "created": time.time(), "messages": [], "pending": None, "system": self.system}
         store.save(self.session)
 
     def prompt(self, text, nonce):
@@ -126,16 +138,22 @@ class Conversation:
                     "Read the project's AGENTS.md and preserve existing changes. "
                     "Use Grok Bot's native local execution policy and approval cards. Do not launch another AI CLI to do this task. "
                     if machine else "Work on your cloud computer. This session has no local machine access selected. ")
+        system = self.session.get("system")
+        standing = ("\n\nStanding instructions for this session (follow them as a system prompt):\n" + system) if system else ""
         return ("You are responding through a terminal coding agent interface. " + location
                 + "Carry out the user's task, verify results, and explain the changes. "
                 "When this specific request is finished or needs user input, end your final user-facing message with the exact hidden marker "
-                + marker(nonce) + ". Include the marker only in your final message, never in progress or tool calls.\n\nUser request:\n" + text)
+                + marker(nonce) + ". Include the marker only in your final message, never in progress or tool calls."
+                + standing + "\n\nUser request:\n" + text)
 
     def turn(self, text=None):
         self.ensure_session()
         with store.lease(self.session):
             # Read after taking the lease so another pane cannot leave an unseen turn.
             self.session = store.load(self.session["id"], self.cwd)
+            if self.system and self.session.get("system") != self.system:
+                self.session["system"] = self.system
+                store.save(self.session)
             if self.session.get("pending") and text:
                 raise GrokError("A previous request is still pending. Resume it without a prompt before submitting more work.")
             if not self.session.get("pending"):
@@ -218,7 +236,7 @@ class Conversation:
                 if ident in shown:
                     continue
                 if kind == "send-message" and text and (not isinstance(message, dict) or message.get("type") in (None, "text")):
-                    self.output.text(text.replace(marker(pending["nonce"]), "").strip())
+                    self.output.text(text.replace(marker(pending["nonce"]), "").strip(), final=marker(pending["nonce"]) in text)
                 elif kind in ("tool-call", "tool-result"):
                     label = entry.get("toolName") or entry.get("name") or entry.get("tool") or kind
                     self.output.event({"type": "tool_call", "subtype": "started" if kind == "tool-call" else "completed",
@@ -244,15 +262,24 @@ class Conversation:
 
     def approve(self, entry, card):
         details = {key: card[key] for key in ("command", "action", "reason", "workingDirectory", "machineId") if key in card}
+        key = json.dumps({k: v for k, v in details.items() if k != "reason"}, sort_keys=True)
+        if key in self.allowed:
+            self.output.event({"type": "notice", "text": "Allowed for this session: " + json.dumps(details, ensure_ascii=False)})
+            fresh = next((e for e in self.gateway.transcript(self.session["id"]) if e.get("id") == entry["id"]), None)
+            if fresh:
+                self.gateway.approval(self.session["id"], fresh, True)
+            return
         self.output.event({"type": "notice", "text": "Approval required: " + json.dumps(details, ensure_ascii=False)})
         if not self.output.interactive:
             raise GrokError("Approval required in Grok Bot. The pending request is saved; resume after deciding in the app.")
         self.report("blocked")
-        answer = input("Allow this action once? [y/N] ").strip().lower()
+        answer = input("Allow this action? [y] once, [a] always this session, [N] deny ").strip().lower()
+        if answer == "a":
+            self.allowed.add(key)
         # Refresh to avoid acting on a stale card.
         fresh = next((e for e in self.gateway.transcript(self.session["id"]) if e.get("id") == entry["id"]), None)
         if fresh:
-            self.gateway.approval(self.session["id"], fresh, answer == "y")
+            self.gateway.approval(self.session["id"], fresh, answer in ("y", "yes", "a"))
         self.report("working")
 
     def stop(self):
@@ -310,6 +337,14 @@ def banner(cwd, session=None):
     print("  Cursor Grok Bot usage · /help for commands\n")
 
 
+def piped(wait=0.2):
+    """Whether stdin has input ready, so a prompt plus an idle open pipe never blocks."""
+    try:
+        return bool(select.select([sys.stdin], [], [], wait)[0])
+    except (OSError, ValueError, TypeError, io.UnsupportedOperation):
+        return True
+
+
 def parser():
     p = argparse.ArgumentParser(prog="grokbot", description="Run agentic tasks using your Grok Bot usage, in a Cursor-style terminal.")
     p.add_argument("prompt", nargs="*", help="initial task")
@@ -317,8 +352,11 @@ def parser():
     p.add_argument("-p", "--print", action="store_true", dest="printing", help="run one task and exit")
     p.add_argument("--output-format", choices=("text", "json", "stream-json"), default="text")
     p.add_argument("--stream-partial-output", action="store_true", help="emit messages as they arrive in stream-json mode")
-    p.add_argument("--workspace", type=Path, default=Path.cwd(), help="local project directory")
-    p.add_argument("--resume", nargs="?", const="latest", help="resume a saved project session; a pending task is observed without resending")
+    p.add_argument("--verbose", action="store_true", help="show progress messages and tool calls on stderr in --print text mode")
+    p.add_argument("--append-system-prompt", dest="system", metavar="TEXT",
+                   help="standing instructions for this conversation, saved with it and sent with every turn")
+    p.add_argument("-C", "--cd", "--workspace", dest="workspace", type=Path, default=Path.cwd(), help="local project directory")
+    p.add_argument("-r", "--resume", nargs="?", const="latest", help="resume a saved project session; a pending task is observed without resending")
     p.add_argument("-c", "--continue", action="store_true", dest="continuing", help="resume the last project conversation")
     p.add_argument("--machine", help="registered machine ID or exact label")
     p.add_argument("--cloud", action="store_true", help="work on the bot's cloud computer instead of this Mac")
@@ -341,7 +379,7 @@ def main(argv=None):
     if args.output_format != "text" and not args.printing:
         parser().error("--output-format requires --print")
     gateway, conversation = Gateway(), None
-    output = Output(args.output_format, interactive=not args.printing and sys.stdin.isatty())
+    output = Output(args.output_format, interactive=not args.printing and sys.stdin.isatty(), verbose=args.verbose)
     try:
         if command == "usage":
             usage()
@@ -370,10 +408,11 @@ def main(argv=None):
                 raise GrokError("This is a local-machine conversation. Resume without --cloud, or start a new cloud conversation.")
         machine = None if args.cloud or (session and not session.get("machine")) else select_machine(
             gateway.machines(), args.machine or (session or {}).get("machine"))
-        conversation = Conversation(gateway, output, cwd, machine, session, args.timeout)
+        conversation = Conversation(gateway, output, cwd, machine, session, args.timeout, system=args.system)
         prompt = " ".join(args.prompt).strip()
-        if args.printing and not prompt and not (session and session.get("pending")) and not sys.stdin.isatty():
-            prompt = sys.stdin.read().strip()
+        if args.printing and not sys.stdin.isatty() and not (session and session.get("pending")) and (not prompt or piped()):
+            # Like claude -p: piped input alone is the task, and with a prompt it is the task's context.
+            prompt = "\n\n".join(part for part in (prompt, sys.stdin.read().strip()) if part)
         if args.printing:
             if not prompt and not (session and session.get("pending")):
                 parser().error("--print requires a prompt or a pending session")
@@ -408,7 +447,7 @@ def main(argv=None):
                     usage()
                 elif verb == "sessions":
                     list_sessions(cwd)
-                elif verb == "new":
+                elif verb in ("new", "clear"):
                     conversation.session = None
                     print("New conversation. Your next task creates a separate bot.")
                 elif verb == "resume":
@@ -422,6 +461,8 @@ def main(argv=None):
                     print("Session: " + ((conversation.session or {}).get("id") or "new") + "\nWorkspace: " + str(cwd))
                 elif verb == "stop":
                     conversation.stop()
+                elif verb == "model":
+                    print("Grok Bot · Auto. Grok Bot chooses the model for each turn.")
                 else:
                     print("Unknown command. Use /help.")
             elif prompt:

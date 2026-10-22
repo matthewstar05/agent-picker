@@ -31,7 +31,7 @@ VALUES = {
     "Antigravity": {"--model", "--effort", "--agent", "--project", "--mode", "--add-dir",
                     "--log-file"},
     "Star": {"--name", "--role", "--use", "--tier", "--timeout"},
-    "Grok Bot": {"--model", "--workspace", "--machine", "--timeout"},
+    "Grok Bot": {"--model", "-C", "--cd", "--workspace", "--machine", "--timeout", "--append-system-prompt"},
 }
 FLAGS = {
     "Claude": {"--dangerously-skip-permissions", "--allow-dangerously-skip-permissions",
@@ -43,13 +43,13 @@ FLAGS = {
              "--v2", "--v3", "--require-mcp-startup"},
     "Antigravity": {"--dangerously-skip-permissions", "--sandbox", "--remote-control"},
     "Star": {"--plan"},
-    "Grok Bot": {"--cloud", "--dangerously-skip-permissions", "--yolo"},
+    "Grok Bot": {"--cloud", "--dangerously-skip-permissions", "--yolo", "--verbose"},
 }
 OLD_SESSION = {
     "Claude": {"--resume", "-r", "--session-id"}, "Codex": set(),
     "Cursor": {"--resume"}, "Kiro": {"--resume-id"},
     "Antigravity": {"--conversation"}, "Star": {"--resume-id"},
-    "Grok Bot": {"--resume"},
+    "Grok Bot": {"--resume", "-r"},
 }
 # One-shot StarCLI flags. A refresh reopens the interactive conversation, so these
 # leave with the old command instead of turning the resumed pane into a print run.
