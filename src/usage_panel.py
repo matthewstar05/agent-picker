@@ -105,6 +105,10 @@ ANIMATE = preferences.register(preferences.Setting(
     "usage.animate", "Usage panel", "Animation", [True, False], _legacy("animate", "1") == "1",
     hint="Off redraws once a second and uses almost no CPU. a toggles it there too.",
     names={True: "on", False: "off"}))
+FRAME_RATE = preferences.register(preferences.Setting(
+    "usage.fps", "Usage panel", "Animation frame rate", [15, 30, 60], 60,
+    hint="Lower rates reduce CPU and terminal drawing while keeping every animation.",
+    names={15: "15 fps", 30: "30 fps", 60: "60 fps"}))
 
 BARS = preferences.register(ap.BARS)
 CURSOR_GROK_TRANSIENT = preferences.register(ap.CURSOR_GROK_TRANSIENT)
@@ -1308,7 +1312,7 @@ def start(providers):
 def frame_time(view):
     if view.peeking():
         return ap.FRAME_TIME   # the peek ends on a deadline when the terminal can't report Tab's release
-    return ap.FRAME_TIME if view.anim else 1.0   # once a second keeps the countdowns current
+    return 1 / preferences.get(FRAME_RATE.key) if view.anim else 1.0   # once a second keeps countdowns current
 
 
 def handle(view, key, providers, releases=False):
