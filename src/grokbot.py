@@ -13,10 +13,12 @@ import shutil
 import socket
 import subprocess
 import sys
+import threading
 import time
 
 from grokbot_gateway import Gateway, GrokError, entry_text, request_id
 from grokbot_goal import Goal
+import grokbot_sections as sections
 import grokbot_sessions as store
 
 VERSION = "0.1.0"
@@ -169,12 +171,13 @@ class Conversation:
             if self.machine and self.session.get("machine") != self.machine["machineId"]:
                 raise GrokError("The selected machine differs from this conversation's saved machine.")
             return
-        row = self.gateway.create("CLI · " + Path(self.cwd).name,
-                                  "Coding agent for the Grok Bot terminal CLI. Use the user's selected machine and project.")
+        row = self.gateway.create("CLI · " + Path(self.cwd).name, sections.DESCRIPTION)
         self.session = {"id": row["id"], "cwd": self.cwd, "machine": self.machine["machineId"] if self.machine else None,
                         "machine_label": self.machine.get("label") if self.machine else "cloud",
                         "created": time.time(), "messages": [], "pending": None, "system": self.system}
         store.save(self.session)
+        # File the new bot under this week's sidebar section without delaying the first turn.
+        threading.Thread(target=file_by_week, args=(self.gateway,)).start()
 
     def prompt(self, text, nonce):
         machine = self.session.get("machine")
@@ -382,6 +385,13 @@ class Conversation:
             self.output.event({"type": "notice", "text": "Stop requested; the bot has not confirmed it yet. Your next message waits for it to finish."})
 
 
+def file_by_week(gateway):
+    try:
+        sections.organize(gateway)
+    except Exception:
+        pass    # sidebar grouping is cosmetic; the conversation never depends on it
+
+
 def usage():
     import agent_picker as ap
     windows = ap.usage_cursor()
@@ -442,7 +452,7 @@ def parser():
 
 def main(argv=None):
     args_in = list(sys.argv[1:] if argv is None else argv)
-    command = args_in.pop(0) if args_in and args_in[0] in ("status", "whoami", "machines", "usage", "ls", "resume", "agent") else None
+    command = args_in.pop(0) if args_in and args_in[0] in ("status", "whoami", "machines", "usage", "ls", "resume", "agent", "sections") else None
     args = parser().parse_args(args_in)
     cwd = args.workspace.expanduser().resolve()
     if not cwd.is_dir():
@@ -461,6 +471,11 @@ def main(argv=None):
             return 0
         if command == "ls":
             list_sessions(cwd)
+            return 0
+        if command == "sections":
+            count = sections.organize(gateway)
+            print("Desktop sidebar already grouped by week." if count is None
+                  else f"Filed CLI conversations into {count} weekly section{'s' if count != 1 else ''}.")
             return 0
         if command == "machines":
             for machine in gateway.machines():
