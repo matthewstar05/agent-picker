@@ -75,3 +75,40 @@ def auto_location(machine, cwd):
             "If the cloud computer cannot clone or push the repository, do the work on the local machine instead. "
             "On the local machine, read the project's AGENTS.md, preserve existing changes, and use Grok Bot's native local "
             "execution policy and approval cards. Do not launch another AI CLI to do this task. ")
+
+
+class Menu:
+    """Grok Bot's defaults screen (→ on its row in the picker or the herdr-ai setup).
+
+    Grok Bot manages its own model, so the screen holds this setting. It saves on
+    each change, the same preference as the settings screens, so there is nothing
+    to review on the way out."""
+
+    LABELS = {"where": "Works on"}
+    browsing, error, index = False, "", 0
+
+    def __init__(self, agent):
+        self.agent = agent
+        self.values = {"where": preferred()}
+        self.original = dict(self.values)
+
+    changed = False
+
+    def fields(self):
+        return ("where",)
+
+    @staticmethod
+    def shown(key, value):
+        return WHERE.show(value)
+
+    def note(self):
+        return WHERE.hint
+
+    def handle(self, key):
+        if key in ("esc", "q"):
+            return "save"
+        if key in ("left", "right", "\r", "\n", " "):
+            preferences.cycle(WHERE.key, -1 if key == "left" else 1)
+            self.values = {"where": preferred()}
+            self.original = dict(self.values)
+        return None

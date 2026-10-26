@@ -43,7 +43,8 @@ class GrokBotHerdrTests(unittest.TestCase):
                 self.assertEqual(team.find(alias), "Grok Bot")
             for kind in (team.OFF, team.INDIVIDUAL, team.ORCHESTRATOR):
                 with patch.object(team, "mode", return_value=kind):
-                    self.assertIsNone(team.models_menu("Grok Bot"))
+                    # No model controls: its defaults screen holds only where it works.
+                    self.assertEqual(team.models_menu("Grok Bot").fields(), ("where",))
 
     def test_fake_herdr_builds_all_modes_with_five_grokbot_launches(self):
         for kind in (team.OFF, team.INDIVIDUAL, team.ORCHESTRATOR):

@@ -19,6 +19,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import textwrap
 import threading
 import time
 import urllib.request
@@ -925,6 +926,8 @@ def render_defaults(menu, cols, rows, t):
             out.append(note("Faster replies use more quota.", bw, accent))
         if field == "system_prompts":
             out.append(note("agy context only; herdr-ai adds its own instructions.", bw, accent))
+        if hasattr(menu, "note"):
+            out += [note(line, bw, accent) for line in textwrap.wrap(menu.note(), max(20, bw - 4))]
         if menu.error:
             out.append(note(menu.error, bw, HOT))
         elif menu.changed:
@@ -1286,7 +1289,8 @@ def choose(screen=None, only=None):
                 elif key in ("\x03", "\x04"):
                     return None
             elif key == "right":
-                defaults_menu = provider_defaults.Menu(listed[selected])
+                defaults_menu = (grokbot_where.Menu if listed[selected]["name"] == "Grok Bot"
+                                 else provider_defaults.Menu)(listed[selected])
                 go("defaults")
             elif key in ("up", "k"):
                 move(-1)

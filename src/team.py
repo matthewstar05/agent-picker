@@ -42,6 +42,7 @@ import threading
 import time
 
 import agent_picker as ap
+import grokbot_where
 import handoff
 import model_catalog
 import provider_defaults
@@ -469,7 +470,9 @@ def models_menu(name):
     agents launch with, or the team's own models for orchestrator-crew. None for a
     row with neither (Standard, Star)."""
     agent = next((a for a in providers() if a["name"] == name), None)
-    if agent is None or name == "Grok Bot":
+    if agent is not None and name == "Grok Bot":
+        return grokbot_where.Menu(agent)
+    if agent is None:
         return None
     return TeamMenu(agent) if mode() == ORCHESTRATOR else provider_defaults.Menu(agent)
 

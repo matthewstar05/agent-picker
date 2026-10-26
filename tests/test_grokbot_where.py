@@ -100,6 +100,23 @@ class WhereTests(unittest.TestCase):
         preferences.put(where.WHERE.key, where.AUTO)
         self.assertEqual(where.detail(grok), "Cursor Grok Bot usage · local or cloud by request")
 
+    def test_grok_bot_defaults_screen_holds_the_setting_in_the_picker_and_herdr_setup(self):
+        import agent_picker as ap
+        import team
+        grok = next(a for a in ap.AGENTS if a["name"] == "Grok Bot")
+        menu = where.Menu(grok)
+        frame = cli.CONTROL.sub("", "\n".join(map(str, ap.render_defaults(menu, 100, 30, 0))))
+        self.assertIn("Grok Bot defaults", frame)
+        self.assertIn("Works on", frame)
+        self.assertIn("this Mac", frame)
+        self.assertNotIn("managed by this provider", frame)
+        menu.handle("right")
+        self.assertEqual(preferences.get(where.WHERE.key), where.AUTO)   # saved at once, shared with settings
+        self.assertFalse(menu.changed)
+        self.assertEqual(menu.handle("esc"), "save")
+        with patch.object(team, "providers", return_value=[grok]):
+            self.assertIsInstance(team.models_menu("Grok Bot"), where.Menu)
+
     def test_where_flag_is_validated_against_cloud_and_machine(self):
         for argv in (["--cloud", "--where", "auto", "-p", "x"], ["--where", "cloud", "--machine", "m", "-p", "x"]):
             with self.assertRaises(SystemExit), patch("sys.stderr"):
