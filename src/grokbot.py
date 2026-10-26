@@ -19,6 +19,7 @@ import time
 from grokbot_gateway import Gateway, GrokError, entry_text, request_id
 from grokbot_goal import Goal
 import grokbot_sections as sections
+import grokbot_where as where
 import grokbot_sessions as store
 
 VERSION = "0.1.0"
@@ -27,6 +28,7 @@ COMMANDS = [("help", "", "show commands"), ("usage", "", "Cursor models, externa
             ("clear", "", "start a separate conversation (same as /new)"), ("model", "", "show the model"),
             ("goal", "<objective>", "keep working until it is done; /goal resume, /goal clear"),
             ("resume", "[id]", "resume a saved conversation"), ("sessions", "", "list saved conversations"),
+            ("where", "[local|auto|cloud]", "show or change where Grok Bot works"),
             ("stop", "", "interrupt the current bot"), ("quit", "", "exit"), ("exit", "", "exit")]
 CONTROL = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\))|[\x00-\x08\x0b-\x1f\x7f]")
 
@@ -137,6 +139,7 @@ class Conversation:
     def __init__(self, gateway, output, cwd, machine=None, session=None, timeout=1800, poll=1.5, system=None):
         self.gateway, self.output, self.cwd = gateway, output, str(Path(cwd).resolve())
         self.machine, self.session = machine, session
+        self.where = where.LOCAL if machine else where.CLOUD   # main() sets the chosen mode
         self.timeout, self.poll = timeout, poll
         self.system = system    # --append-system-prompt: saved with the session, sent with every turn
         self.allowed = set()    # actions answered "always" this run, like the other agents' session approvals
@@ -173,7 +176,7 @@ class Conversation:
             return
         row = self.gateway.create("CLI · " + Path(self.cwd).name, sections.DESCRIPTION)
         self.session = {"id": row["id"], "cwd": self.cwd, "machine": self.machine["machineId"] if self.machine else None,
-                        "machine_label": self.machine.get("label") if self.machine else "cloud",
+                        "machine_label": self.machine.get("label") if self.machine else "cloud", "where": self.where,
                         "created": time.time(), "messages": [], "pending": None, "system": self.system}
         store.save(self.session)
         # File the new bot under this week's sidebar section without delaying the first turn.
@@ -187,6 +190,8 @@ class Conversation:
                     "Read the project's AGENTS.md and preserve existing changes. "
                     "Use Grok Bot's native local execution policy and approval cards. Do not launch another AI CLI to do this task. "
                     if machine else "Work on your cloud computer. This session has no local machine access selected. ")
+        if machine and self.session.get("where") == where.AUTO:
+            location = where.auto_location(machine, self.cwd)
         system = self.session.get("system")
         standing = ("\n\nStanding instructions for this session (follow them as a system prompt):\n" + system) if system else ""
         return ("You are responding through a terminal coding agent interface. " + location
@@ -385,6 +390,52 @@ class Conversation:
             self.output.event({"type": "notice", "text": "Stop requested; the bot has not confirmed it yet. Your next message waits for it to finish."})
 
 
+def choose_where(args, session):
+    """--cloud or --where for this run, else a saved conversation's own mode, else the picker setting."""
+    saved = (session.get("where") or (where.LOCAL if session.get("machine") else where.CLOUD)) if session else None
+    wanted = where.CLOUD if args.cloud else args.where
+    if saved and wanted and wanted != saved:
+        if where.CLOUD in (saved, wanted):
+            raise GrokError("This conversation works on " + ("the cloud computer" if saved == where.CLOUD else "this Mac")
+                            + ". Start a new conversation to use " + wanted + ".")
+        session["where"] = wanted   # local and auto share the same machine binding
+    return wanted or saved or where.preferred()
+
+
+def machine_for(gateway, requested, mode, session, output):
+    """The Mac for local or auto work. A new auto conversation falls back to the cloud when the Mac is offline."""
+    try:
+        return connect_machine(gateway, requested)
+    except GrokError as exc:
+        if mode != where.AUTO or session:
+            raise
+        output.event({"type": "notice", "text": clean(str(exc)) + " Working on the cloud computer instead."})
+        return None
+
+
+def switch_where(conversation, wanted, gateway, machine, output):
+    """/where: show the mode, or change it. Returns the machine now in use."""
+    if not wanted:
+        print("Grok Bot works on " + where.WHERE.show(conversation.where) + ".")
+        return machine
+    if wanted not in where.WHERE.choices:
+        print("Use /where local, /where auto, or /where cloud.")
+        return machine
+    session = conversation.session
+    if session and where.CLOUD in (wanted, conversation.where) and wanted != conversation.where:
+        print("This conversation's machine is fixed. Use /new, then /where " + wanted + ".")
+        return machine
+    if wanted != where.CLOUD and machine is None:
+        machine = connect_machine(gateway)
+    conversation.where = wanted
+    conversation.machine = None if wanted == where.CLOUD else machine
+    if session:
+        session["where"] = wanted
+        store.save(session)
+    print("Grok Bot now works on " + where.WHERE.show(wanted) + ".")
+    return conversation.machine
+
+
 def file_by_week(gateway):
     try:
         sections.organize(gateway)
@@ -412,14 +463,14 @@ def list_sessions(cwd):
         print("No saved conversations in this project.")
 
 
-def banner(cwd, session=None):
+def banner(cwd, session=None, mode=None):
     color = "\x1b[38;2;255;160;165m" if sys.stdout.isatty() else ""
     reset = "\x1b[0m" if color else ""
     print("\n  " + color + "Grok Bot Agent" + reset + "\n  v" + VERSION)
     print("  " + clean(str(cwd)))
     if session:
         print("  Session " + session["id"])
-    print("  Cursor Grok Bot usage · /help for commands\n")
+    print("  Cursor Grok Bot usage · " + (where.WHERE.show(mode) + " · " if mode else "") + "/help for commands\n")
 
 
 def piped(wait=0.2):
@@ -445,6 +496,8 @@ def parser():
     p.add_argument("-c", "--continue", action="store_true", dest="continuing", help="resume the last project conversation")
     p.add_argument("--machine", help="registered machine ID or exact label")
     p.add_argument("--cloud", action="store_true", help="work on the bot's cloud computer instead of this Mac")
+    p.add_argument("--where", choices=(where.LOCAL, where.AUTO, where.CLOUD),
+                   help="this Mac, its cloud computer, or auto to choose per request (default: the picker's Grok Bot setting)")
     p.add_argument("--model", choices=("auto",), default="auto", help="Grok Bot manages model selection")
     p.add_argument("--timeout", type=float, default=1800, help="seconds to observe a turn before leaving it saved")
     return p
@@ -461,6 +514,10 @@ def main(argv=None):
         parser().error("--timeout must be finite and positive")
     if args.cloud and args.machine:
         parser().error("--cloud and --machine cannot be combined")
+    if args.cloud and args.where not in (None, where.CLOUD):
+        parser().error("--cloud and --where " + args.where + " cannot be combined")
+    if args.where == where.CLOUD and args.machine:
+        parser().error("--where cloud and --machine cannot be combined")
     if args.output_format != "text" and not args.printing:
         parser().error("--output-format requires --print")
     gateway, conversation = Gateway(), None
@@ -496,9 +553,13 @@ def main(argv=None):
             session = store.load(ident, str(cwd))
             if args.cloud and session.get("machine"):
                 raise GrokError("This is a local-machine conversation. Resume without --cloud, or start a new cloud conversation.")
-        machine = None if args.cloud or (session and not session.get("machine")) else connect_machine(
-            gateway, args.machine or (session or {}).get("machine"))
+        mode = choose_where(args, session)
+        machine = None if mode == where.CLOUD else machine_for(gateway, args.machine or (session or {}).get("machine"),
+                                                               mode, session, output)
+        if machine is None and mode != where.CLOUD:
+            mode = where.CLOUD
         conversation = Conversation(gateway, output, cwd, machine, session, args.timeout, system=args.system)
+        conversation.where = mode
         prompt = " ".join(args.prompt).strip()
         if args.printing and not sys.stdin.isatty() and not (session and session.get("pending")) and (not prompt or piped()):
             # Like claude -p: piped input alone is the task, and with a prompt it is the task's context.
@@ -511,7 +572,7 @@ def main(argv=None):
         if not sys.stdin.isatty():
             raise GrokError("Use --print for non-interactive tasks.")
         from grokbot_ui import CursorInput, Working, fg as ui_fg
-        banner(cwd, session)
+        banner(cwd, session, mode)
         editor = CursorInput(COMMANDS, history=[m["user"] for m in (session or {}).get("messages", [])],
                              image_dir=str(store.directory().parent / "attachments"))
         runner, draft = Working(editor), ""
@@ -519,7 +580,8 @@ def main(argv=None):
 
         def hint():
             return ("Grok Bot · Auto" + (" · " + goal.status() if goal.text else ""),
-                    ("Cloud" if machine is None else "Local · " + machine.get("localToolPermission", "ask")))
+                    ("Cloud" if machine is None else ("Auto" if conversation.where == where.AUTO else "Local")
+                     + " · " + machine.get("localToolPermission", "ask")))
 
         def save_goal():
             if conversation.session:
@@ -603,10 +665,13 @@ def main(argv=None):
                     resumed = store.load(rest.strip() or None, str(cwd))
                     machine = connect_machine(gateway, resumed["machine"]) if resumed.get("machine") else None
                     conversation.session, conversation.machine = resumed, machine
+                    conversation.where = resumed.get("where") or (where.LOCAL if machine else where.CLOUD)
                     goal = Goal(resumed.get("goal"))
                     if conversation.session.get("pending"):
                         working()
                     print("Resumed " + conversation.session["id"])
+                elif verb == "where":
+                    machine = switch_where(conversation, rest.strip(), gateway, machine, output)
                 elif verb == "status":
                     print("Session: " + ((conversation.session or {}).get("id") or "new") + "\nWorkspace: " + str(cwd))
                 elif verb == "stop":

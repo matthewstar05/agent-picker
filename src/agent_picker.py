@@ -30,6 +30,7 @@ if __name__ == "__main__":
     # import find this copy instead of loading a second one.
     sys.modules.setdefault("agent_picker", sys.modules[__name__])
 
+import grokbot_where
 import preferences
 import provider_defaults
 import usage_cache
@@ -47,6 +48,8 @@ START = preferences.register(preferences.Setting(
     "start", "General", "Opens on", ["agents", "usage"], "agents",
     hint="The screen agent opens on; usage always opens the usage panel. u switches anytime.",
     names={"agents": "agent selector", "usage": "usage panel"}))
+# Registered by usage_panel after its own settings, like STAR_RESETS below.
+GROKBOT_WHERE = grokbot_where.WHERE
 # Registered by usage_panel after its own settings, so the Star section lists after them.
 STAR_RESETS = preferences.Setting(
     "star.resets", "Star", "Provider cooldowns", [False, True], False,
@@ -1352,7 +1355,7 @@ def catalog():
 def print_launch_banner(agent):
     mascot = agent.get("mascot")
     if not mascot:
-        print(f"  {fg(agent['color'])}●{RESET} {BOLD}{agent['name']}{RESET} {FAINT}{agent['detail']}{RESET}\n", flush=True)
+        print(f"  {fg(agent['color'])}●{RESET} {BOLD}{agent['name']}{RESET} {FAINT}{grokbot_where.detail(agent)}{RESET}\n", flush=True)
         return
 
     cwd = os.getcwd()
@@ -1361,7 +1364,7 @@ def print_launch_banner(agent):
 
     info_lines = [
         f"{BOLD}{agent['name']}{RESET} {FAINT}{agent.get('short', '')}{RESET}",
-        f"{FAINT}{agent.get('detail', '')}{RESET}",
+        f"{FAINT}{grokbot_where.detail(agent)}{RESET}",
         f"{FAINT}permissions: bypass{RESET}",
         f"{FAINT}{cwd_disp}{RESET}"
     ]

@@ -139,6 +139,7 @@ CARD_NAMES = {"all": "on · all workspaces", "workspace": "on · this workspace"
 
 
 STAR_RESETS = preferences.register(ap.STAR_RESETS)
+GROKBOT_WHERE = preferences.register(ap.GROKBOT_WHERE)
 
 
 def card_setting(name):

@@ -520,7 +520,8 @@ def choose(settings_only=False):
     start = time.monotonic()
     ap.visibility_rows([a for a in ap.AGENTS if ap.installed(a)])
     menu = preferences.Menu([preferences.register(s) for s in
-                             (ap.VISIBILITY, *herdr_sidebar.SETTINGS, ap.BARS, ap.CURSOR_GROK_TRANSIENT, handoff.AUTO, MODE)])
+                             (ap.VISIBILITY, *herdr_sidebar.SETTINGS, ap.BARS, ap.CURSOR_GROK_TRANSIENT, handoff.AUTO, MODE,
+                              ap.GROKBOT_WHERE)])
     settings_open = settings_only
     models = None          # a provider's models screen (models_menu), while open
     confirming, choice = False, 0
