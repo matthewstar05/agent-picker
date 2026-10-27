@@ -32,6 +32,7 @@ if __name__ == "__main__":
     sys.modules.setdefault("agent_picker", sys.modules[__name__])
 
 import grokbot_where
+import model_catalog
 import preferences
 import provider_defaults
 import usage_cache
@@ -1161,6 +1162,7 @@ def choose(screen=None, only=None):
     providers = list(dict.fromkeys(a.get("usage_provider", a["name"]) for a in found
                                   if a.get("usage_provider", a["name"]) in FETCHERS))
     load_usage()
+    model_catalog.request_all(found)
     usage_panel.start(providers)   # live readers feed both screens
     usage = usage_panel.View(found, pinned=only is not None)
     menu = preferences.Menu()

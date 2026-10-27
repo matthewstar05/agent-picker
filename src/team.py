@@ -513,6 +513,7 @@ def refresh_usage(options):
 def choose(settings_only=False):
     """The agent selector's panel listing the setups. Returns the chosen row, or None to quit."""
     options = setups()
+    model_catalog.request_all([a for a in ap.AGENTS if ap.installed(a)])
     if not settings_only:
         refresh_usage(options)
     available = [True] * len(options)

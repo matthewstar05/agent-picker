@@ -151,6 +151,18 @@
       ]
     },
     {
+      "id": "gpt-6.1-terra",
+      "name": "GPT-6.1 Terra",
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+        "ultra"
+      ]
+    },
+    {
       "id": "gpt-6-sol",
       "name": "GPT-6-Sol",
       "efforts": [
@@ -207,16 +219,6 @@
         "xhigh",
         "max"
       ]
-    },
-    {
-      "id": "gpt-5.5",
-      "name": "GPT-5.5",
-      "efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh"
-      ]
     }
   ],
   "Antigravity": [
@@ -232,46 +234,6 @@
         "high": "gemini-3.8-flash-high",
         "medium": "gemini-3.8-flash-medium",
         "low": "gemini-3.8-flash-low"
-      }
-    },
-    {
-      "id": "gemini-3.7-flash",
-      "name": "Gemini 3.7 Flash",
-      "efforts": [
-        "low",
-        "medium",
-        "high"
-      ],
-      "variants": {
-        "high": "gemini-3.7-flash-high",
-        "medium": "gemini-3.7-flash-medium",
-        "low": "gemini-3.7-flash-low"
-      }
-    },
-    {
-      "id": "gemini-3.6-flash",
-      "name": "Gemini 3.6 Flash",
-      "efforts": [
-        "low",
-        "medium",
-        "high"
-      ],
-      "variants": {
-        "high": "gemini-3.6-flash-high",
-        "medium": "gemini-3.6-flash-medium",
-        "low": "gemini-3.6-flash-low"
-      }
-    },
-    {
-      "id": "gemini-3.1-pro",
-      "name": "Gemini 3.1 Pro",
-      "efforts": [
-        "low",
-        "high"
-      ],
-      "variants": {
-        "high": "gemini-3.1-pro-high",
-        "low": "gemini-3.1-pro-low"
       }
     },
     {
@@ -743,6 +705,40 @@
         "high": "claude-opus-4-8-thinking-high-fast",
         "xhigh": "claude-opus-4-8-thinking-xhigh-fast",
         "max": "claude-opus-4-8-thinking-max-fast"
+      }
+    },
+    {
+      "id": "gemini-4-argon",
+      "name": "Gemini 4 Argon",
+      "efforts": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "variants": {
+        "low": "gemini-4-argon-low",
+        "medium": "gemini-4-argon-medium",
+        "high": "gemini-4-argon-high"
+      }
+    },
+    {
+      "id": "muse-wonder-1.0",
+      "name": "Muse Wonder",
+      "efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "variants": {
+        "minimal": "muse-wonder-1.0-minimal",
+        "low": "muse-wonder-1.0-low",
+        "medium": "muse-wonder-1.0-medium",
+        "high": "muse-wonder-1.0-high",
+        "xhigh": "muse-wonder-1.0-xhigh",
+        "max": "muse-wonder-1.0-max"
       }
     },
     {
@@ -1223,6 +1219,42 @@
       }
     },
     {
+      "id": "claude-haiku-5-5",
+      "name": "Claude Haiku 5.5 No Thinking",
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "variants": {
+        "low": "claude-haiku-5-5-low",
+        "medium": "claude-haiku-5-5-medium",
+        "high": "claude-haiku-5-5-high",
+        "xhigh": "claude-haiku-5-5-xhigh",
+        "max": "claude-haiku-5-5-max"
+      }
+    },
+    {
+      "id": "claude-haiku-5-5-thinking",
+      "name": "Claude Haiku 5.5",
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "variants": {
+        "low": "claude-haiku-5-5-thinking-low",
+        "medium": "claude-haiku-5-5-thinking-medium",
+        "high": "claude-haiku-5-5-thinking-high",
+        "xhigh": "claude-haiku-5-5-thinking-xhigh",
+        "max": "claude-haiku-5-5-thinking-max"
+      }
+    },
+    {
       "id": "claude-4.5-sonnet",
       "name": "Claude Sonnet 4.5",
       "efforts": [],
@@ -1324,6 +1356,24 @@
         "high": "glm-5.2-high",
         "max": "glm-5.2-max"
       }
+    },
+    {
+      "id": "deepseek-v41-flash-1017",
+      "name": "DeepSeek V4.1 Flash 1017",
+      "efforts": [
+        "none",
+        "low",
+        "medium",
+        "high",
+        "max"
+      ],
+      "variants": {
+        "none": "deepseek-v41-flash-1017-none",
+        "low": "deepseek-v41-flash-1017-low",
+        "medium": "deepseek-v41-flash-1017-medium",
+        "high": "deepseek-v41-flash-1017-high",
+        "max": "deepseek-v41-flash-1017-max"
+      }
     }
   ],
   "Kiro": [
@@ -1355,30 +1405,8 @@
       ]
     },
     {
-      "id": "claude-opus-5",
-      "name": "claude-opus-5",
-      "efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ]
-    },
-    {
-      "id": "claude-sonnet-5",
-      "name": "claude-sonnet-5",
-      "efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ]
-    },
-    {
-      "id": "claude-opus-4.8",
-      "name": "claude-opus-4.8",
+      "id": "claude-haiku-5.5",
+      "name": "claude-haiku-5.5",
       "efforts": [
         "low",
         "medium",
@@ -1412,6 +1440,50 @@
     {
       "id": "gpt-5.6-luna",
       "name": "gpt-5.6-luna",
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "id": "kimi-k3",
+      "name": "kimi-k3",
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "id": "claude-opus-5",
+      "name": "claude-opus-5",
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "id": "claude-sonnet-5",
+      "name": "claude-sonnet-5",
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "id": "claude-opus-4.8",
+      "name": "claude-opus-4.8",
       "efforts": [
         "low",
         "medium",
@@ -1467,17 +1539,6 @@
     {
       "id": "claude-sonnet-4.5",
       "name": "claude-sonnet-4.5",
-      "efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ]
-    },
-    {
-      "id": "claude-sonnet-4",
-      "name": "claude-sonnet-4",
       "efforts": [
         "low",
         "medium",

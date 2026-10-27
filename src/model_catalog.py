@@ -171,6 +171,17 @@ def options(agent, current):
     return rows
 
 
+CATALOGS = ("Claude", "Codex", "Cursor", "Kiro", "Antigravity")   # the providers fetch() can list
+
+
+def request_all(agents):
+    """Refresh every listable provider's catalog in the background, so each models
+    screen (the picker's and herdr-ai's) already offers newly released models."""
+    for agent in agents:
+        if agent.get("name") in CATALOGS:
+            request(agent)
+
+
 def request(agent):
     """Refresh off the UI thread, keeping startup and arrow input responsive."""
     if os.environ.get("AGENT_PICKER_NO_MODEL_REFRESH") == "1":
