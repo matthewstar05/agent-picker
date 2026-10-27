@@ -240,7 +240,8 @@ class SelectionTest(unittest.TestCase):
         editor.text, editor.pos, editor.anchor = "hello world", 11, 6
         editor.wrap(2, 80)
         painted = editor.paint(0, "hello world")
-        self.assertIn(editor.bg("select", editor.fg("pick", "world")), painted)
+        self.assertIn(editor.bg("selection", editor.fg("pick", "world")), painted)
+        self.assertNotEqual(ui.COLORS["selection"], ui.COLORS["select"])   # visible on the box's background
         editor.anchor = None
         self.assertEqual(editor.paint(0, "hello world"), editor.fg("text", "hello world"))
 

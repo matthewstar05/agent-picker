@@ -14,7 +14,8 @@ GRAY = "\x1b[38;2;45;44;46m"
 BACKGROUND = "\x1b[48;2;45;44;46m"
 COLORS = {"text": (225, 225, 230), "mark": (185, 185, 195), "ghost": (125, 125, 135),
           "label": (200, 200, 210), "note": (135, 135, 145), "mode": (225, 165, 190),
-          "select": (45, 44, 46), "pick": (245, 245, 250)}
+          "select": (45, 44, 46), "pick": (245, 245, 250),
+          "selection": (70, 95, 155)}   # selected prompt text; "select" matches the box, so it can't show
 
 
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"

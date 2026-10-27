@@ -182,7 +182,8 @@ class Editor:
         a, b = (max(0, span[0] - start), min(len(piece), span[1] - start)) if span else (0, 0)
         if a >= b:
             return self.fg("text", piece) if self.c else piece
-        return (self.fg("text", piece[:a]) + self.bg("select", self.fg("pick", piece[a:b]))
+        mark = "selection" if "selection" in self.c else "select"
+        return (self.fg("text", piece[:a]) + self.bg(mark, self.fg("pick", piece[a:b]))
                 + self.fg("text", piece[b:]))
 
     # ---- suggestions
