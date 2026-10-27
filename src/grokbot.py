@@ -44,6 +44,69 @@ def marker(nonce):
 APP = Path("/Applications/Grok Bot.app")
 
 
+# Cursor's per-million-token rates (input, output, cache read, cache write) in USD, fitted
+# exactly from its own usage records for calls that name their model (October 2026).
+# Grok Bot's router reports only its own label (grok-bot-default), so a call's billed
+# rate is the one way to tell which model family served it. Efforts share a rate.
+RATES = {"grok-4.7": (2, 6, 0.5, 2), "grok-4.7-fast": (4, 12, 1, 4), "claude-opus-5-5": (4, 20, 0.2, 5)}
+TOKEN_FIELDS = ("inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens")
+
+
+def billed_as(tokens):
+    """The model family whose rates reproduce this call's charge exactly, or None."""
+    counts = [int(tokens.get(field) or 0) for field in TOKEN_FIELDS]
+    cents = float(tokens.get("totalCents") or 0)
+    if not cents:
+        return None
+    hits = [name for name, rates in RATES.items()
+            if abs(sum(n * rate for n, rate in zip(counts, rates)) / 1e4 - cents) <= max(0.0005, cents * 0.005)]
+    return hits[0] if len(hits) == 1 else None
+
+
+def routing(rows):
+    """Summarize one turn's usage records: which models served it, and how much."""
+    if not rows:
+        return None
+    models, served, usage, cents = {}, {}, {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}, 0.0
+    for row in rows:
+        models[row["model"]] = models.get(row["model"], 0) + 1
+        tokens = row.get("tokenUsage") or {}
+        family = row["model"] if row["model"] in RATES else billed_as(tokens)
+        if family:
+            served[family] = served.get(family, 0) + 1
+        for key, field in (("input", "inputTokens"), ("output", "outputTokens"),
+                           ("cache_read", "cacheReadTokens"), ("cache_write", "cacheWriteTokens")):
+            usage[key] += int(tokens.get(field) or 0)
+        cents += float(tokens.get("totalCents") or 0)
+    return {"model": max(models, key=models.get), "models": models, "served": served, "calls": len(rows),
+            "usage": usage, "cents": round(cents, 4)}
+
+
+def tokens(count):
+    return f"{count / 1000:.1f}k" if count >= 1000 else str(count)
+
+
+def route_line(route, color=True):
+    """The starcli-style line under a reply: the model(s) that served it, calls, tokens, and cost."""
+    def paint(text, rgb):
+        return f"\x1b[38;2;{';'.join(map(str, rgb))}m{text}\x1b[0m" if color else text
+    def listing(counts):
+        return " · ".join(name + (f" ×{n}" if n > 1 and len(counts) > 1 else "") for name, n in counts.items())
+    served = route.get("served") or {}
+    models = listing(served) if served else listing(route["models"])
+    usage = route["usage"]
+    detail = [f"{route['calls']} call" + ("s" if route["calls"] != 1 else "")]
+    if served and set(served) != set(route["models"]):
+        # Named from the billed rate; the router itself reports only its label.
+        detail.insert(0, "by rate via " + listing(route["models"]))
+    if usage["input"] or usage["output"]:
+        detail.append(f"{tokens(usage['input'] + usage['cache_read'] + usage['cache_write'])} in · {tokens(usage['output'])} out")
+    if route["cents"]:
+        detail.append(f"{route['cents']:.2f}¢")
+    return (f"  {paint('◆', (240, 130, 175))} {paint('Grok Bot', (255, 190, 215))} {paint(models, (196, 230, 255))}   "
+            + paint(" · ".join(detail), (135, 135, 145)))
+
+
 def this_mac(machine):
     names = {socket.gethostname().lower(), socket.getfqdn().lower()}
     names |= {n.rsplit(".local", 1)[0] for n in names}
@@ -94,6 +157,7 @@ class Output:
         self.answer = ""
         self.started = time.monotonic()
         self.sink = None        # grokbot_ui.Working.emit while an interactive turn runs on its thread
+        self.route = None       # the last turn's models and usage (routing())
 
     def show(self, text, err=False):
         if self.sink:
@@ -115,6 +179,9 @@ class Output:
                 self.show("  ⎿ " + clean(event["label"])[:180], err=not self.interactive)
             elif event["type"] == "notice":
                 self.show(("  " if self.interactive else "") + clean(event["text"]), err=True)
+            elif event["type"] == "system" and event.get("subtype") == "model":
+                # stdout keeps only the answer in -p text mode, so the route line goes to stderr there.
+                self.show(route_line(event, color=sys.stderr.isatty() or self.interactive), err=not self.interactive)
 
     def text(self, text, final=True):
         self.answer += ("\n\n" if self.answer else "") + text
@@ -129,6 +196,9 @@ class Output:
         event = {"type": "result", "subtype": status, "is_error": status != "success",
                  "duration_ms": int((time.monotonic() - self.started) * 1000), "num_turns": 1,
                  "session_id": session["id"], "result": self.answer}
+        if self.route:
+            event.update({"model": self.route["model"], "models": self.route["models"],
+                          "served": self.route.get("served") or {}, "usage": self.route["usage"]})
         if self.kind == "json":
             print(json.dumps(event, ensure_ascii=False), flush=True)
         elif self.kind == "stream-json":
@@ -332,7 +402,9 @@ class Conversation:
             idle = remote.get("isRunningTurn") is False and not remote.get("isRunning") and not remote.get("isComposingMessage")
             settled = settled + 1 if done and idle else 0
             if settled >= 2:
-                self.session["messages"].append({"user": pending["text"], "assistant": final_text, "at": time.time()})
+                route = self.routed(pending)
+                self.session["messages"].append({"user": pending["text"], "assistant": final_text, "at": time.time(),
+                                                 **({"route": route} if route else {})})
                 self.session["messages"] = self.session["messages"][-100:]
                 self.session["pending"] = None
                 store.save(self.session)
@@ -342,6 +414,29 @@ class Conversation:
                 return
             self.wait(self.poll)
         raise GrokError("Still waiting for a correlated final reply. The request is saved; use grokbot --continue to keep watching.")
+
+    def routed(self, pending):
+        """Show which model(s) Grok Bot's router used for this turn, from Cursor's usage records.
+
+        The records arrive as each inference call finishes, so one short retry covers
+        a late last call. Usage lookups never fail a turn.
+        """
+        since = int(float(pending.get("started") or time.time()) * 1000) - 2000
+        rows = []
+        for attempt in range(2):
+            try:
+                rows = self.gateway.usage_events(self.session["id"], since)
+            except Exception:   # an older gateway, a signed-out dashboard, or the network
+                return None
+            if rows:
+                break
+            if attempt == 0:
+                self.wait(self.poll)
+        route = routing(rows)
+        self.output.route = route
+        if route:
+            self.output.event({"type": "system", "subtype": "model", "session_id": self.session["id"], **route})
+        return route
 
     def approve(self, entry, card):
         details = {key: card[key] for key in ("command", "action", "reason", "workingDirectory", "machineId") if key in card}
@@ -695,7 +790,10 @@ def main(argv=None):
                     else:
                         print("No goal. Start one with /goal <objective>.")
                 elif verb == "model":
-                    print("Grok Bot · Auto. Grok Bot chooses the model for each turn.")
+                    last = next((m.get("route") for m in reversed((conversation.session or {}).get("messages", []))
+                                 if m.get("route")), None)
+                    print("Grok Bot · Auto. Grok Bot chooses the model for each turn."
+                          + ("\nLast turn:\n" + route_line(last) if last else ""))
                 else:
                     print("Unknown command. Use /help.")
             elif prompt:

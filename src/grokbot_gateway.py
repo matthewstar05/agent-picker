@@ -199,6 +199,23 @@ class Gateway:
             raise GrokError("Invalid Grok Bot machine roster.")
         return rows
 
+    def usage_events(self, conversation, since_ms, pages=5):
+        """Cursor's usage records for one conversation since ``since_ms``, oldest first.
+
+        Each record names the model that served one inference call (Grok Bot's
+        router reports its own label, such as grok-bot-default) with its tokens.
+        """
+        rows, end = [], int(time.time() * 1000) + 60_000
+        for page in range(1, pages + 1):
+            data = self.account("GetFilteredUsageEvents", {"startDate": str(int(since_ms)), "endDate": str(end),
+                                                           "page": page, "pageSize": 100}, service="DashboardService")
+            batch = data.get("usageEventsDisplay", []) if isinstance(data, dict) else []
+            batch = [row for row in batch if isinstance(row, dict)] if isinstance(batch, list) else []
+            rows += [row for row in batch if row.get("conversationId") == conversation and row.get("model")]
+            if len(batch) < 100:
+                break
+        return sorted(rows, key=lambda row: int(row.get("timestamp") or 0))
+
     def interrupt(self, ident):
         return self.call("interruptAgentRun", {"id": ident})
 

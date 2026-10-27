@@ -255,6 +255,44 @@ class GrokBotTests(unittest.TestCase):
         self.assertIsInstance(result["duration_ms"], int)
         self.assertEqual(result["num_turns"], 1)
 
+    def test_each_turn_reports_the_model_that_served_it(self):
+        # Grok Bot's router names only itself; the billed rate identifies the model family.
+        calls = [{"conversationId": BOT, "model": "grok-bot-default", "timestamp": "9",
+                  "tokenUsage": {"inputTokens": 1530, "outputTokens": 119, "cacheReadTokens": 107407,
+                                 "cacheWriteTokens": 955, "totalCents": 5.9338}},
+                 {"conversationId": BOT, "model": "grok-bot-default", "timestamp": "10",
+                  "tokenUsage": {"inputTokens": 1000, "outputTokens": 1000, "totalCents": 0.8}}]
+        self.gateway.usage_events = lambda conversation, since: [r for r in calls if r["conversationId"] == conversation]
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            self.conversation().turn("Fix the tests")
+        result = json.loads(output.getvalue())
+        self.assertEqual(result["model"], "grok-bot-default")
+        self.assertEqual(result["served"], {"grok-4.7": 2})
+        self.assertEqual(result["usage"]["output"], 1119)
+        self.assertEqual(sessions.load(BOT)["messages"][-1]["route"]["served"], {"grok-4.7": 2})
+        line = cli.route_line(cli.routing(calls), color=False)
+        self.assertEqual(line, "  ◆ Grok Bot grok-4.7   by rate via grok-bot-default · 2 calls · 110.9k in · 1.1k out · 6.73¢")
+
+    def test_route_names_models_by_their_own_rates_and_never_guesses(self):
+        self.assertEqual(cli.billed_as({"inputTokens": 31360, "outputTokens": 4130, "cacheReadTokens": 287104,
+                                        "totalCents": 46.2104}), "grok-4.7-fast")
+        self.assertEqual(cli.billed_as({"inputTokens": 8, "outputTokens": 817, "cacheWriteTokens": 2672,
+                                        "cacheReadTokens": 507409, "totalCents": 13.12138}), "claude-opus-5-5")
+        self.assertIsNone(cli.billed_as({"inputTokens": 1000, "outputTokens": 1000, "totalCents": 3.3}))
+        unknown = cli.routing([{"model": "grok-bot-default", "tokenUsage": {"inputTokens": 1000, "totalCents": 0.33}}])
+        self.assertEqual(unknown["served"], {})
+        self.assertIn("grok-bot-default   1 call", cli.route_line(unknown, color=False))
+
+    def test_a_failed_usage_lookup_never_fails_the_turn(self):
+        def broken(conversation, since):
+            raise gateway.GrokError("Sign in to Cursor again (HTTP 401).")
+        self.gateway.usage_events = broken
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            self.conversation().turn("Fix the tests")
+        result = json.loads(output.getvalue())
+        self.assertEqual(result["subtype"], "success")
+        self.assertNotIn("model", result)
+
     def test_appended_system_prompt_is_saved_and_sent_every_turn(self):
         c = self.conversation()
         c.system = "Answer in one line."
