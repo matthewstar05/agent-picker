@@ -183,7 +183,8 @@ class Editor:
         if a >= b:
             return self.fg("text", piece) if self.c else piece
         mark = "selection" if "selection" in self.c else "select"
-        return (self.fg("text", piece[:a]) + self.bg(mark, self.fg("pick", piece[a:b]))
+        ink = "selection_text" if "selection_text" in self.c else "pick"
+        return (self.fg("text", piece[:a]) + self.bg(mark, self.fg(ink, piece[a:b]))
                 + self.fg("text", piece[b:]))
 
     # ---- suggestions
