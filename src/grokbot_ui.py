@@ -141,7 +141,7 @@ class Working:
 
 class CursorInput(Editor):
     def __init__(self, commands, **kwargs):
-        super().__init__(commands, colors=COLORS, **kwargs)
+        super().__init__(commands, colors=COLORS, mouse=True, **kwargs)
         self.working = None     # when the running turn started; None between turns
         self.queued = []        # messages to send after it, in order
 
@@ -161,6 +161,7 @@ class CursorInput(Editor):
         self.text, self.pos = "", 0
 
     def draw(self, final=False):
+        self.track_mouse(final)
         width = max(20, shutil.get_terminal_size((100, 30)).columns)
         out = []
         if self.drawn_rows:
@@ -195,6 +196,7 @@ class CursorInput(Editor):
                 head.append(self.fg("ghost", f"    and {len(self.queued) - 4} more queued"))
             head.append("")
         lines = head + [GRAY + "▄" * (width - 1) + RESET]
+        self.text_line = len(head) + 1
         for index, (kind, piece) in enumerate(rows):
             body = ("→ " if kind == "first" else "  ") + piece
             occupied = sum(cell_width(ch) for ch in body)

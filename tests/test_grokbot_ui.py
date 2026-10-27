@@ -187,6 +187,54 @@ class SelectionTest(unittest.TestCase):
     def test_a_selection_touching_an_image_removes_it_whole(self):
         self.assertEqual(self.type("a [Image #1] b", ["shift-left", "shift-left", "shift-left", "backspace"]), ("a ", 2))
 
+    # The box's text row sits on screen row 10: the terminal answers the cursor query
+    # with row 10, and the cursor is on the box's first text line.
+    def press(self, col, row=10):
+        return ("mouse", (0, 3 + col, row, True))
+
+    def test_dragging_with_the_mouse_selects_and_backspace_deletes_it(self):
+        script = [self.press(0), ("report", (10, 14)), ("mouse", (32, 3 + 4, 10, True)),
+                  ("mouse", (0, 3 + 4, 10, False)), "backspace"]
+        self.assertEqual(self.type("hello world", script), (" world", 0))
+
+    def test_dragging_backward_and_typing_replaces(self):
+        script = [self.press(10), ("report", (10, 14)), ("mouse", (32, 3 + 6, 10, True)),
+                  ("mouse", (0, 3 + 6, 10, False)), ("text", "W")]
+        self.assertEqual(self.type("hello world", script), ("hello Wd", 7))
+
+    def test_a_click_moves_the_cursor_and_a_double_click_picks_the_word(self):
+        self.assertEqual(self.type("hello world", [self.press(2), ("report", (10, 14)), ("text", "X")]),
+                         ("heXllo world", 3))
+        double = [self.press(7), ("report", (10, 14)), ("mouse", (0, 10, 10, False)), self.press(7),
+                  ("report", (10, 14)), ("mouse", (0, 10, 10, False)), "backspace"]
+        self.assertEqual(self.type("hello world", double), ("hello ", 6))
+
+    def test_mouse_reports_are_parsed_and_wheel_is_ignored(self):
+        read, write = os.pipe()
+        os.write(write, b"\x1b[<0;5;7M\x1b[<32;6;7M\x1b[<0;6;7m\x1b[<64;5;7M")
+        os.close(write)
+        with patch("star_input.select.select", lambda r, w, x, t=None: (r, [], [])):
+            keys = list(Editor([]).keys(read, None))
+        os.close(read)
+        self.assertEqual(keys, [("mouse", (0, 5, 7, True)), ("mouse", (32, 6, 7, True)),
+                                ("mouse", (0, 6, 7, False)), ("mouse", (64, 5, 7, True)), "eof"])
+
+    def test_the_mouse_is_captured_only_while_there_is_text(self):
+        editor = ui.CursorInput([])
+        out = io.StringIO()
+        with patch("sys.stdout", out):
+            editor.reading, editor.drawn_rows, editor.cursor_row = True, 0, 0
+            editor.hint, editor.notice = (lambda: ("", "")), None
+            editor.text, editor.pos = "", 0
+            editor.draw()
+            self.assertNotIn("\x1b[?1002h", out.getvalue())
+            editor.text, editor.pos = "hi", 2
+            editor.draw()
+            self.assertIn("\x1b[?1002h", out.getvalue())
+            editor.text, editor.pos = "", 0
+            editor.draw()
+            self.assertIn("\x1b[?1002l", out.getvalue())
+
     def test_selected_text_is_highlighted(self):
         editor = ui.CursorInput([])
         editor.text, editor.pos, editor.anchor = "hello world", 11, 6

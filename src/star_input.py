@@ -12,7 +12,8 @@ typing it suggests as it goes:
 - anything else is completed from history, fish style.
 
 Keys: ←→ ⌥←→ home end, ctrl-a/e/b/f/w/u/k, ↑↓ history, shift with any of those
-moves selects (backspace or delete removes the selection, typing replaces it), \\ or ⌥ before Enter for
+moves selects (backspace or delete removes the selection, typing replaces it), and with mouse=True a
+drag selects too (click places the cursor, double-click picks a word), \\ or ⌥ before Enter for
 a new line, pasted text keeps its line breaks, shift-tab calls on_mode,
 ctrl-l clears the screen, ctrl-c clears the input (twice on an empty box quits),
 ctrl-d on an empty box quits, esc closes the menu (twice clears the input).
@@ -143,7 +144,7 @@ class Editor:
     """commands: [(name, args hint, description)]. values(command) -> [(value, note)]
     for a command's argument. usage: {command: times used}, to rank the menu."""
 
-    def __init__(self, commands, values=None, history=None, usage=None, colors=None, image_dir=None):
+    def __init__(self, commands, values=None, history=None, usage=None, colors=None, image_dir=None, mouse=False):
         self.commands = commands
         self.images = {}          # [Image #n] -> its file, for the whole session
         self.image_dir = image_dir
@@ -155,6 +156,13 @@ class Editor:
         self.cwd = os.getcwd()
         self.anchor = None        # the other end of a shift-selection, or None
         self.row_starts = []      # text index where each wrapped row begins
+        self.row_lens = []
+        self.mouse = mouse        # read clicks and drags while the box has text
+        self.reading = self.tracking = self.dragging = self.awaiting = False
+        self.origin = None        # screen row of the box's first line, from a cursor report
+        self.text_line = 1        # the box line holding the first text row
+        self.pending = []         # mouse events waiting for that report
+        self.last_click = (0.0, -1)
 
     # ---- painting helpers
     def fg(self, key, text, bold=False):
@@ -236,7 +244,7 @@ class Editor:
     def wrap(self, prompt_w, w):
         """Visual rows [(prefix kind, text)] and the cursor's (row, col)."""
         rows, cur = [], (0, prompt_w)
-        self.row_starts = []
+        self.row_starts, self.row_lens = [], []
         index = 0
         for n, line in enumerate(self.text.split("\n")):
             room = max(10, w - prompt_w - 1)
@@ -260,10 +268,12 @@ class Editor:
                     cur = (len(rows), col)
                 rows.append((kind, piece))
                 self.row_starts.append(row_start)
+                self.row_lens.append(len(piece))
             index += 1   # the newline
         return rows, cur
 
     def draw(self, final=False):
+        self.track_mouse(final)
         w = max(20, shutil.get_terminal_size((100, 30)).columns)
         out = []
         if self.drawn_rows:
@@ -291,6 +301,7 @@ class Editor:
             self.drawn_rows = self.cursor_row = 0
             return
         lines.append(rule)
+        self.text_line = 1
         if items:
             top = max(0, min(self.sel - MENU_ROWS // 2, len(items) - MENU_ROWS))
             shown = items[top:top + MENU_ROWS]
@@ -427,6 +438,74 @@ class Editor:
         end = text.find("\n", nxt + 1)
         return min(len(text) if end < 0 else end, nxt + 1 + pos - line_start)
 
+    # ---- mouse
+    def track_mouse(self, final=False):
+        """Ask for mouse reports only while there is text to select, so an empty box
+        leaves the wheel and the terminal's own selection alone."""
+        want = self.mouse and self.reading and not final and bool(self.text)
+        if want != self.tracking:
+            sys.stdout.write("\x1b[?1002h\x1b[?1006h" if want else "\x1b[?1002l\x1b[?1006l")
+            self.tracking, self.dragging = want, False
+
+    def index_at(self, x, y, clamp=False):
+        """The text index under screen cell (x, y), 1-based; None off the text unless clamp."""
+        if self.origin is None or not self.row_starts:
+            return None
+        row = y - self.origin - self.text_line
+        if not 0 <= row < len(self.row_starts):
+            return None if not clamp else 0 if row < 0 else len(self.text)
+        start, n, col = self.row_starts[row], self.row_lens[row], x - 3   # after the 2-cell prompt mark
+        i = width = 0
+        while i < n and width + cell_width(self.text[start + i]) <= col:
+            width += cell_width(self.text[start + i])
+            i += 1
+        return start + i
+
+    def on_mouse(self, kind, value):
+        if kind == "report":            # where the cursor is on screen, so where the box is
+            self.origin = value[0] - self.cursor_row
+            pending, self.pending = self.pending, []
+            for event in pending:
+                self.on_mouse("mouse", event)
+            return
+        button, x, y, pressed = value
+        if button & 64:
+            return                       # the wheel
+        if pressed and not button & 32 and self.origin is None or self.pending:
+            self.pending.append(value)
+            if not self.awaiting:
+                self.awaiting = True
+                sys.stdout.write("\x1b[6n")
+                sys.stdout.flush()
+            return
+        if pressed and not button & 32:                     # a press
+            at = self.index_at(x, y)
+            self.dragging = at is not None
+            if at is None:
+                return
+            now = time.time()
+            if now - self.last_click[0] < 0.4 and self.last_click[1] == at:
+                start = end = at                            # double-click: the word
+                while start > 0 and self.text[start - 1].isalnum():
+                    start -= 1
+                while end < len(self.text) and self.text[end].isalnum():
+                    end += 1
+                self.anchor, self.pos = start, end
+            elif button & 4:                                # shift-click extends
+                self.anchor = self.pos if self.anchor is None else self.anchor
+                self.pos = at
+            else:
+                self.anchor = self.pos = at
+            self.last_click = (now, at)
+        elif pressed and self.dragging:                     # a drag
+            at = self.index_at(x, y, clamp=True)
+            if at >= self.anchor and at < len(self.text) and self.text[at] != "\n":
+                at += 1                                     # take the character under the pointer
+            self.pos = at
+        elif not pressed:
+            self.dragging = False
+            self.origin = None                              # find the box again on the next press
+
     def takes_args(self, name):
         return any(n == name and args for n, args, _ in self.commands)
 
@@ -475,6 +554,18 @@ class Editor:
                     ready, _, _ = select.select([fd], [], [], 0.03)
                     if ready:
                         buf += os.read(fd, 64)
+                match = re.match(rb"\x1b\[<(\d+);(\d+);(\d+)([Mm])", buf)
+                if match:                                   # an SGR mouse report
+                    buf = buf[match.end():]
+                    yield ("mouse", (int(match.group(1)), int(match.group(2)), int(match.group(3)),
+                                     match.group(4) == b"M"))
+                    continue
+                match = re.match(rb"\x1b\[(\d+);(\d+)R", buf) if self.awaiting else None
+                if match:                                   # the answer to our cursor-position query
+                    buf = buf[match.end():]
+                    self.awaiting = False
+                    yield ("report", (int(match.group(1)), int(match.group(2))))
+                    continue
                 seqs = {b"\x1b[A": "up", b"\x1b[B": "down", b"\x1b[C": "right", b"\x1b[D": "left",
                         b"\x1bOA": "up", b"\x1bOB": "down", b"\x1bOC": "right", b"\x1bOD": "left",
                         b"\x1b[H": "home", b"\x1b[F": "end", b"\x1bOH": "home", b"\x1bOF": "end",
@@ -520,7 +611,8 @@ class Editor:
         """The next message. Raises EOFError on ctrl-d (or a second ctrl-c) in an empty box,
         and Wake when idle() returns something. initial: text already typed."""
         self.text, self.pos, self.sel = initial or "", len(initial or ""), 0
-        self.anchor = None
+        self.anchor, self.origin, self.pending, self.awaiting = None, None, [], False
+        self.reading = True
         self.hint, self.notice, self.cwd = hint, None, cwd or os.getcwd()
         self.drawn_rows = self.cursor_row = 0
         browse, draft = len(self.history), ""
@@ -537,6 +629,10 @@ class Editor:
                 items = self.menu_items()
                 if isinstance(key, tuple) and key[0] == "wake":
                     raise Wake(key[1], self.text)
+                if isinstance(key, tuple) and key[0] in ("mouse", "report"):
+                    self.on_mouse(*key)
+                    self.draw()
+                    continue
                 if key in SELECT:
                     if self.anchor is None:
                         self.anchor = self.pos
@@ -665,7 +761,8 @@ class Editor:
             self.text = ""
             raise
         finally:
-            self.anchor = None
+            self.anchor, self.reading = None, False
+            self.track_mouse()
             sys.stdout.write("\x1b[?2004l")
             termios.tcsetattr(fd, termios.TCSADRAIN, saved)
             if self.drawn_rows:
