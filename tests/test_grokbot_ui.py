@@ -1,4 +1,5 @@
 import io
+import os
 from pathlib import Path
 import sys
 import threading
@@ -151,6 +152,49 @@ class ImageTokenTest(unittest.TestCase):
     def test_ordinary_text_still_deletes_one_character(self):
         self.assertEqual(self.type("[Image] #1]", ["backspace"])[0], "[Image] #1")
         self.assertEqual(self.type("abc", ["backspace"])[0], "ab")
+
+
+class SelectionTest(unittest.TestCase):
+    """Shift+moves select text, as in Claude Code; one backspace removes all of it."""
+
+    type = ImageTokenTest.type
+
+    def test_shift_sequences_from_the_terminal(self):
+        read, write = os.pipe()
+        os.write(write, b"\x1b[1;2Da\x1b[1;2H\x1b[1;4C\x1b[1;2A\x1b[D")
+        os.close(write)
+        with patch("star_input.select.select", lambda r, w, x, t=None: (r, [], [])):
+            keys = list(Editor([]).keys(read, None))
+        os.close(read)
+        self.assertEqual(keys, ["shift-left", ("text", "a"), "shift-home", "shift-word-right", "shift-up", "left", "eof"])
+
+    def test_one_backspace_deletes_a_shift_selection(self):
+        self.assertEqual(self.type("hello world", ["shift-word-left", "backspace"]), ("hello ", 6))
+        self.assertEqual(self.type("hello world", ["shift-home", "backspace"]), ("", 0))
+        self.assertEqual(self.type("hello world", [0, "shift-right", "shift-right", "delete"]), ("llo world", 0))
+
+    def test_select_everything_across_lines(self):
+        self.assertEqual(self.type("one\ntwo\nthree", ["shift-up", "shift-up", "shift-home", "backspace"]), ("", 0))
+
+    def test_typing_replaces_the_selection(self):
+        self.assertEqual(self.type("hello world", ["shift-word-left", ("text", "there")]), ("hello there", 11))
+        self.assertEqual(self.type("a b", ["shift-left", ("paste", "x\ny")]), ("a x\ny", 5))
+
+    def test_a_plain_move_collapses_the_selection(self):
+        self.assertEqual(self.type("hello", ["shift-home", "right", "backspace"]), ("hell", 4))
+        self.assertEqual(self.type("hello", ["shift-home", "left", "delete"]), ("ello", 0))
+
+    def test_a_selection_touching_an_image_removes_it_whole(self):
+        self.assertEqual(self.type("a [Image #1] b", ["shift-left", "shift-left", "shift-left", "backspace"]), ("a ", 2))
+
+    def test_selected_text_is_highlighted(self):
+        editor = ui.CursorInput([])
+        editor.text, editor.pos, editor.anchor = "hello world", 11, 6
+        editor.wrap(2, 80)
+        painted = editor.paint(0, "hello world")
+        self.assertIn(editor.bg("select", editor.fg("pick", "world")), painted)
+        editor.anchor = None
+        self.assertEqual(editor.paint(0, "hello world"), editor.fg("text", "hello world"))
 
 
 if __name__ == "__main__":

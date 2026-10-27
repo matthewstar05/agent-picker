@@ -199,7 +199,7 @@ class CursorInput(Editor):
             body = ("→ " if kind == "first" else "  ") + piece
             occupied = sum(cell_width(ch) for ch in body)
             extra = ghost[:max(0, width - 1 - occupied)] if index == len(rows) - 1 else ""
-            text = self.fg("mark", body[:2]) + self.fg("text", piece)
+            text = self.fg("mark", body[:2]) + self.paint(index, piece)
             text += self.fg("ghost", extra)
             text += " " * max(0, width - 1 - occupied - len(extra))
             lines.append(BACKGROUND + text.replace(RESET, RESET + BACKGROUND) + RESET)

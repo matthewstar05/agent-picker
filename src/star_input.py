@@ -11,7 +11,8 @@ typing it suggests as it goes:
 - "@" completes file paths in the working folder.
 - anything else is completed from history, fish style.
 
-Keys: ←→ ⌥←→ home end, ctrl-a/e/b/f/w/u/k, ↑↓ history, \\ or ⌥ before Enter for
+Keys: ←→ ⌥←→ home end, ctrl-a/e/b/f/w/u/k, ↑↓ history, shift with any of those
+moves selects (backspace or delete removes the selection, typing replaces it), \\ or ⌥ before Enter for
 a new line, pasted text keeps its line breaks, shift-tab calls on_mode,
 ctrl-l clears the screen, ctrl-c clears the input (twice on an empty box quits),
 ctrl-d on an empty box quits, esc closes the menu (twice clears the input).
@@ -32,6 +33,9 @@ import tty
 MENU_ROWS = 7
 IMAGE = re.compile(r"\.(png|jpe?g|gif|webp|heic|bmp|tiff?)$", re.I)
 TOKEN = re.compile(r"\[Image #(\d+)\]")
+# shift+move extends a selection by the plain move
+SELECT = {"shift-left": "left", "shift-right": "right", "shift-up": "up", "shift-down": "down",
+          "shift-home": "home", "shift-end": "end", "shift-word-left": "word-left", "shift-word-right": "word-right"}
 
 
 def image_paths(text):
@@ -149,6 +153,8 @@ class Editor:
         self.files = Files()
         self.c = colors or {}
         self.cwd = os.getcwd()
+        self.anchor = None        # the other end of a shift-selection, or None
+        self.row_starts = []      # text index where each wrapped row begins
 
     # ---- painting helpers
     def fg(self, key, text, bold=False):
@@ -160,6 +166,16 @@ class Editor:
     def bg(self, key, text):
         rgb = self.c.get(key)
         return f"\x1b[48;2;{rgb[0]};{rgb[1]};{rgb[2]}m" + text + "\x1b[0m" if rgb else "\x1b[7m" + text + "\x1b[0m"
+
+    def paint(self, row, piece):
+        """A wrapped row's text, with the part inside the selection highlighted."""
+        span = self.selection()
+        start = self.row_starts[row] if row < len(self.row_starts) else 0
+        a, b = (max(0, span[0] - start), min(len(piece), span[1] - start)) if span else (0, 0)
+        if a >= b:
+            return self.fg("text", piece) if self.c else piece
+        return (self.fg("text", piece[:a]) + self.bg("select", self.fg("pick", piece[a:b]))
+                + self.fg("text", piece[b:]))
 
     # ---- suggestions
     def token(self):
@@ -220,6 +236,7 @@ class Editor:
     def wrap(self, prompt_w, w):
         """Visual rows [(prefix kind, text)] and the cursor's (row, col)."""
         rows, cur = [], (0, prompt_w)
+        self.row_starts = []
         index = 0
         for n, line in enumerate(self.text.split("\n")):
             room = max(10, w - prompt_w - 1)
@@ -242,6 +259,7 @@ class Editor:
                     col = prompt_w + sum(cell_width(c) for c in self.text[row_start:self.pos])
                     cur = (len(rows), col)
                 rows.append((kind, piece))
+                self.row_starts.append(row_start)
             index += 1   # the newline
         return rows, cur
 
@@ -261,7 +279,7 @@ class Editor:
         mark = self.fg("mark", "› ", True)
         for k, (kind, piece) in enumerate(rows):
             prefix = mark if kind == "first" else "  "
-            body = self.fg("text", piece) if self.c else piece
+            body = self.paint(k, piece)
             if k == len(rows) - 1 and ghost:
                 room = w - 3 - sum(cell_width(ch) for ch in piece) - 2
                 body += self.fg("ghost", ghost[:max(0, room)])
@@ -375,6 +393,40 @@ class Editor:
             return True
         return False
 
+    def selection(self):
+        """(start, end) of the selected text, or None."""
+        if self.anchor is None or self.anchor == self.pos:
+            return None
+        return min(self.anchor, self.pos), max(self.anchor, self.pos)
+
+    def moved(self, move):
+        """Where a plain cursor move (left, word-left, home, up ...) lands, within the text."""
+        text, pos = self.text, self.pos
+        if move == "left":
+            return max(0, pos - 1)
+        if move == "right":
+            return min(len(text), pos + 1)
+        if move == "word-left":
+            return self.word_left()
+        if move == "word-right":
+            return self.word_right()
+        if move == "home":
+            return text.rfind("\n", 0, pos) + 1
+        if move == "end":
+            nl = text.find("\n", pos)
+            return len(text) if nl < 0 else nl
+        line_start = text.rfind("\n", 0, pos) + 1
+        if move == "up":
+            if line_start == 0:
+                return 0
+            prev = text.rfind("\n", 0, line_start - 1) + 1
+            return min(line_start - 1, prev + pos - line_start)
+        nxt = text.find("\n", pos)
+        if nxt < 0:
+            return len(text)
+        end = text.find("\n", nxt + 1)
+        return min(len(text) if end < 0 else end, nxt + 1 + pos - line_start)
+
     def takes_args(self, name):
         return any(n == name and args for n, args, _ in self.commands)
 
@@ -427,6 +479,11 @@ class Editor:
                         b"\x1bOA": "up", b"\x1bOB": "down", b"\x1bOC": "right", b"\x1bOD": "left",
                         b"\x1b[H": "home", b"\x1b[F": "end", b"\x1bOH": "home", b"\x1bOF": "end",
                         b"\x1b[1~": "home", b"\x1b[4~": "end", b"\x1b[3~": "delete", b"\x1b[Z": "shift-tab",
+                        b"\x1b[1;2D": "shift-left", b"\x1b[1;2C": "shift-right", b"\x1b[1;2A": "shift-up",
+                        b"\x1b[1;2B": "shift-down", b"\x1b[1;2H": "shift-home", b"\x1b[1;2F": "shift-end",
+                        b"\x1b[1;4D": "shift-word-left", b"\x1b[1;4C": "shift-word-right",
+                        b"\x1b[1;6D": "shift-word-left", b"\x1b[1;6C": "shift-word-right",
+                        b"\x1b[1;10D": "shift-word-left", b"\x1b[1;10C": "shift-word-right",
                         b"\x1b[1;3D": "word-left", b"\x1b[1;3C": "word-right", b"\x1bb": "word-left",
                         b"\x1bf": "word-right", b"\x1b[1;5D": "word-left", b"\x1b[1;5C": "word-right",
                         b"\x1b\r": "newline", b"\x1b\x7f": "kill-word"}
@@ -463,6 +520,7 @@ class Editor:
         """The next message. Raises EOFError on ctrl-d (or a second ctrl-c) in an empty box,
         and Wake when idle() returns something. initial: text already typed."""
         self.text, self.pos, self.sel = initial or "", len(initial or ""), 0
+        self.anchor = None
         self.hint, self.notice, self.cwd = hint, None, cwd or os.getcwd()
         self.drawn_rows = self.cursor_row = 0
         browse, draft = len(self.history), ""
@@ -479,6 +537,26 @@ class Editor:
                 items = self.menu_items()
                 if isinstance(key, tuple) and key[0] == "wake":
                     raise Wake(key[1], self.text)
+                if key in SELECT:
+                    if self.anchor is None:
+                        self.anchor = self.pos
+                    self.pos = self.moved(SELECT[key])
+                    self.draw()
+                    continue
+                span, self.anchor = self.selection(), None
+                if span and (isinstance(key, tuple) or key in ("backspace", "delete", "ctrl-d")):
+                    start, end = self.token_span(*span)       # typing or deleting replaces the selection
+                    self.text, self.pos, self.sel = self.text[:start] + self.text[end:], start, 0
+                    items = self.menu_items()
+                    if not isinstance(key, tuple):
+                        if on_change:
+                            on_change(self.text)
+                        self.draw()
+                        continue
+                elif span and key in ("left", "right"):
+                    self.pos = span[0] if key == "left" else span[1]   # collapse to that edge
+                    self.draw()
+                    continue
                 if isinstance(key, tuple):
                     kind, value = key
                     dropped = image_paths(value) if kind == "paste" else []
@@ -587,6 +665,7 @@ class Editor:
             self.text = ""
             raise
         finally:
+            self.anchor = None
             sys.stdout.write("\x1b[?2004l")
             termios.tcsetattr(fd, termios.TCSADRAIN, saved)
             if self.drawn_rows:
