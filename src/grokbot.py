@@ -43,6 +43,11 @@ def marker(nonce):
 
 APP = Path("/Applications/Grok Bot.app")
 
+# Reverse-engineering requests get REA's local CLI; Grok Bot cannot attach a local MCP server.
+REVERSE = re.compile(r"\brevers(?:e|ing)[- ]?engineer|\bdecompil|\bdisassembl|\bREA\b", re.I)
+REA_HINT = ("For this reverse-engineering task, use the REA CLI on that machine (`rea --help`, `rea <command> --json`) "
+            "and follow ~/.agents/skills/reverse-engineer-anything/SKILL.md. ")
+
 
 # Cursor's per-million-token rates (input, output, cache read, cache write) in USD, fitted
 # exactly from its own usage records for calls that name their model (October 2026).
@@ -262,6 +267,8 @@ class Conversation:
                     if machine else "Work on your cloud computer. This session has no local machine access selected. ")
         if machine and self.session.get("where") == where.AUTO:
             location = where.auto_location(machine, self.cwd)
+        if machine and REVERSE.search(text):
+            location += REA_HINT
         system = self.session.get("system")
         standing = ("\n\nStanding instructions for this session (follow them as a system prompt):\n" + system) if system else ""
         return ("You are responding through a terminal coding agent interface. " + location
