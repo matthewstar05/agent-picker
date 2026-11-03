@@ -96,7 +96,10 @@ def fetch(agent):
     argv = resolve_argv(agent)
     if not argv:
         return []
-    commands = {"Cursor": ["--list-models"], "Kiro": ["chat", "--list-models", "--format", "json"], "Antigravity": ["models"]}
+    if name == "Kiro":
+        import kiro_account
+        return kiro_account.models()
+    commands = {"Cursor": ["--list-models"], "Antigravity": ["models"]}
     if name not in commands:
         return []
     result = subprocess.run([argv[0]] + commands[name], capture_output=True, text=True, timeout=12, encoding="utf-8")
@@ -104,10 +107,6 @@ def fetch(agent):
         return []
     if name == "Cursor":
         return cursor_models(result.stdout)
-    if name == "Kiro":
-        return [{"id": m["model_id"], "name": m.get("model_name", m["model_id"]),
-                 "efforts": ["low", "medium", "high", "xhigh", "max"] if m["model_id"] != "auto" else []}
-                for m in json.loads(result.stdout).get("models", []) if m.get("model_id")]
     rows = cursor_models("\n".join(line.replace("\t", " - ", 1) for line in result.stdout.splitlines() if "\t" in line))
     for row in rows:
         if not row["efforts"]:

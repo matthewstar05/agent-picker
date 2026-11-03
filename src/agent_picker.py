@@ -312,10 +312,8 @@ def usage_cursor():
 
 
 def usage_kiro():
-    # /usage starts a full chat client, which can open account or MCP login
-    # pages even with --no-interactive. Keep the existing cache until Kiro
-    # provides a usage-only interface that cannot start browser authentication.
-    return None
+    import kiro_account
+    return kiro_account.usage()
 
 
 def usage_antigravity():
