@@ -55,8 +55,9 @@ class PortableGuardianTests(unittest.TestCase):
                 err_reader.join(timeout=5)
                 self.assertFalse(out_reader.is_alive())
                 self.assertFalse(err_reader.is_alive())
-                self.assertIn(b"provider stdout\n", stdout[0])
-                self.assertIn(b"provider stderr\n", stderr[0])
+                # The fake provider prints in text mode: CRLF on Windows, forwarded unchanged.
+                self.assertIn(b"provider stdout" + os.linesep.encode(), stdout[0])
+                self.assertIn(b"provider stderr" + os.linesep.encode(), stderr[0])
             finally:
                 process.stdin.close()
                 process.stdout.close()

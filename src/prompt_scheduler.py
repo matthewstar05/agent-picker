@@ -390,7 +390,15 @@ def daemon():
                 except Exception as exc:
                     print(f"scheduler: {exc}", file=sys.stderr, flush=True)
                 # No timer requests a system wake. Resume catches overdue jobs.
-                stopped.wait(POLL_SECONDS)
+                if os.name == "nt":
+                    # Windows runs signal handlers only between waits, and a
+                    # thread wait is not interrupted, so Ctrl+Break would sit
+                    # out the whole poll. One-second slices stay negligible.
+                    for _ in range(POLL_SECONDS):
+                        if stopped.wait(1):
+                            break
+                else:
+                    stopped.wait(POLL_SECONDS)
         finally:
             for sig, handler in old.items():
                 signal.signal(sig, handler)
