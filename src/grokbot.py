@@ -350,7 +350,7 @@ class Conversation:
             try:
                 self.observe()
             finally:
-                self.report("idle")
+                self.report("unknown" if self.session.get("pending") else "idle")
 
     def settle(self):
         """Finish an earlier request before sending a new one: watch it if the bot is
@@ -371,13 +371,35 @@ class Conversation:
             store.save(self.session)
         self.output.answer = ""
 
+    def watch_read(self, read, deadline):
+        """Reconnect read-only observation without repeating the pending task."""
+        reconnecting = False
+        while time.monotonic() < deadline:
+            try:
+                result = read(self.session["id"])
+            except GrokError as exc:
+                if not exc.transient:
+                    raise GrokError("Observation paused: " + str(exc)
+                                    + " The task may still be running. Its request is saved; use grokbot --resume "
+                                    + self.session["id"] + " to keep watching.") from None
+                if not reconnecting:
+                    self.output.event({"type": "notice", "text": "Connection interrupted; reconnecting to the existing task without resending it."})
+                    reconnecting = True
+                self.wait(min(5, max(0, deadline - time.monotonic())))
+                continue
+            if reconnecting:
+                self.output.event({"type": "notice", "text": "Reconnected to the existing task."})
+            return result
+        raise GrokError("Observation timed out. The task may still be running. Its request is saved; use grokbot --resume "
+                        + self.session["id"] + " to keep watching.")
+
     def observe(self, report=True):
         pending = self.session["pending"]
         deadline = time.monotonic() + self.timeout
         shown = set(pending.get("shown", []))
         done, final_text, settled = False, "", 0
         while time.monotonic() < deadline:
-            entries = self.gateway.transcript(self.session["id"])
+            entries = self.watch_read(self.gateway.transcript, deadline)
             accepted = next((e for e in entries if e.get("clientNonce") == pending["nonce"]
                              and e.get("role") == "user"), None)
             if accepted:
@@ -426,7 +448,7 @@ class Conversation:
                 shown.add(ident)
             pending["shown"] = list(shown)
             store.save(self.session)
-            remote = self.gateway.agent(self.session["id"])
+            remote = self.watch_read(self.gateway.agent, deadline)
             if remote is None:
                 raise GrokError("The bot disappeared while this request was running.")
             idle = remote.get("isRunningTurn") is False and not remote.get("isRunning") and not remote.get("isComposingMessage")

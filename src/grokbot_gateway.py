@@ -21,11 +21,11 @@ class GrokError(RuntimeError):
     def __init__(self, message, delivery=None, transient=False):
         super().__init__(message)
         self.delivery = delivery
-        self.transient = transient   # a 502/503/504 or lost connection that a read can safely retry
+        self.transient = transient   # a gateway failure that a read can safely retry
 
 
 # Read-only gateway methods: repeating one changes nothing, so a cold or
-# restarting sandbox pod's 502 is retried instead of ending the turn.
+# restarting sandbox pod's 417/502/503/504 is retried instead of ending the turn.
 READS = ("listAgents", "getAgentTranscriptTail", "getAgentThread")
 RETRY_DELAYS = (1, 2, 4)
 
@@ -77,7 +77,7 @@ def post(url, body, headers, timeout=30):
         # Do not echo a URL, token, account export, or upstream response body.
         label = "Sign in to Cursor again" if exc.code in (401, 403) else "Grok Bot request failed"
         raise GrokError(f"{label} (HTTP {exc.code}).", "rejected" if exc.code < 500 else "unknown",
-                        transient=exc.code in (502, 503, 504)) from None
+                        transient=exc.code in (417, 502, 503, 504)) from None
     except (urllib.error.URLError, TimeoutError, OSError):
         raise GrokError("Cannot reach Grok Bot. Check the connection before retrying.", "unknown", transient=True) from None
     except (ValueError, TypeError):
