@@ -5,7 +5,7 @@ import calendar
 from contextlib import contextmanager
 from copy import deepcopy
 from datetime import datetime, timedelta
-import fcntl
+import file_lock as fcntl
 import json
 import os
 from pathlib import Path
@@ -20,7 +20,7 @@ import time
 import uuid
 from zoneinfo import ZoneInfo
 
-from platform_runtime import resolve_argv, state_dir, SEARCH_DIRS
+from platform_runtime import resolve_argv, state_dir, SEARCH_DIRS, stop_process_tree
 from settings import load_agents
 
 PROVIDERS = ("Claude", "Codex", "Gemini")
@@ -42,6 +42,12 @@ def schedule_path():
 
 
 def local_zone():
+    if sys.platform == "win32" and not os.environ.get("TZ"):
+        try:
+            from tzlocal import get_localzone_name
+            return get_localzone_name()
+        except ImportError:
+            pass
     name = os.environ.get("TZ", "").lstrip(":")
     if not name:
         target = str(Path("/etc/localtime").resolve())
@@ -306,17 +312,9 @@ def run_job(job_id):
         old_handlers = {}
         def stop(signum, frame):
             if process is not None:
-                try:
-                    os.killpg(process.pid, signal.SIGTERM)
-                    process.wait(timeout=5)
-                except (ProcessLookupError, subprocess.TimeoutExpired):
-                    try:
-                        os.killpg(process.pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
-                    process.wait()
+                stop_process_tree(process)
             raise KeyboardInterrupt
-        for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        for sig in (getattr(signal, name) for name in ("SIGTERM", "SIGINT", "SIGHUP") if hasattr(signal, name)):
             old_handlers[sig] = signal.signal(sig, stop)
         try:
             log = Path(job["last"]["log"])
@@ -407,12 +405,23 @@ def plist_path():
 
 
 def service_status():
+    if sys.platform == "win32":
+        from platform_runtime import windows_processes
+        script = str(Path(__file__).resolve()).casefold()
+        startup = str(directory() / "startup.pyw").casefold()
+        return any(("--daemon" in argv and any(a.casefold() == script for a in argv)) or
+                   any(a.casefold() == startup for a in argv)
+                   for _, _, argv in windows_processes())
+    if sys.platform != "darwin":
+        return False
     result = subprocess.run(["launchctl", "print", f"gui/{os.getuid()}/{LABEL}"],
                             capture_output=True, text=True)
     return result.returncode == 0
 
 
 def install_service():
+    if sys.platform == "win32":
+        return install_windows_service()
     path = plist_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     base = directory()
@@ -449,11 +458,38 @@ def install_service():
     return path
 
 
+def install_windows_service():
+    """User login startup, with a process lock preventing duplicate dispatchers."""
+    # Save only explicit picker paths. Provider credentials stay in the user's
+    # environment/vault and never enter a startup script.
+    startup = Path(os.environ.get("APPDATA", str(Path.home() / "AppData/Roaming"))) / "Microsoft/Windows/Start Menu/Programs/Startup"
+    startup.mkdir(parents=True, exist_ok=True)
+    python = Path(sys.executable).with_name("pythonw.exe")
+    if not python.is_file():
+        python = Path(sys.executable)
+    script = directory() / "startup.pyw"
+    env = {key: os.environ[key] for key in ("AGENT_PICKER_CONFIG", "AGENT_PICKER_STATE_HOME", "XDG_CONFIG_HOME", "XDG_STATE_HOME") if key in os.environ}
+    script.write_text("import os, runpy, sys\n" + f"os.environ.update({env!r})\n" +
+                      f"sys.path.insert(0, {str(Path(__file__).parent)!r})\n" +
+                      f"sys.argv = [{str(Path(__file__).resolve())!r}, '--daemon']\n" +
+                      f"runpy.run_path({str(Path(__file__).resolve())!r}, run_name='__main__')\n", encoding="utf-8")
+    path = startup / "agent-picker-scheduler.cmd"
+    # Escape batch expansion even for a checkout under a name containing %.
+    command = subprocess.list2cmdline([str(python), str(script)])
+    path.write_text('@echo off\nchcp 65001 >nul\nstart "" ' + command.replace('%', '%%') + '\n', encoding="utf-8")
+    mutate(lambda jobs: None)
+    if not service_status():
+        subprocess.Popen([str(python), str(Path(__file__).resolve()), "--daemon"],
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP)
+    return path
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Local agent prompt scheduler. Open without arguments for the menu.")
     parser.add_argument("--daemon", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--run", help=argparse.SUPPRESS)
-    parser.add_argument("--install-service", action="store_true", help="enable the macOS background dispatcher")
+    parser.add_argument("--install-service", action="store_true", help="enable the background dispatcher at login")
     parser.add_argument("--status", action="store_true", help="show service and private schedule paths")
     args = parser.parse_args(argv)
     if args.daemon:
@@ -482,6 +518,8 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
+    from platform_runtime import configure_stdio
+    configure_stdio()
     try:
         sys.exit(main())
     except (OSError, ValueError, RuntimeError) as exc:

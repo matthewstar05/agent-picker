@@ -1081,4 +1081,6 @@ def reset_main(argv, herdr=None, cwd=None):
 
 
 if __name__ == "__main__":
+    from platform_runtime import configure_stdio
+    configure_stdio()
     sys.exit(main())

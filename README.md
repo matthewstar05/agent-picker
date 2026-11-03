@@ -1,19 +1,27 @@
 # agent-picker
 
-The source for my `agent` command on macOS. Edit, commit, and push, then run `agent --picker-update` to pull the change. Installed launchers run the checkout directly, so copying or reinstalling the application is unnecessary after ordinary code and profile updates.
+The source for the `agent` command on Windows and macOS. Edit, commit, and push, then run `agent --picker-update` to pull the change. Installed launchers run the checkout directly, so copying or reinstalling the application is unnecessary after ordinary code and profile updates.
 
 The picker preserves the original animated gradients, usage meters, remembered selection, adaptive layout, launch animation, arrow keys, j/k navigation, number keys, Enter, and q/Escape. Extra arguments go to the selected CLI.
 
 ## Requirements
 
-- Git and access to this private GitHub repository.
-- Python 3.9 or later. No third-party Python packages are required.
+- Python 3.9 or later. Git is optional when installing from a release ZIP.
+- macOS needs no third-party Python packages. The Windows installer supplies timezone data in its own environment.
 - At least one provider CLI installed and signed in on that computer.
-- macOS and an interactive terminal. Windows is no longer supported.
+- Windows 10/11 or macOS and an interactive terminal. Windows Terminal is recommended on Windows.
 
 The installer installs this picker and its bundled Grok Bot terminal client, without installing vendor CLIs or account credentials. Providers missing from PATH are disabled in the menu. Credentials and usage caches remain local.
 
 ## Setup
+
+For a release ZIP, use the [Windows and macOS install guide](docs/INSTALL.md).
+Windows: double-click **Install agent-picker.cmd** after installing Python.
+Use `agent --picker-connect`, or press **c** in the selector or usage screen,
+for provider installation guides, sign-in and executable checks. Missing
+providers stay disabled until you install them and sign in yourself.
+
+For a macOS Git checkout:
 
 ```sh
 git clone https://github.com/matthewstar05/agent-picker.git ~/Desktop/Projects/agent-picker

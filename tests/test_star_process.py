@@ -23,6 +23,7 @@ class Echo:
         return [{"kind": "text", "data": data}]
 
 
+@unittest.skipIf(os.name == "nt", "provider guardian integration requires POSIX process groups and selectable pipes")
 class ProviderOwnershipTests(unittest.TestCase):
     def until(self, predicate, timeout=8):
         deadline = time.monotonic() + timeout

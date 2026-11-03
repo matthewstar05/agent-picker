@@ -758,11 +758,11 @@ class KeyWatch:
     def __enter__(self):
         if not self.active:
             return self
-        import termios
-        import tty
-        self.fd = sys.stdin.fileno()
-        self.saved = termios.tcgetattr(self.fd)
-        tty.setcbreak(self.fd)   # keys arrive one by one; ctrl-c still interrupts
+        from platform_runtime import Terminal
+        self.terminal = Terminal()
+        self.terminal.__enter__()
+        self.fd = self.terminal.fd
+        # terminal is in cbreak mode   # keys arrive one by one; ctrl-c still interrupts
         self.thread = threading.Thread(target=self._watch, daemon=True)
         self.thread.start()
         return self
@@ -772,16 +772,16 @@ class KeyWatch:
         import select
         decoder = codecs.getincrementaldecoder("utf-8")("replace")
         while not self.stop.is_set():
-            ready, _, _ = select.select([self.fd], [], [], 0.1)
+            ready = self.terminal.wait(0.1)
             if not ready:
                 continue
-            data = os.read(self.fd, 1024)
+            data = self.terminal.read_bytes(1024)
             if data == b"\x1b":
-                more, _, _ = select.select([self.fd], [], [], 0.03)
+                more = self.terminal.wait(0.03)
                 if not more:
                     self._escape()
                     continue
-                data += os.read(self.fd, 64)
+                data += self.terminal.read_bytes(64)
             text = re.sub(r"\x1b\[[0-9;]*[A-Za-z~]|\x1b.", "", decoder.decode(data))
             for ch in text:
                 if self.question and self.question.key(ch):
@@ -802,8 +802,7 @@ class KeyWatch:
         if self.active:
             self.stop.set()
             self.thread.join(0.3)
-            import termios
-            termios.tcsetattr(self.fd, termios.TCSADRAIN, self.saved)
+            self.terminal.__exit__()
         return False
 
 
@@ -2264,6 +2263,8 @@ def cli_main(argv=None, lease=None):
 
 
 if __name__ == "__main__":
+    from platform_runtime import configure_stdio
+    configure_stdio()
     try:
         sys.exit(main())
     except KeyboardInterrupt:

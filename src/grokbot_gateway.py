@@ -7,6 +7,8 @@ stay in memory; only the provider's HTTPS hosts may receive them.
 import json
 import os
 import subprocess
+import sys
+from pathlib import Path
 import time
 import urllib.error
 import urllib.parse
@@ -54,7 +56,21 @@ def allowed_url(url, gateway=False):
 
 def cursor_token():
     token = os.environ.get("CURSOR_ACCESS_TOKEN", "").strip()
-    if not token:
+    if not token and sys.platform == "win32":
+        # Cursor's signed-in desktop profile owns this token. Read the one
+        # existing value without modifying the database or saving another copy.
+        import sqlite3
+        from contextlib import closing
+        database = Path(os.environ.get("APPDATA", str(Path.home() / "AppData/Roaming"))) / "Cursor/User/globalStorage/state.vscdb"
+        if database.is_file():
+            try:
+                with closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True, timeout=2)) as connection:
+                    row = connection.execute("SELECT value FROM ItemTable WHERE key = ?", ("cursorAuth/accessToken",)).fetchone()
+                    if row and isinstance(row[0], str):
+                        token = row[0].strip()
+            except sqlite3.Error:
+                pass
+    if not token and sys.platform != "win32":
         try:
             out = subprocess.run(["/usr/bin/security", "find-generic-password", "-s", "cursor-access-token", "-w"],
                                  capture_output=True, text=True, timeout=5)

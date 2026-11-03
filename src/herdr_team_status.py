@@ -193,7 +193,7 @@ def watcher_lock(socket_path):
     path = state_dir() / ("herdr-ai-status-" + key + ".lock")
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a+b") as handle:
-        import fcntl
+        import file_lock as fcntl
         try:
             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:

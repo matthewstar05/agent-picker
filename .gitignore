@@ -6,3 +6,4 @@ __pycache__/
 .env.*
 config.local.json
 usage.json
+.venv-windows/

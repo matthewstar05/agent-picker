@@ -623,7 +623,8 @@ def banner(cwd, session=None, mode=None):
 def piped(wait=0.2):
     """Whether stdin has input ready, so a prompt plus an idle open pipe never blocks."""
     try:
-        return bool(select.select([sys.stdin], [], [], wait)[0])
+        from platform_runtime import pipe_ready
+        return pipe_ready(sys.stdin.fileno(), wait)
     except (OSError, ValueError, TypeError, io.UnsupportedOperation):
         return True
 
@@ -881,4 +882,6 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
+    from platform_runtime import configure_stdio
+    configure_stdio()
     sys.exit(main())

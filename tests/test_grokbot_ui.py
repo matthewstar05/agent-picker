@@ -1,5 +1,4 @@
 import io
-import os
 from pathlib import Path
 import sys
 import threading
@@ -11,6 +10,35 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 import grokbot_ui as ui
 from star_input import Editor, Wake
+
+
+class ByteTerminal:
+    """A terminal input source backed by bytes, without an OS pipe or TTY."""
+
+    def __init__(self, data=b""):
+        self.data = bytearray(data)
+        self.eof = False
+
+    def wait(self, _seconds):
+        return bool(self.data) or not self.eof
+
+    def read_bytes(self, size):
+        if not self.data:
+            self.eof = True
+            return b""
+        result = bytes(self.data[:size])
+        del self.data[:size]
+        return result
+
+
+class NullTerminal:
+    """Context-only Terminal mock for Editor.read tests with scripted keys."""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        return False
 
 
 class ReplyWrapTest(unittest.TestCase):
@@ -129,7 +157,7 @@ class ImageTokenTest(unittest.TestCase):
                     continue
                 yield key
             yield ("wake", "done")
-        with patch("star_input.termios"), patch("star_input.tty"), patch("sys.stdin"), \
+        with patch("star_input.Terminal", return_value=NullTerminal()), patch("sys.stdin"), \
                 patch("sys.stdout", io.StringIO()), patch.object(editor, "keys", keys):
             with self.assertRaises(Wake) as caught:
                 editor.read(initial=initial)
@@ -160,12 +188,9 @@ class SelectionTest(unittest.TestCase):
     type = ImageTokenTest.type
 
     def test_shift_sequences_from_the_terminal(self):
-        read, write = os.pipe()
-        os.write(write, b"\x1b[1;2Da\x1b[1;2H\x1b[1;4C\x1b[1;2A\x1b[D")
-        os.close(write)
-        with patch("star_input.select.select", lambda r, w, x, t=None: (r, [], [])):
-            keys = list(Editor([]).keys(read, None))
-        os.close(read)
+        editor = Editor([])
+        editor.terminal = ByteTerminal(b"\x1b[1;2Da\x1b[1;2H\x1b[1;4C\x1b[1;2A\x1b[D")
+        keys = list(editor.keys(0, None))
         self.assertEqual(keys, ["shift-left", ("text", "a"), "shift-home", "shift-word-right", "shift-up", "left", "eof"])
 
     def test_one_backspace_deletes_a_shift_selection(self):
@@ -210,12 +235,9 @@ class SelectionTest(unittest.TestCase):
         self.assertEqual(self.type("hello world", double), ("hello ", 6))
 
     def test_mouse_reports_are_parsed_and_wheel_is_ignored(self):
-        read, write = os.pipe()
-        os.write(write, b"\x1b[<0;5;7M\x1b[<32;6;7M\x1b[<0;6;7m\x1b[<64;5;7M")
-        os.close(write)
-        with patch("star_input.select.select", lambda r, w, x, t=None: (r, [], [])):
-            keys = list(Editor([]).keys(read, None))
-        os.close(read)
+        editor = Editor([])
+        editor.terminal = ByteTerminal(b"\x1b[<0;5;7M\x1b[<32;6;7M\x1b[<0;6;7m\x1b[<64;5;7M")
+        keys = list(editor.keys(0, None))
         self.assertEqual(keys, [("mouse", (0, 5, 7, True)), ("mouse", (32, 6, 7, True)),
                                 ("mouse", (0, 6, 7, False)), ("mouse", (64, 5, 7, True)), "eof"])
 

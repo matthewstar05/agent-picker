@@ -3,23 +3,39 @@
 import os
 import shutil
 import sys
+import time
 from pathlib import Path
+
+
+def configure_stdio():
+    """Keep Unicode profiles readable when a Windows pipe uses an ANSI locale."""
+    if sys.platform == "win32":
+        for stream in (sys.stdout, sys.stderr):
+            if hasattr(stream, "reconfigure"):
+                stream.reconfigure(encoding="utf-8", errors="replace")
 
 
 def state_dir():
     if os.environ.get("AGENT_PICKER_STATE_HOME"):
         return Path(os.environ["AGENT_PICKER_STATE_HOME"]).expanduser()
+    if sys.platform == "win32":
+        return Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData/Local"))) / "agent-picker"
     base = os.environ.get("XDG_STATE_HOME") or str(Path.home() / ".local/state")
     return Path(base) / "agent-picker"
 
 
 class Terminal:
+    def __init__(self, raw=False):
+        self.raw = raw
+
     def __enter__(self):
         self.fd = sys.stdin.fileno()
+        if sys.platform == "win32":
+            return self._enter_windows()
         import termios
         import tty
         self.old = termios.tcgetattr(self.fd)
-        tty.setcbreak(self.fd)
+        (tty.setraw if self.raw else tty.setcbreak)(self.fd)
         # Ctrl+\ (SIGQUIT), a closed pane (SIGHUP), or kill (SIGTERM) would
         # otherwise abort Python mid-frame: macOS shows "Python quit
         # unexpectedly" and the terminal is left in cbreak mode. Leave the
@@ -36,6 +52,11 @@ class Terminal:
         return self
 
     def __exit__(self, *exc):
+        if sys.platform == "win32":
+            for handle, mode in self.modes:
+                self.kernel.SetConsoleMode(handle, mode)
+            self.kernel.SetConsoleOutputCP(self.output_cp)
+            return
         import signal
         import termios
         for number, handler in getattr(self, "signals", {}).items():
@@ -45,6 +66,16 @@ class Terminal:
     def wait(self, seconds):
         if getattr(self, "_pending", b""):
             return True
+        if sys.platform == "win32":
+            import msvcrt
+            until = time.monotonic() + max(0, seconds)
+            while True:
+                if msvcrt.kbhit():
+                    return True
+                remaining = until - time.monotonic()
+                if remaining <= 0:
+                    return False
+                time.sleep(min(0.01, remaining))
         import select
         return bool(select.select([self.fd], [], [], max(0, seconds))[0])
 
@@ -60,9 +91,62 @@ class Terminal:
 
     def _byte(self):
         pending = getattr(self, "_pending", b"")
+        if not pending and sys.platform == "win32":
+            pending = self.read_bytes(1)
         ch = pending[:1] if pending else os.read(self.fd, 1)
         self._pending = pending[1:]
         return ch
+
+    def _enter_windows(self):
+        import ctypes
+        from ctypes import wintypes
+        self.kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        self.kernel.GetStdHandle.argtypes = [wintypes.DWORD]
+        self.kernel.GetStdHandle.restype = wintypes.HANDLE
+        self.kernel.GetConsoleMode.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+        self.kernel.SetConsoleMode.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        self.modes = []
+        self.output_cp = self.kernel.GetConsoleOutputCP()
+        try:
+            for number in (-10, -11):
+                handle = self.kernel.GetStdHandle(number)
+                mode = wintypes.DWORD()
+                if not self.kernel.GetConsoleMode(handle, ctypes.byref(mode)):
+                    raise OSError("Use Windows Terminal or a Windows console to open agent-picker.")
+                self.modes.append((handle, mode.value))
+                # VT input preserves escape sequences; turn off line editing,
+                # echo and QuickEdit, which otherwise pause animated screens.
+                new = ((mode.value & ~(0x2 | 0x4 | 0x40)) | 0x80 | 0x200) if number == -10 else mode.value | 0x4
+                if number == -10 and self.raw:
+                    new &= ~0x1
+                if not self.kernel.SetConsoleMode(handle, new):
+                    raise OSError("This console does not support virtual terminal input. Use Windows Terminal.")
+            self.kernel.SetConsoleOutputCP(65001)
+        except BaseException:
+            self.__exit__()
+            raise
+        return self
+
+    def read_bytes(self, size):
+        if sys.platform != "win32":
+            return os.read(self.fd, size)
+        import msvcrt
+        data = self._windows_character()
+        while len(data) < size and msvcrt.kbhit():
+            data += self._windows_character()
+        return data
+
+    def _windows_character(self):
+        import msvcrt
+        text = msvcrt.getwch()
+        if text in ("\x00", "\xe0"):
+            code = msvcrt.getwch()
+            return {"H": b"\x1b[A", "P": b"\x1b[B", "M": b"\x1b[C", "K": b"\x1b[D",
+                    "G": b"\x1b[H", "O": b"\x1b[F", "S": b"\x1b[3~"}.get(code, b"\x1b[0~")
+        if 0xd800 <= ord(text) <= 0xdbff:
+            text += msvcrt.getwch()
+            text = text.encode("utf-16-le", "surrogatepass").decode("utf-16-le", "replace")
+        return text.encode("utf-8", "replace")
 
     def read_key(self):
         """A key name: a character, "up"/"down"/"left"/"right", or "esc". With
@@ -194,7 +278,11 @@ def resolve_argv(agent):
     argv = list(agent["argv"])
     # Never search for generic "agent": that would relaunch this picker.
     candidates = [argv[0]] + agent.get("executables", [])
-    extra = os.pathsep.join(str(Path(d).expanduser()) for d in SEARCH_DIRS)
+    directories = [str(Path(d).expanduser()) for d in SEARCH_DIRS]
+    if sys.platform == "win32":
+        directories += [str(Path(os.environ.get("APPDATA", str(Path.home() / "AppData/Roaming"))) / "npm"),
+                        str(Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData/Local"))) / "Microsoft/WinGet/Links")]
+    extra = os.pathsep.join(directories)
     for path in (None, extra):
         for command in candidates:
             found = shutil.which(command, path=path)
@@ -204,4 +292,118 @@ def resolve_argv(agent):
 
 
 def launch(argv):
+    if sys.platform == "win32":
+        import subprocess
+        return subprocess.call(argv)
     os.execvp(argv[0], argv)
+
+
+def pipe_ready(fd, timeout):
+    """Wait for a pipe, including EOF. Windows select accepts only sockets."""
+    if sys.platform != "win32":
+        import select
+        return bool(select.select([fd], [], [], timeout)[0])
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    peek = kernel.PeekNamedPipe
+    peek.argtypes = [wintypes.HANDLE, wintypes.LPVOID, wintypes.DWORD,
+                     wintypes.LPVOID, ctypes.POINTER(wintypes.DWORD), wintypes.LPVOID]
+    deadline = time.monotonic() + timeout
+    while True:
+        available = wintypes.DWORD()
+        if not peek(msvcrt.get_osfhandle(fd), None, 0, None, ctypes.byref(available), None):
+            if ctypes.get_last_error() in (109, 232, 233):
+                return True
+            raise ctypes.WinError(ctypes.get_last_error())
+        if available.value:
+            return True
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        time.sleep(min(0.01, remaining))
+
+
+def stop_process_tree(process):
+    """Terminate this owned child and its descendants, then reap it."""
+    import signal
+    import subprocess
+    if sys.platform == "win32":
+        if process.poll() is None:
+            subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
+            if process.poll() is None:
+                process.kill()
+        process.wait()
+        return
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+        process.wait(timeout=5)
+    except (ProcessLookupError, subprocess.TimeoutExpired):
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait()
+
+
+def windows_processes():
+    """Read process arguments without requesting elevated access."""
+    import ctypes
+    from ctypes import wintypes
+    import json
+    import subprocess
+    command = "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CommandLine | ConvertTo-Json -Compress"
+    result = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command],
+                            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15,
+                            creationflags=subprocess.CREATE_NO_WINDOW)
+    if result.returncode:
+        return []
+    entries = json.loads(result.stdout or "[]")
+    if isinstance(entries, dict):
+        entries = [entries]
+    shell = ctypes.WinDLL("shell32")
+    shell.CommandLineToArgvW.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(ctypes.c_int)]
+    shell.CommandLineToArgvW.restype = ctypes.POINTER(wintypes.LPWSTR)
+    kernel = ctypes.WinDLL("kernel32")
+    kernel.LocalFree.argtypes = [wintypes.HLOCAL]
+    rows = []
+    for entry in entries:
+        if not entry.get("CommandLine"):
+            continue
+        count = ctypes.c_int()
+        pointer = shell.CommandLineToArgvW(entry["CommandLine"], ctypes.byref(count))
+        if pointer:
+            try:
+                rows.append((entry["ProcessId"], entry["ParentProcessId"], [pointer[i] for i in range(count.value)]))
+            finally:
+                kernel.LocalFree(pointer)
+    return rows
+
+
+def process_alive(pid):
+    """Probe a PID without sending a signal (os.kill(pid, 0) kills on Windows)."""
+    if sys.platform != "win32":
+        try:
+            os.kill(pid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+    import ctypes
+    from ctypes import wintypes
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel.OpenProcess.restype = wintypes.HANDLE
+    kernel.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    handle = kernel.OpenProcess(0x1000, False, pid)
+    if not handle:
+        return ctypes.get_last_error() == 5
+    try:
+        code = wintypes.DWORD()
+        return bool(kernel.GetExitCodeProcess(handle, ctypes.byref(code))) and code.value == 259
+    finally:
+        kernel.CloseHandle(handle)

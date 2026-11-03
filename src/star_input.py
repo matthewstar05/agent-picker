@@ -28,8 +28,7 @@ import sys
 import time
 import unicodedata
 
-import termios
-import tty
+from platform_runtime import Terminal
 
 MENU_ROWS = 7
 IMAGE = re.compile(r"\.(png|jpe?g|gif|webp|heic|bmp|tiff?)$", re.I)
@@ -529,33 +528,36 @@ class Editor:
 
     def keys(self, fd, idle):
         """Yield key names and text from the terminal, calling idle() between reads."""
+        if not hasattr(self, "terminal"):
+            self.terminal = Terminal()
+            self.terminal.fd = fd
         buf = b""
         while True:
             if not buf:
-                ready, _, _ = select.select([fd], [], [], 1 / 30)
+                ready = self.terminal.wait(1 / 30)
                 if not ready:
                     if idle:
                         woke = idle()
                         if woke:
                             yield ("wake", woke)
                     continue
-                buf = os.read(fd, 4096)
+                buf = self.terminal.read_bytes(4096)
                 if not buf:
                     yield "eof"
                     return
             if buf.startswith(b"\x1b[200~"):        # bracketed paste
                 end = buf.find(b"\x1b[201~")
                 while end < 0:
-                    buf += os.read(fd, 65536)
+                    buf += self.terminal.read_bytes(65536)
                     end = buf.find(b"\x1b[201~")
                 yield ("paste", buf[6:end].decode("utf-8", "replace").replace("\r\n", "\n").replace("\r", "\n"))
                 buf = buf[end + 6:]
                 continue
             if buf.startswith(b"\x1b"):
                 if len(buf) == 1:
-                    ready, _, _ = select.select([fd], [], [], 0.03)
+                    ready = self.terminal.wait(0.03)
                     if ready:
-                        buf += os.read(fd, 64)
+                        buf += self.terminal.read_bytes(64)
                 match = re.match(rb"\x1b\[<(\d+);(\d+);(\d+)([Mm])", buf)
                 if match:                                   # an SGR mouse report
                     buf = buf[match.end():]
@@ -604,7 +606,7 @@ class Editor:
             # one UTF-8 character
             n = 1 if byte < 0x80 else 2 if byte < 0xe0 else 3 if byte < 0xf0 else 4
             while len(buf) < n:
-                buf += os.read(fd, 4)
+                buf += self.terminal.read_bytes(4)
             yield ("text", buf[:n].decode("utf-8", "replace"))
             buf = buf[n:]
 
@@ -620,10 +622,10 @@ class Editor:
         browse, draft = len(self.history), ""
         last_ctrl_c, last_esc = 0.0, 0.0
         fd = sys.stdin.fileno()
-        saved = termios.tcgetattr(fd)
+        self.terminal = Terminal(raw=True)
+        self.terminal.__enter__()
         sys.stdout.write("\x1b[?2004h")   # bracketed paste
         try:
-            tty.setraw(fd)
             self.draw()
             if on_ready:
                 on_ready(self.text)
@@ -766,7 +768,7 @@ class Editor:
             self.anchor, self.reading = None, False
             self.track_mouse()
             sys.stdout.write("\x1b[?2004l")
-            termios.tcsetattr(fd, termios.TCSADRAIN, saved)
+            self.terminal.__exit__()
             if self.drawn_rows:
                 # leave the message as transcript, without the rules, menu and hint
                 self.draw(final=True) if self.text.strip() else self._erase()

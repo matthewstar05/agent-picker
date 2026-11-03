@@ -14,6 +14,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+@unittest.skipIf(os.name == "nt", "StarCLI integration currently requires POSIX ptys, termios, and process groups")
 class MeshRuntimeTests(unittest.TestCase):
     def test_crashed_goal_reopens_with_its_native_session_and_resumes_automatically(self):
         sys.path.insert(0, str(ROOT / "src"))

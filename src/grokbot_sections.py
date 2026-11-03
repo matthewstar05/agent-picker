@@ -8,7 +8,7 @@ section the user made, and any bot the user filed into one, are left alone.
 
 from contextlib import contextmanager
 import datetime
-import fcntl
+import file_lock as fcntl
 import os
 
 from platform_runtime import state_dir

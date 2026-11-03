@@ -556,16 +556,13 @@ class CardScopeTests(unittest.TestCase):
 
 class KeyTests(unittest.TestCase):
     def keys(self, data):
-        import os
         from platform_runtime import Terminal
-        read, write = os.pipe()   # the write end stays open, so a drained pipe isn't readable
-        self.addCleanup(os.close, read)
-        self.addCleanup(os.close, write)
-        os.write(write, data)
         terminal = Terminal()
-        terminal.fd = read
+        pending = bytearray(data)
+        terminal.wait = lambda _timeout: bool(pending)
+        terminal._byte = lambda: bytes((pending.pop(0),)) if pending else b""
         keys = []
-        while terminal.wait(0):
+        while pending:
             keys.append(terminal.read_key())
         return keys, getattr(terminal, "releases", False)
 

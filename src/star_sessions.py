@@ -56,7 +56,7 @@ class Lease:
         fd = os.open(str(path), os.O_RDWR | os.O_CREAT, 0o600)
         handle = os.fdopen(fd, "r+b")
         try:
-            import fcntl
+            import file_lock as fcntl
             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
             handle.close()
@@ -81,7 +81,7 @@ class Lease:
     def close(self):
         if self.handle is not None:
             try:
-                import fcntl
+                import file_lock as fcntl
                 fcntl.flock(self.handle, fcntl.LOCK_UN)
             finally:
                 self.handle.close()

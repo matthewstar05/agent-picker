@@ -700,8 +700,8 @@ def border_ring(agent, t, bw, height=1, solid=None):
     return cells
 
 
-HINTS = [" ↑↓ move · → defaults · ⏎ launch · u usage · \\ schedule · s settings ",
-         " → defaults · ⏎ launch · u usage · \\ schedule · s settings ",
+HINTS = [" ↑↓ move · → defaults · ⏎ launch · u usage · \\ schedule · s settings · c connections ",
+         " → defaults · ⏎ launch · u usage · \\ schedule · s settings · c connections ",
          " → defaults · ⏎ launch · \\ schedule · s · esc ", " ⏎ launch · \\ schedule ", ""]
 
 
@@ -1133,12 +1133,14 @@ def choose(screen=None, only=None):
     only: provider names to show alone (a herdr-ai team's usage pane)."""
     import usage_panel   # registers its settings; imported here so it can import this module
     import scheduler_menu
+    import connections
 
     # Only installed CLIs are listed; the rest of agents.json stays in the catalog
     # until its CLI shows up on this computer.
     found = [a for a in AGENTS if installed(a) and (only is None or a["name"] in only)]
-    if not found and screen != "scheduler":
-        raise RuntimeError("No supported CLI found. Run agent --picker-doctor and configure a provider.")
+    if screen != "scheduler" and (not found or (not (STATE / "last").exists() and
+            not any(a["name"] not in ("Star", "Grok Bot") for a in found))):
+        screen = "connections"
     # Hidden CLIs (settings) leave the selector only; usage still follows them.
     listed = shown(found) if found else AGENTS
     available = [installed(a) for a in listed]
@@ -1146,7 +1148,8 @@ def choose(screen=None, only=None):
                                   if a.get("usage_provider", a["name"]) in FETCHERS))
     load_usage()
     model_catalog.request_all(found)
-    usage_panel.start(providers)   # live readers feed both screens
+    if providers:
+        usage_panel.start(providers)   # live readers feed both screens
     usage = usage_panel.View(found, pinned=only is not None)
     menu = preferences.Menu()
     screen = screen or preferences.get(START.key)
@@ -1154,6 +1157,7 @@ def choose(screen=None, only=None):
     selected = load_last(listed)
     defaults_menu = None
     scheduler_view = scheduler_menu.Menu() if screen == "scheduler" else None
+    connection_menu = connections.Menu(AGENTS)
     quit_choice = 0
     terminal = Terminal()
     writer = Screen(terminal)
@@ -1168,6 +1172,8 @@ def choose(screen=None, only=None):
         terminal.keyboard(screen == "usage")   # key releases, for holding Tab there
         if screen == "usage":
             frame = usage_panel.render(usage, cols, rows, t)
+        elif screen == "connections":
+            frame = centered(connections.render(connection_menu, sys.modules[__name__], cols, rows), cols, rows)
         elif screen == "scheduler":
             frame = centered(scheduler_menu.render(scheduler_view, cols, rows, t), cols, rows)
         elif screen == "settings":
@@ -1197,8 +1203,14 @@ def choose(screen=None, only=None):
 
     def relist():
         # Settings may have hidden or shown CLIs; keep the same one selected if it is still listed.
-        nonlocal listed, available, selected
+        nonlocal listed, available, selected, found, usage
         current = listed[selected]["name"]
+        found = [a for a in AGENTS if installed(a) and (only is None or a["name"] in only)]
+        providers[:] = list(dict.fromkeys(a.get("usage_provider", a["name"]) for a in found
+                                        if a.get("usage_provider", a["name"]) in FETCHERS))
+        if providers:
+            usage_panel.start(providers)
+        usage = usage_panel.View(found, pinned=only is not None)
         listed = shown(found) if found else AGENTS
         available = [installed(a) for a in listed]
         selected = next((i for i, a in enumerate(listed) if a["name"] == current), 0)
@@ -1227,7 +1239,22 @@ def choose(screen=None, only=None):
             key = terminal.read_key()
             if not key or (key.startswith("release:") and screen != "usage"):
                 continue
-            if screen == "scheduler":
+            if screen == "connections":
+                action = connection_menu.handle(key)
+                if action == "close":
+                    relist()
+                    if not found:
+                        return None
+                    go("agents")
+                elif action == "refresh":
+                    relist()
+                elif isinstance(action, tuple) and action[0] == "login":
+                    # Restore the terminal before handing it to the provider's
+                    # real sign-in, then reopen setup. Never collect credentials.
+                    return action
+            elif key == "c" and screen in ("agents", "usage", "settings"):
+                go("connections")
+            elif screen == "scheduler":
                 action = scheduler_view.handle(key)
                 if action == "quit":
                     return None
@@ -1413,6 +1440,7 @@ def main():
         print("agent --picker-update                 fast-forward this Git checkout")
         print("agent --picker-doctor                 show paths and launch profiles")
         print("agent --picker-catalog                every known CLI, its colors, and whether it is installed")
+        print("agent --picker-connect                provider install guides, sign-in, and checks")
         print("agent --picker-help                   show this help")
         print("usage                                 opens on the usage panel; u switches screens")
         print("schedule                              scheduled prompts; Tab switches provider")
@@ -1436,6 +1464,8 @@ def main():
         args = args[2:]
     else:
         start, only = None, None
+        if args[:1] == ["--picker-connect"]:
+            start, args = "connections", args[1:]
         if args[:1] == ["--picker-usage"]:
             start, args = "usage", args[1:]
         if args[:1] == ["--picker-only"]:
@@ -1452,6 +1482,9 @@ def main():
             raise RuntimeError("agent needs an interactive terminal; try --picker-doctor")
         try:
             index = choose(start, only)
+            while isinstance(index, tuple) and index[0] == "login":
+                subprocess.call(index[1])
+                index = choose("connections", only)
         except KeyboardInterrupt:
             index = None
     if index is None:
@@ -1497,8 +1530,9 @@ def launch_and_return(argv):
     # back as soon as this process exits, and an agent still restoring its
     # tty modes after that leaves the shell's line editor unable to read Enter.
     # Ctrl+\ (SIGQUIT) reaches the group too; the agent decides what it means.
-    handlers[signal.SIGTERM] = handlers[signal.SIGHUP] = handlers[signal.SIGQUIT] = \
-        lambda sig, _: stopped.append(sig)
+    for name in ("SIGTERM", "SIGHUP", "SIGQUIT"):
+        if hasattr(signal, name):
+            handlers[getattr(signal, name)] = lambda sig, _: stopped.append(sig)
     previous = {sig: signal.signal(sig, handler) for sig, handler in handlers.items()}
     try:
         subprocess.call(argv)
@@ -1511,6 +1545,8 @@ def launch_and_return(argv):
 
 
 if __name__ == "__main__":
+    from platform_runtime import configure_stdio
+    configure_stdio()
     try:
         sys.exit(main())
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:

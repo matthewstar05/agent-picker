@@ -233,6 +233,10 @@ def from_argv(argv):
 
 def processes():
     """[(pid, ppid, argv)] for this user's processes; empty where ps doesn't exist."""
+    import sys
+    if sys.platform == "win32":
+        from platform_runtime import windows_processes
+        return windows_processes()
     out = subprocess.run(["ps", "-xo", "pid=,ppid=,args="], capture_output=True, text=True, timeout=5)
     rows = []
     for line in out.stdout.splitlines():

@@ -17,6 +17,7 @@ import threading
 import time
 
 from star_sessions import Lease
+from platform_runtime import pipe_ready, stop_process_tree
 
 
 def pump(source, target, exited):
@@ -29,7 +30,7 @@ def pump(source, target, exited):
             deadline = time.monotonic() + 2
         if deadline and time.monotonic() > deadline:
             return
-        if not select.select([source], [], [], .2)[0]:
+        if not pipe_ready(source, .2):
             if exited.is_set():
                 return
             continue
@@ -67,6 +68,10 @@ def own(argv):
         nonlocal finished
         if finished:
             return
+        if sys.platform == "win32":
+            stop_process_tree(proc)
+            finished = True
+            return
         # Only this thread polls or reaps the child. Its PID and process group
         # cannot be reused during the escalation.
         for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGKILL):
@@ -96,7 +101,7 @@ def own(argv):
             # A command or EOF stops the turn. Poll in the owning thread so
             # no stdin reader survives into Python's interpreter shutdown.
             # Native provider stdin remains disconnected.
-            if select.select([control], [], [], .03)[0]:
+            if pipe_ready(control, .03):
                 os.read(control, 1)
                 stop()
     finally:

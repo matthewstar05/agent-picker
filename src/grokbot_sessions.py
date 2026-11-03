@@ -1,7 +1,7 @@
 """Private, crash-safe CLI conversation bindings; one writer per bot."""
 
 from contextlib import contextmanager
-import fcntl
+import file_lock as fcntl
 import json
 import os
 from pathlib import Path

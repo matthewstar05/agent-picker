@@ -1,4 +1,5 @@
 import json
+import io
 import os
 import shutil
 import subprocess
@@ -127,9 +128,43 @@ class PickerTests(unittest.TestCase):
             self.assertEqual([a["name"] for a in picker.shown(star + others)], ["Star", "Codex"])
 
     def test_missing_providers_report_clear_error(self):
-        with patch.object(picker, "installed", return_value=False):
-            with self.assertRaisesRegex(RuntimeError, "No supported CLI"):
-                picker.choose()
+        import usage_panel
+
+        class Terminal:
+            def __init__(self):
+                self.output = []
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_):
+                return False
+
+            def write(self, text):
+                self.output.append(text)
+
+            def keyboard(self, _enabled):
+                pass
+
+            def wait(self, _seconds):
+                return True
+
+            def read_key(self):
+                return "q"
+
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            terminal = Terminal()
+            with patch.object(picker, "installed", return_value=False), \
+                    patch.object(picker, "Terminal", return_value=terminal), \
+                    patch.object(picker, "STATE", root / "state"), \
+                    patch.object(usage_panel, "STATE", root / "state/usage-panel"), \
+                    patch.object(picker, "load_usage"), patch.object(usage_panel, "start"), \
+                    patch.object(picker.preferences, "PATH", root / "preferences.json"), \
+                    patch.object(picker.preferences, "_values", None), \
+                    patch("sys.stdout", io.StringIO()):
+                self.assertIsNone(picker.choose())
+            self.assertTrue(any("Connections" in part for part in terminal.output))
 
     def test_native_launch_preserves_args_cwd_and_exit_status(self):
         with tempfile.TemporaryDirectory(prefix="picker test ") as folder:
@@ -148,6 +183,7 @@ class PickerTests(unittest.TestCase):
             self.assertEqual(Path(data["cwd"]).resolve(), folder.resolve())
             self.assertEqual((folder / "state/last").read_text(), "Claude")
 
+    @unittest.skipIf(os.name == "nt", "requires POSIX pty.fork, termios, and process-group signals")
     def test_return_mode_reopens_selector_after_agent_quits(self):
         import fcntl, pty, select, struct, termios
         with tempfile.TemporaryDirectory(prefix="picker test ") as folder:
@@ -295,6 +331,7 @@ class PickerTests(unittest.TestCase):
                 settings.update_checkout()
             self.assertEqual((consumer / "shared.json").read_text(), (author / "shared.json").read_text())
 
+    @unittest.skipIf(os.name == "nt", "requires a POSIX pseudo-terminal and termios")
     def test_interactive_menu_restores_terminal_after_resize_and_quit(self):
         import fcntl
         import pty

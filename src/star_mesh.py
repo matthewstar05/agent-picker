@@ -68,7 +68,8 @@ def alive(pid):
     if pid <= 0:
         return False
     try:
-        os.kill(pid, 0)
+        from platform_runtime import process_alive
+        return process_alive(pid)
     except ProcessLookupError:
         return False
     except (PermissionError, ValueError, TypeError):

@@ -2,6 +2,7 @@
 
 import json
 import os
+import sys
 from pathlib import Path
 
 import provider_defaults
@@ -12,6 +13,8 @@ ROOT = Path(__file__).resolve().parents[1]
 def config_path():
     if os.environ.get("AGENT_PICKER_CONFIG"):
         return Path(os.environ["AGENT_PICKER_CONFIG"]).expanduser()
+    if sys.platform == "win32":
+        return Path(os.environ.get("APPDATA", str(Path.home() / "AppData/Roaming"))) / "agent-picker/config.json"
     base = os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))
     return Path(base) / "agent-picker/config.json"
 

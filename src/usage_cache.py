@@ -38,7 +38,7 @@ def _locked(path):
     # The process lock also releases after a crash. The thread lock covers
     # callers sharing a process.
     with _THREAD_LOCK, path.open("a+b") as handle:
-        import fcntl
+        import file_lock as fcntl
         fcntl.flock(handle, fcntl.LOCK_EX)
         try:
             yield
