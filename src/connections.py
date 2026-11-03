@@ -15,9 +15,17 @@ DOCS = {
     "Kiro": ("https://kiro.dev/docs/cli/", ["login"]),
     "Grok Bot": ("https://cursor.com/docs/grok-bot", None),
     "OpenCode": ("https://opencode.ai/docs/", ["auth", "login"]),
+    "Qwen Code": ("https://github.com/QwenLM/qwen-code", None),
+    "Copilot": ("https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli", None),
     "Amp": ("https://ampcode.com/manual", None),
     "Droid": ("https://docs.factory.ai/cli/getting-started/quickstart", None),
     "Aider": ("https://aider.chat/docs/install.html", None),
+    "Goose": ("https://github.com/aaif-goose/goose", None),
+    "Crush": ("https://github.com/charmbracelet/crush", None),
+    "Cline": ("https://github.com/cline/cline", None),
+    "Auggie": ("https://docs.augmentcode.com/cli/overview", ["auth", "login"]),
+    "Kimi": ("https://github.com/MoonshotAI/kimi-code", None),
+    "Continue": ("https://github.com/continuedev/continue", None),
     "Star": ("https://github.com/matthewstar05/agent-picker#starcli", None),
 }
 

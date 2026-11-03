@@ -1,6 +1,7 @@
 """Read Kiro account data without launching the CLI or refreshing credentials."""
 
 from datetime import datetime, timezone
+from contextlib import closing
 import json
 import math
 from pathlib import Path
@@ -21,7 +22,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 def credentials(path=None):
     path = path or Path.home() / "Library/Application Support/kiro-cli/data.sqlite3"
     try:
-        with sqlite3.connect(Path(path).as_uri() + "?mode=ro", uri=True, timeout=1) as db:
+        with closing(sqlite3.connect(Path(path).as_uri() + "?mode=ro", uri=True, timeout=1)) as db:
             rows = db.execute("SELECT value FROM auth_kv WHERE key LIKE 'kirocli:%:token'").fetchall()
         valid = []
         for (raw,) in rows:

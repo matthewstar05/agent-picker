@@ -37,6 +37,9 @@ def run():
     handle = kernel.GetStdHandle(-10)
 
     def inject(text):
+        # Console records carry UTF-16 units, including surrogate pairs.
+        raw = text.encode("utf-16-le")
+        text = "".join(chr(int.from_bytes(raw[i:i + 2], "little")) for i in range(0, len(raw), 2))
         records = (Record * len(text))()
         for record, character in zip(records, text):
             record.kind = 1
@@ -47,9 +50,9 @@ def run():
 
     from platform_runtime import Terminal
     with Terminal() as terminal:
-        inject("xα\x1b[A\x1b")
+        inject("xαà😀\x1b[A\x1b")
         assert terminal.wait(1)
-        assert [terminal.read_key() for _ in range(4)] == ["x", "α", "up", "esc"]
+        assert [terminal.read_key() for _ in range(6)] == ["x", "α", "à", "😀", "up", "esc"]
         terminal.write("\x1b[38;2;100;180;220mUnicode console check α ✓\x1b[0m\n")
     import agent_picker
     from unittest.mock import patch

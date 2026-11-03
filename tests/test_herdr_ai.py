@@ -180,6 +180,7 @@ class HerdrAiTests(unittest.TestCase):
         self.assertEqual(typed, [["\x03\x15"], ["\x15" + route + "\n"],
                                  ["\x15" + self.fake.runs()[codex][-1] + "\n"]])
 
+    @unittest.skipUnless(os.name != "nt", "tests POSIX process-group signals; Herdr native Windows behavior is vendor-specific")
     def test_stop_waits_for_children_after_wrapper_returns_to_shell(self):
         herdr = SimpleNamespace(process_info=lambda pane: {
             "shell_pid": 10, "foreground_process_group_id": 20 if not signals else 10})
@@ -196,6 +197,7 @@ class HerdrAiTests(unittest.TestCase):
             herdr_ai.stop_panes(herdr, ["pane"])
         self.assertEqual(signals, [herdr_ai.signal.SIGTERM, 0, 0])
 
+    @unittest.skipUnless(os.name != "nt", "tests POSIX process-group signals; Herdr native Windows behavior is vendor-specific")
     def test_stop_treats_unreaped_group_as_stopped(self):
         # macOS reports EPERM for a group whose members are all zombies.
         polls = []
@@ -211,6 +213,7 @@ class HerdrAiTests(unittest.TestCase):
              patch.object(herdr_ai.time, "sleep"):
             herdr_ai.stop_panes(herdr, ["pane"])
 
+    @unittest.skipUnless(os.name != "nt", "tests POSIX process-group signals; Herdr native Windows behavior is vendor-specific")
     def test_stop_aborts_if_pane_stays_busy(self):
         herdr = SimpleNamespace(process_info=lambda pane: {
             "shell_pid": 10, "foreground_process_group_id": 20})

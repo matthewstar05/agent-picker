@@ -67,10 +67,9 @@ class Terminal:
         if getattr(self, "_pending", b""):
             return True
         if sys.platform == "win32":
-            import msvcrt
             until = time.monotonic() + max(0, seconds)
             while True:
-                if msvcrt.kbhit():
+                if self._console_pending or self._read_windows_event(False):
                     return True
                 remaining = until - time.monotonic()
                 if remaining <= 0:
@@ -105,6 +104,23 @@ class Terminal:
         self.kernel.GetStdHandle.restype = wintypes.HANDLE
         self.kernel.GetConsoleMode.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
         self.kernel.SetConsoleMode.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        class Key(ctypes.Structure):
+            _fields_ = [("down", wintypes.BOOL), ("repeat", wintypes.WORD), ("virtual", wintypes.WORD),
+                        ("scan", wintypes.WORD), ("character", wintypes.WCHAR), ("control", wintypes.DWORD)]
+
+        class Event(ctypes.Union):
+            _fields_ = [("key", Key), ("padding", ctypes.c_byte * 16)]
+
+        class Record(ctypes.Structure):
+            _fields_ = [("kind", wintypes.WORD), ("event", Event)]
+
+        self._console_record = Record
+        self.kernel.ReadConsoleInputW.argtypes = [wintypes.HANDLE, ctypes.POINTER(Record), wintypes.DWORD,
+                                                 ctypes.POINTER(wintypes.DWORD)]
+        self.kernel.GetNumberOfConsoleInputEvents.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+        self.input_handle = self.kernel.GetStdHandle(-10)
+        self._console_pending = b""
+        self._surrogate = ""
         self.modes = []
         self.output_cp = self.kernel.GetConsoleOutputCP()
         try:
@@ -130,23 +146,41 @@ class Terminal:
     def read_bytes(self, size):
         if sys.platform != "win32":
             return os.read(self.fd, size)
-        import msvcrt
-        data = self._windows_character()
-        while len(data) < size and msvcrt.kbhit():
-            data += self._windows_character()
+        while not self._console_pending:
+            self._read_windows_event(True)
+        while len(self._console_pending) < size and self._read_windows_event(False):
+            pass
+        data, self._console_pending = self._console_pending[:size], self._console_pending[size:]
         return data
 
-    def _windows_character(self):
-        import msvcrt
-        text = msvcrt.getwch()
-        if text in ("\x00", "\xe0"):
-            code = msvcrt.getwch()
-            return {"H": b"\x1b[A", "P": b"\x1b[B", "M": b"\x1b[C", "K": b"\x1b[D",
-                    "G": b"\x1b[H", "O": b"\x1b[F", "S": b"\x1b[3~"}.get(code, b"\x1b[0~")
-        if 0xd800 <= ord(text) <= 0xdbff:
-            text += msvcrt.getwch()
-            text = text.encode("utf-16-le", "surrogatepass").decode("utf-16-le", "replace")
-        return text.encode("utf-8", "replace")
+    def _read_windows_event(self, blocking):
+        """Keep Unicode characters distinct from Windows extended-key sentinels."""
+        import ctypes
+        from ctypes import wintypes
+        while True:
+            count = wintypes.DWORD()
+            if not blocking:
+                if not self.kernel.GetNumberOfConsoleInputEvents(self.input_handle, ctypes.byref(count)):
+                    raise ctypes.WinError(ctypes.get_last_error())
+                if not count.value:
+                    return False
+            record = self._console_record()
+            if not self.kernel.ReadConsoleInputW(self.input_handle, ctypes.byref(record), 1, ctypes.byref(count)):
+                raise ctypes.WinError(ctypes.get_last_error())
+            if record.kind != 1 or not record.event.key.down:
+                continue
+            key = record.event.key
+            text = key.character
+            if text and 0xd800 <= ord(text) <= 0xdbff:
+                self._surrogate = text
+                continue
+            if self._surrogate:
+                text = (self._surrogate + text).encode("utf-16-le", "surrogatepass").decode("utf-16-le", "replace")
+                self._surrogate = ""
+            data = windows_key_bytes(text, key.virtual, key.control)
+            if data:
+                self._console_pending += data * max(1, key.repeat)
+                return True
 
     def read_key(self):
         """A key name: a character, "up"/"down"/"left"/"right", or "esc". With
@@ -220,6 +254,26 @@ class Terminal:
         data = text.encode("utf-8")
         while data:
             data = data[os.write(sys.stdout.fileno(), data):]
+
+
+def windows_key_bytes(text, virtual, control):
+    """Translate native key records to the editor's existing UTF-8/ANSI events."""
+    shift, alt, ctrl = bool(control & 0x10), bool(control & 0x3), bool(control & 0xc)
+    modifier = 1 + shift + 2 * alt + 4 * ctrl
+    final = {0x26: "A", 0x28: "B", 0x27: "C", 0x25: "D", 0x24: "H", 0x23: "F"}.get(virtual)
+    if final:
+        return ("\x1b[" + (f"1;{modifier}" if modifier > 1 else "") + final).encode()
+    if virtual == 0x2e:
+        return b"\x1b[3~"
+    if virtual == 9 and shift:
+        return b"\x1b[Z"
+    if virtual == 13 and (shift or alt):
+        return b"\x1b\r"
+    if not text or text == "\x00":
+        return b""
+    # AltGr uses Ctrl+Alt to type normal international characters.
+    prefix = b"\x1b" if alt and not ctrl else b""
+    return prefix + text.encode("utf-8", "replace")
 
 
 ARROWS = {"A": "up", "B": "down", "C": "right", "D": "left"}
@@ -354,7 +408,8 @@ def windows_processes():
     from ctypes import wintypes
     import json
     import subprocess
-    command = "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CommandLine | ConvertTo-Json -Compress"
+    command = ("[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding; "
+               "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CommandLine | ConvertTo-Json -Compress")
     result = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command],
                             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15,
                             creationflags=subprocess.CREATE_NO_WINDOW)

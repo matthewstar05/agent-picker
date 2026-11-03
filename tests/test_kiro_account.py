@@ -1,4 +1,5 @@
 import contextlib
+from contextlib import closing
 from datetime import datetime, timedelta, timezone
 import io
 import json
@@ -24,17 +25,19 @@ class AccountTests(unittest.TestCase):
     def test_credentials_are_read_without_mutation_and_expiry_requires_no_login(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "account.sqlite3"
-            with sqlite3.connect(path) as db:
-                db.execute("CREATE TABLE auth_kv (key TEXT, value TEXT)")
-                for key, hours in [("kirocli:social:token", 1), ("kirocli:expired:token", -1)]:
-                    db.execute("INSERT INTO auth_kv VALUES (?,?)", (key, json.dumps({
-                        "access_token": "private", "profile_arn": ARN,
-                        "expires_at": (datetime.now(timezone.utc) + timedelta(hours=hours)).isoformat()})))
+            with closing(sqlite3.connect(path)) as db:
+                with db:
+                    db.execute("CREATE TABLE auth_kv (key TEXT, value TEXT)")
+                    for key, hours in [("kirocli:social:token", 1), ("kirocli:expired:token", -1)]:
+                        db.execute("INSERT INTO auth_kv VALUES (?,?)", (key, json.dumps({
+                            "access_token": "private", "profile_arn": ARN,
+                            "expires_at": (datetime.now(timezone.utc) + timedelta(hours=hours)).isoformat()})))
             before = path.read_bytes()
             self.assertEqual(account.credentials(path), ("private", ARN, "us-east-1"))
             self.assertEqual(path.read_bytes(), before)
-            with sqlite3.connect(path) as db:
-                db.execute("DELETE FROM auth_kv WHERE key='kirocli:social:token'")
+            with closing(sqlite3.connect(path)) as db:
+                with db:
+                    db.execute("DELETE FROM auth_kv WHERE key='kirocli:social:token'")
             self.assertIsNone(account.credentials(path))
             missing = Path(folder) / "missing.sqlite3"
             self.assertIsNone(account.credentials(missing))

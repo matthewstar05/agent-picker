@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 
@@ -21,6 +22,85 @@ class Echo:
     @staticmethod
     def parse(data, state):
         return [{"kind": "text", "data": data}]
+
+
+class PortableGuardianTests(unittest.TestCase):
+    def start_guardian(self, folder, argv):
+        process = subprocess.Popen([sys.executable, str(ROOT / "src/star_process.py")], cwd=folder,
+                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        process.stdin.write(json.dumps({"argv": argv}).encode("utf-8") + b"\n")
+        process.stdin.flush()
+        self.assertEqual(process.stdout.readline(), b'{"star_guard":"ready"}\n')
+        return process
+
+    @staticmethod
+    def read_pipe(pipe, chunks):
+        chunks.append(pipe.read())
+
+    def test_binary_handshake_forwards_fake_provider_output_and_exit_code(self):
+        with tempfile.TemporaryDirectory() as folder:
+            provider = [sys.executable, "-c",
+                        "import sys; print('provider stdout'); print('provider stderr', file=sys.stderr); sys.exit(7)"]
+            process = self.start_guardian(folder, provider)
+            stdout, stderr = [], []
+            out_reader = threading.Thread(target=self.read_pipe, args=(process.stdout, stdout), daemon=True)
+            err_reader = threading.Thread(target=self.read_pipe, args=(process.stderr, stderr), daemon=True)
+            out_reader.start()
+            err_reader.start()
+            process.stdin.write(b"go\n")
+            process.stdin.flush()
+            try:
+                self.assertEqual(process.wait(timeout=15), 7)
+                out_reader.join(timeout=5)
+                err_reader.join(timeout=5)
+                self.assertFalse(out_reader.is_alive())
+                self.assertFalse(err_reader.is_alive())
+                self.assertIn(b"provider stdout\n", stdout[0])
+                self.assertIn(b"provider stderr\n", stderr[0])
+            finally:
+                process.stdin.close()
+                process.stdout.close()
+                process.stderr.close()
+
+    def test_closing_control_pipe_cancels_the_owned_fake_provider_tree(self):
+        from platform_runtime import process_alive
+
+        with tempfile.TemporaryDirectory() as folder:
+            marker = Path(folder) / "provider.pid"
+            source = ("import os, pathlib, time; "
+                      f"pathlib.Path({str(marker)!r}).write_text(str(os.getpid())); "
+                      "time.sleep(60)")
+            process = self.start_guardian(folder, [sys.executable, "-c", source])
+            stdout, stderr = [], []
+            out_reader = threading.Thread(target=self.read_pipe, args=(process.stdout, stdout), daemon=True)
+            err_reader = threading.Thread(target=self.read_pipe, args=(process.stderr, stderr), daemon=True)
+            out_reader.start()
+            err_reader.start()
+            process.stdin.write(b"go\n")
+            process.stdin.flush()
+            provider_pid = None
+            try:
+                deadline = time.monotonic() + 10
+                while time.monotonic() < deadline and not marker.exists():
+                    self.assertIsNone(process.poll(), "guardian exited before starting the provider")
+                    time.sleep(0.02)
+                self.assertTrue(marker.exists(), "fake provider did not start")
+                provider_pid = int(marker.read_text())
+                process.stdin.close()
+                process.wait(timeout=15)
+                out_reader.join(timeout=5)
+                err_reader.join(timeout=5)
+                self.assertFalse(process_alive(provider_pid), "control EOF left the provider process alive")
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.wait(timeout=5)
+                if process.stdin and not process.stdin.closed:
+                    process.stdin.close()
+                process.stdout.close()
+                process.stderr.close()
+                if provider_pid and process_alive(provider_pid):
+                    self.fail(f"fake provider {provider_pid} survived guardian cleanup")
 
 
 @unittest.skipIf(os.name == "nt", "provider guardian integration requires POSIX process groups and selectable pipes")

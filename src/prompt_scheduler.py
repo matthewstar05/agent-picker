@@ -175,11 +175,14 @@ def write(data):
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(name, path)
-        folder = os.open(str(path.parent), os.O_RDONLY)
-        try:
-            os.fsync(folder)
-        finally:
-            os.close(folder)
+        # Windows has no CRT directory descriptor to fsync. The complete
+        # file is flushed above before the atomic replacement on both OSs.
+        if os.name != "nt":
+            folder = os.open(str(path.parent), os.O_RDONLY)
+            try:
+                os.fsync(folder)
+            finally:
+                os.close(folder)
     finally:
         if os.path.exists(name):
             os.unlink(name)

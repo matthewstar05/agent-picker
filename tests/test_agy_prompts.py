@@ -26,6 +26,9 @@ class AgyPromptTests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.home = Path(temporary.name)
         self.config = self.home / "config.json"
+        home = patch.object(Path, "home", return_value=self.home)
+        home.start()
+        self.addCleanup(home.stop)
         environment = patch.dict(os.environ, HOME=str(self.home), AGENT_PICKER_CONFIG=str(self.config),
                                  AGENT_PICKER_NO_MODEL_REFRESH="1")
         environment.start()
@@ -89,11 +92,20 @@ class AgyPromptTests(unittest.TestCase):
                 self.assertEqual(argv[1:3], ["--agent", agy_prompts.NAME])
 
     def test_fake_provider_receives_four_independent_layer_combinations(self):
-        fake = self.home / "fake-agy"
+        script = self.home / "fake-agy.py"
+        fake = self.home / ("fake-agy.cmd" if os.name == "nt" else "fake-agy")
         captured = self.home / "argv.json"
-        fake.write_text("#!" + sys.executable + "\nimport json,sys\nfrom pathlib import Path\n" +
-                        "Path(" + repr(str(captured)) + ").write_text(json.dumps(sys.argv[1:]))\n")
-        fake.chmod(0o755)
+        script.write_text("import json,sys\nfrom pathlib import Path\n" +
+                          "Path(" + repr(str(captured)) + ").write_text(json.dumps(sys.argv[1:]), encoding='utf-8')\n",
+                          encoding="utf-8")
+        if os.name == "nt":
+            fake.write_text('@echo off\r\n"' + sys.executable + '" "' + str(script) + '" %*\r\n',
+                            encoding="utf-8")
+        else:
+            fake.write_text("#!" + sys.executable + "\nimport json,sys\nfrom pathlib import Path\n" +
+                            "Path(" + repr(str(captured)) + ").write_text(json.dumps(sys.argv[1:]), encoding='utf-8')\n",
+                            encoding="utf-8")
+            fake.chmod(0o755)
         env = dict(os.environ, AGENT_PICKER_STATE_HOME=str(self.home / "state"),
                    AGENT_PICKER_NO_PRETRUST="1", HERDR_TAB_ID="test:tab")
         for agy_on in (True, False):
@@ -105,7 +117,7 @@ class AgyPromptTests(unittest.TestCase):
                             if herdr_on else ["--picker-plain"])
                     result = subprocess.run([sys.executable, str(ROOT / "src/agent_picker.py"),
                                              "--picker-launch", "Antigravity", *role], env=env,
-                                            capture_output=True, text=True, timeout=10)
+                                            capture_output=True, text=True, encoding="utf-8", timeout=10)
                     self.assertEqual(result.returncode, 0, result.stderr)
                     argv = json.loads(captured.read_text())
                     self.assertEqual("--agent" in argv, not agy_on)

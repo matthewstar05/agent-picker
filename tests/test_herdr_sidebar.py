@@ -178,7 +178,7 @@ class SidebarTests(unittest.TestCase):
 
     def test_socket_transport_ignores_events_and_reports_api_errors(self):
         # Short macOS Unix socket path, below sockaddr_un's 104-byte limit.
-        with tempfile.TemporaryDirectory(dir="/tmp") as folder:
+        with tempfile.TemporaryDirectory() as folder:
             path = str(Path(folder) / "api.sock")
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
                 server.bind(path)

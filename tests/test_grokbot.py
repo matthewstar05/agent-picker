@@ -81,7 +81,7 @@ class GrokBotTests(unittest.TestCase):
         self.assertFalse(result["is_error"])
         self.assertEqual(result["result"], "Verified.")
         self.assertEqual(self.gateway.sent[0][3], "local")
-        self.assertIn(str(self.root), self.gateway.sent[0][1])
+        self.assertIn(json.dumps(str(self.root)), self.gateway.sent[0][1])
         self.assertIn("Do not launch another AI CLI", self.gateway.sent[0][1])
         saved = sessions.load(BOT)
         self.assertIsNone(saved["pending"])
@@ -342,8 +342,11 @@ class GrokBotTests(unittest.TestCase):
         c = self.conversation()
         c.ensure_session()
         path = sessions.directory() / (BOT + ".json")
-        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
-        self.assertEqual(path.parent.stat().st_mode & 0o777, 0o700)
+        self.assertTrue(path.is_file())
+        self.assertTrue(path.parent.is_dir())
+        if os.name != "nt":
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(path.parent.stat().st_mode & 0o777, 0o700)
         with sessions.lease(c.session):
             with self.assertRaisesRegex(gateway.GrokError, "another CLI"):
                 with sessions.lease(c.session):
@@ -398,16 +401,16 @@ class GrokBotTests(unittest.TestCase):
         self.assertEqual(cli.clean("hello\x1b]52;c;BAD\x07\x1b[31mworld\x00"), "helloworld")
 
     def test_fake_picker_launch_passes_prompt_and_workspace_unchanged(self):
-        exe = self.root / "fake-grokbot"
+        exe = self.root / "fake-grokbot.py"
         output = self.root / "argv.json"
-        exe.write_text("#!/usr/bin/env python3\nimport json,os,sys\nfrom pathlib import Path\n"
-                       + "Path(" + repr(str(output)) + ").write_text(json.dumps({'argv':sys.argv[1:],'cwd':os.getcwd()}))\n")
-        exe.chmod(0o755)
+        exe.write_text("import json,os,sys\nfrom pathlib import Path\n"
+                       + "Path(" + repr(str(output)) + ").write_text(json.dumps({'argv':sys.argv[1:],'cwd':os.getcwd()}), encoding='utf-8')\n",
+                       encoding="utf-8")
         config = self.root / "config.json"
-        config.write_text(json.dumps({"agents": {"Grok Bot": {"command": str(exe)}}}))
+        config.write_text(json.dumps({"agents": {"Grok Bot": {"argv": [sys.executable, str(exe)]}}}))
         env = dict(os.environ, AGENT_PICKER_CONFIG=str(config))
         run = subprocess.run([sys.executable, str(ROOT / "src/agent_picker.py"), "--picker-launch", "Grok Bot", "-p", "quoted task"],
-                             cwd=self.root, env=env, capture_output=True, text=True)
+                             cwd=self.root, env=env, capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(run.returncode, 0, run.stderr)
         self.assertEqual(json.loads(output.read_text()), {"argv": ["-p", "quoted task"], "cwd": str(self.root)})
 

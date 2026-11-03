@@ -95,7 +95,7 @@ class WhereTests(unittest.TestCase):
         import team
         import usage_panel   # registers it in the selector's and usage panel's settings
         self.assertIs(preferences.find(where.WHERE.key), ap.GROKBOT_WHERE)
-        self.assertIn("ap.GROKBOT_WHERE", Path(team.__file__).read_text())   # herdr-ai --settings list
+        self.assertIn("ap.GROKBOT_WHERE", Path(team.__file__).read_text(encoding="utf-8"))   # herdr-ai --settings list
         grok = {"name": "Grok Bot", "detail": "Cursor Grok Bot usage · local machine tools"}
         preferences.put(where.WHERE.key, where.AUTO)
         self.assertEqual(where.detail(grok), "Cursor Grok Bot usage · local or cloud by request")

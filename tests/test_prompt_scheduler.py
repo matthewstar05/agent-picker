@@ -47,11 +47,18 @@ class SchedulerTests(unittest.TestCase):
         return value
 
     def fake(self, name="codex", code=0, delay=0):
-        path = self.home / name
-        path.write_text(f'#!{sys.executable}\nimport json, os, sys, time\ntime.sleep({delay})\n'
-                        'print(json.dumps({"argv": sys.argv[1:], "cwd": os.getcwd(), "stdin": sys.stdin.read(), '
-                        '"nested": os.getenv("CLAUDECODE")}))\n' + f'sys.exit({code})\n')
-        path.chmod(0o755)
+        payload = (f'import json, os, sys, time\ntime.sleep({delay})\n'
+                   'print(json.dumps({"argv": sys.argv[1:], "cwd": os.getcwd(), "stdin": sys.stdin.read(), '
+                   '"nested": os.getenv("CLAUDECODE")}))\n' + f'sys.exit({code})\n')
+        if os.name == "nt":
+            path = self.home / (name + ".cmd")
+            source = self.home / (name + "_fake.py")
+            source.write_text(payload)
+            path.write_text(f'@echo off\r\n"{sys.executable}" "{source}" %*\r\nexit /b %errorlevel%\r\n')
+        else:
+            path = self.home / name
+            path.write_text(f'#!{sys.executable}\n' + payload)
+            path.chmod(0o755)
         return path
 
     def profile(self, exe, provider="Codex", flags=None):
@@ -74,12 +81,79 @@ class SchedulerTests(unittest.TestCase):
         self.assertEqual(scheduler.due_ids(), [])
         self.assertEqual(scheduler.run_job(job["id"]), 0)
         self.assertEqual(len(list(scheduler.directory().glob("*.log"))), 1)
-        self.assertEqual(scheduler.schedule_path().stat().st_mode & 0o777, 0o600)
-        self.assertEqual(scheduler.directory().stat().st_mode & 0o777, 0o700)
-        self.assertEqual(Path(done["last"]["log"]).stat().st_mode & 0o777, 0o600)
+        if os.name != "nt":
+            self.assertEqual(scheduler.schedule_path().stat().st_mode & 0o777, 0o600)
+            self.assertEqual(scheduler.directory().stat().st_mode & 0o777, 0o700)
+            self.assertEqual(Path(done["last"]["log"]).stat().st_mode & 0o777, 0o600)
         output = Path(done["last"]["log"]).read_text()
         self.assertIn('"stdin": ""', output)
         self.assertIn(str(self.home), output)
+
+    def test_schedule_save_read_and_edit_round_trip_in_private_state(self):
+        created = scheduler.save_job(self.values(prompt="before edit"), now=0)
+        self.assertEqual(scheduler.read()["jobs"], [created])
+
+        edited = scheduler.save_job(self.values(prompt="after edit", repeat="daily"), created["id"], now=0)
+
+        self.assertEqual(edited["id"], created["id"])
+        self.assertEqual(edited["prompt"], "after edit")
+        self.assertEqual(edited["repeat"], "daily")
+        self.assertEqual(scheduler.read()["jobs"], [edited])
+        self.assertEqual(scheduler.schedule_path().parent, self.home / "state" / "scheduler")
+
+    @unittest.skipUnless(sys.platform == "win32", "requires Windows Startup folder and process flags")
+    def test_windows_startup_install_writes_login_launcher_without_starting_daemon(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            appdata = root / "User Data" / "Roaming"
+            appdata.mkdir(parents=True)
+            state = root / "Local State"
+            python = root / "venv" / "Scripts" / "python.exe"
+            python.parent.mkdir(parents=True)
+            python.write_text("test python", encoding="utf-8")
+            pythonw = python.with_name("pythonw.exe")
+            pythonw.write_text("test pythonw", encoding="utf-8")
+            env = patch.dict(os.environ, APPDATA=str(appdata), AGENT_PICKER_STATE_HOME=str(state),
+                             AGENT_PICKER_CONFIG=str(root / "picker config.json"), CURSOR_ACCESS_TOKEN="private")
+            env.start()
+            self.addCleanup(env.stop)
+            with patch.object(scheduler.sys, "executable", str(python)), \
+                    patch.object(scheduler, "service_status", return_value=False), \
+                    patch.object(scheduler.subprocess, "Popen") as start_daemon:
+                startup_file = scheduler.install_windows_service()
+
+            startup = appdata / "Microsoft/Windows/Start Menu/Programs/Startup"
+            self.assertEqual(startup_file, startup / "agent-picker-scheduler.cmd")
+            self.assertTrue(startup_file.is_file())
+            self.assertEqual(scheduler.read()["jobs"], [])
+            script = state / "scheduler" / "startup.pyw"
+            text = script.read_text(encoding="utf-8")
+            self.assertIn("'--daemon'", text)
+            self.assertIn(repr(str(root / "picker config.json")), text)
+            self.assertNotIn("private", text)
+            command = startup_file.read_text(encoding="utf-8")
+            self.assertIn('start ""', command)
+            self.assertIn(str(pythonw), command)
+            start_daemon.assert_called_once()
+            argv = start_daemon.call_args.args[0]
+            self.assertEqual(argv[0], str(pythonw))
+            self.assertEqual(argv[-1], "--daemon")
+            self.assertEqual(start_daemon.call_args.kwargs["creationflags"],
+                             subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP)
+
+    def test_windows_service_status_matches_daemon_and_startup_script_arguments(self):
+        from unittest.mock import patch
+
+        script = str(Path(scheduler.__file__).resolve()).swapcase()
+        startup = str(scheduler.directory() / "startup.pyw").swapcase()
+        cases = ([str(Path(sys.executable)), script, "--daemon"], [str(Path(sys.executable)), startup])
+        for argv in cases:
+            with self.subTest(argv=argv), patch.object(scheduler.sys, "platform", "win32"), \
+                    patch.object(platform_runtime, "windows_processes", return_value=[(123, 1, argv)]):
+                self.assertTrue(scheduler.service_status())
+        with patch.object(scheduler.sys, "platform", "win32"), \
+                patch.object(platform_runtime, "windows_processes", return_value=[(123, 1, [script, "--other"])]):
+            self.assertFalse(scheduler.service_status())
 
     def test_fake_providers_preserve_flags_and_literal_prompt(self):
         prompt = '-literal; $(touch DONT_CREATE) `touch NEITHER`\nsecond line café'
@@ -235,6 +309,7 @@ class SchedulerTests(unittest.TestCase):
             stdout, stderr = proc.communicate(timeout=10)
         self.assertEqual(proc.returncode, 0, stderr)
 
+    @unittest.skipUnless(sys.platform == "darwin", "launchd plist installation is macOS-specific; Windows Startup coverage is separate")
     def test_service_definition_is_local_and_idempotent(self):
         path = self.home / "LaunchAgents/scheduler.plist"
         def run(argv, **kwargs):

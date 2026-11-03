@@ -117,8 +117,16 @@ class CatalogTests(unittest.TestCase):
 
     def test_escape_preserves_a_quick_following_key(self):
         terminal = platform_runtime.Terminal()
-        terminal.fd = 0
-        with patch.object(platform_runtime.os, "read", side_effect=[b"\x1b", b"y"]), patch.object(terminal, "wait", return_value=True):
+        terminal._pending = b""
+        incoming = bytearray(b"\x1by")
+
+        def read_byte():
+            if terminal._pending:
+                value, terminal._pending = terminal._pending[:1], terminal._pending[1:]
+                return value
+            return bytes([incoming.pop(0)]) if incoming else b""
+
+        with patch.object(terminal, "_byte", side_effect=read_byte), patch.object(terminal, "wait", return_value=True):
             self.assertEqual(terminal.read_key(), "esc")
             self.assertEqual(terminal.read_key(), "y")
 

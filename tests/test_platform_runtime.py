@@ -13,6 +13,27 @@ import file_lock
 
 
 class PortableRuntimeTests(unittest.TestCase):
+    def test_windows_events_distinguish_accented_text_and_extended_keys(self):
+        from platform_runtime import windows_key_bytes
+        self.assertEqual(windows_key_bytes("à", 65, 0), "à".encode())
+        self.assertEqual(windows_key_bytes("😀", 0, 0), "😀".encode())
+        self.assertEqual(windows_key_bytes("", 0x26, 0), b"\x1b[A")
+        self.assertEqual(windows_key_bytes("", 0x25, 0x10), b"\x1b[1;2D")
+        self.assertEqual(windows_key_bytes("€", 69, 0x2 | 0x8), "€".encode())
+
+    @unittest.skipUnless(sys.platform == "win32", "requires Windows process enumeration")
+    def test_windows_process_arguments_preserve_unicode(self):
+        from platform_runtime import windows_processes
+        marker = "provider workspace α 中文"
+        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", marker])
+        try:
+            rows = {pid: argv for pid, _, argv in windows_processes()}
+            self.assertIn(child.pid, rows)
+            self.assertIn(marker, rows[child.pid])
+        finally:
+            child.terminate()
+            child.wait(timeout=10)
+
     def test_pipe_reports_data_and_eof(self):
         child = subprocess.Popen([sys.executable, "-c", "print('hello', flush=True)"], stdout=subprocess.PIPE)
         try:

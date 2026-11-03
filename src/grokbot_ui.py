@@ -135,7 +135,7 @@ class Working:
             self.flush(raw=False)
             took, self.editor.working = time.monotonic() - self.editor.working, None
         self.out.write("\n" + fg("note", "─ Worked for " + elapsed(took) + " · "
-                                  + time.strftime("%-I:%M %p") + " ─") + "\n\n")
+                                  + time.strftime("%I:%M %p").lstrip("0") + " ─") + "\n\n")
         self.out.flush()
         return text
 

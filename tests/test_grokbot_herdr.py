@@ -106,17 +106,17 @@ class GrokBotHerdrTests(unittest.TestCase):
         self.assertTrue(handoff.usable("Grok Bot", reading, now))
 
     def test_real_picker_peer_launch_uses_fake_executable_and_project_directory(self):
-        fake = self.root / "fake-grokbot"
+        fake = self.root / "fake-grokbot.py"
         output = self.root / "launch.json"
-        fake.write_text("#!/usr/bin/env python3\nimport json,os,sys\nfrom pathlib import Path\n"
-                        + "Path(" + repr(str(output)) + ").write_text(json.dumps({'argv':sys.argv[1:], 'cwd':os.getcwd()}))\n")
-        fake.chmod(0o755)
+        fake.write_text("import json,os,sys\nfrom pathlib import Path\n"
+                        + "Path(" + repr(str(output)) + ").write_text(json.dumps({'argv':sys.argv[1:], 'cwd':os.getcwd()}), encoding='utf-8')\n",
+                        encoding="utf-8")
         config = self.root / "config.json"
-        config.write_text(json.dumps({"agents": {"Grok Bot": {"command": str(fake)}}}))
+        config.write_text(json.dumps({"agents": {"Grok Bot": {"argv": [sys.executable, str(fake)]}}}))
         env = dict(os.environ, AGENT_PICKER_CONFIG=str(config), HERDR_TAB_ID="fake:t")
         result = subprocess.run([sys.executable, str(ROOT / "src/agent_picker.py"), "--picker-launch", "Grok Bot",
                                  "--picker-peer", "fake:p1", "--picker-peers", "fake:p1,fake:p2"],
-                                cwd=self.root, env=env, text=True, capture_output=True)
+                                cwd=self.root, env=env, text=True, encoding="utf-8", capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         saved = json.loads(output.read_text())
         self.assertEqual(saved["cwd"], str(self.root))
