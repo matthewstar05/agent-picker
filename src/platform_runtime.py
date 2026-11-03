@@ -345,6 +345,68 @@ def resolve_argv(agent):
     return None
 
 
+# cmd.exe ends a batch file's command line at a line break, expands %NAME%
+# inside quotes, and has no escape for an embedded quote, so these characters
+# cannot reach a program through a .cmd shim intact.
+BATCH_UNSAFE = ("\r", "\n", "%", '"', "\x00")
+
+
+def _shim_target(shim):
+    """The real program a simple .cmd shim runs: npm's, or one fixed command line."""
+    import re
+    try:
+        text = shim.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    folder = str(shim.parent)
+    lines = [line for line in text.splitlines() if "%*" in line]
+    if len(lines) != 1:
+        return None
+    # npm prefixes the call with `endLocal & goto ... || title %COMSPEC% &`.
+    line, quoted, start = lines[0], False, 0
+    for index, ch in enumerate(line):
+        if ch == '"':
+            quoted = not quoted
+        elif ch == "&" and not quoted:
+            start = index + 1
+    command = line[start:].strip().lstrip("@")
+    match = re.fullmatch(r'((?:"[^"]*"\s*)+)%\*\s*', command)
+    if not match:
+        return None
+    argv = []
+    for token in re.findall(r'"([^"]*)"', match[1]):
+        if token == "%_prog%":   # npm: node.exe beside the shim, else node on PATH
+            local = Path(folder) / "node.exe"
+            token = str(local) if local.is_file() else (shutil.which("node") or "")
+        else:
+            token = re.sub(r"^%~?dp0%?\\?", lambda _: folder + "\\", token)
+        if not token or "%" in token:
+            return None
+        argv.append(token)
+    return argv or None
+
+
+def direct_argv(argv):
+    """Arguments for subprocess that never pass free text through cmd.exe.
+
+    Windows npm installs (claude, codex, gemini...) are .cmd shims. A prompt
+    passed through one is cut at its first line break and its %VAR% text is
+    expanded, so run the shim's real program instead. A shim of unknown shape
+    still runs, but only with arguments cmd.exe cannot change.
+    """
+    argv = list(argv)
+    if sys.platform != "win32" or not argv or Path(argv[0]).suffix.lower() not in (".cmd", ".bat"):
+        return argv
+    target = _shim_target(Path(argv[0]))
+    if target:
+        return target + argv[1:]
+    if any(ch in arg for arg in argv[1:] for ch in BATCH_UNSAFE):
+        raise ValueError(f"{Path(argv[0]).name} is a batch file, which cannot pass line breaks, quotes or % "
+                         "signs intact. Install the provider's native executable, or point its profile at the "
+                         "program the batch file runs.")
+    return argv
+
+
 def launch(argv):
     if sys.platform == "win32":
         import subprocess

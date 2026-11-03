@@ -11,13 +11,23 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 
 def run():
+    import msvcrt
     kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernel.FreeConsole()
-    if not kernel.AllocConsole():
+    kernel.GetConsoleWindow.restype = wintypes.HWND
+    if not kernel.GetConsoleWindow() and not kernel.AllocConsole():
         raise ctypes.WinError(ctypes.get_last_error())
-    for name, mode, descriptor in (("CONIN$", "r", 0), ("CONOUT$", "w", 1), ("CONOUT$", "w", 2)):
-        with open(name, mode, encoding="utf-8") as stream:
-            os.dup2(stream.fileno(), descriptor)
+    kernel.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
+                                   wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+    kernel.CreateFileW.restype = wintypes.HANDLE
+    kernel.SetStdHandle.argtypes = [wintypes.DWORD, wintypes.HANDLE]
+    # Console buffers need read and write access and shared opening; Python's
+    # open() requests write-only CONOUT$, which a fresh console rejects.
+    for name, std, descriptor in (("CONIN$", -10, 0), ("CONOUT$", -11, 1), ("CONOUT$", -12, 2)):
+        handle = kernel.CreateFileW(name, 0xC0000000, 3, None, 3, 0, None)
+        if handle in (None, wintypes.HANDLE(-1).value):
+            raise ctypes.WinError(ctypes.get_last_error())
+        kernel.SetStdHandle(std & 0xFFFFFFFF, handle)
+        os.dup2(msvcrt.open_osfhandle(handle, os.O_RDONLY if descriptor == 0 else os.O_WRONLY), descriptor)
     sys.stdin = open(0, "r", encoding="utf-8", closefd=False)
     sys.stdout = open(1, "w", encoding="utf-8", closefd=False)
     sys.stderr = open(2, "w", encoding="utf-8", closefd=False)

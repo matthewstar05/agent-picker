@@ -27,7 +27,7 @@ class SchedulerTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.home = Path(self.temp.name)
+        self.home = Path(os.path.realpath(self.temp.name))
         self.env = patch.dict(os.environ, AGENT_PICKER_STATE_HOME=str(self.home / "state"),
                               AGENT_PICKER_CONFIG=str(self.home / "config.json"))
         self.env.start()
@@ -291,8 +291,11 @@ class SchedulerTests(unittest.TestCase):
     def test_daemon_dispatches_due_jobs_and_stops_cleanly(self):
         self.profile(self.fake())
         job = self.due()
+        # Windows has no SIGTERM to catch: TerminateProcess cannot be handled,
+        # so a graceful stop is Ctrl+Break sent to the daemon's process group.
+        group = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {}
         proc = subprocess.Popen([sys.executable, str(ROOT / "src/prompt_scheduler.py"), "--daemon"],
-                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, **group)
         try:
             deadline = time.monotonic() + 10
             while time.monotonic() < deadline:
@@ -305,7 +308,10 @@ class SchedulerTests(unittest.TestCase):
             self.assertEqual(row["id"], job["id"])
             self.assertEqual(len(list(scheduler.directory().glob("*.log"))), 1)
         finally:
-            proc.terminate()
+            if os.name == "nt":
+                proc.send_signal(signal.CTRL_BREAK_EVENT)
+            else:
+                proc.terminate()
             stdout, stderr = proc.communicate(timeout=10)
         self.assertEqual(proc.returncode, 0, stderr)
 

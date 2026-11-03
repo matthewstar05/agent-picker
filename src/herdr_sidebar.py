@@ -39,6 +39,8 @@ def request(method, params, socket_path=None):
     path = socket_path or endpoint()
     rid = f"herdr-ai:{time.time_ns()}"
     payload = json.dumps({"id": rid, "method": method, "params": params})
+    if not hasattr(socket, "AF_UNIX"):
+        raise RuntimeError("Herdr's socket API is not available in this Python on this system")
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
         client.settimeout(2)
         client.connect(path)

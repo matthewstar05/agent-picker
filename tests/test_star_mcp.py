@@ -1,3 +1,4 @@
+import os
 import json
 import queue
 import subprocess
@@ -129,7 +130,8 @@ for line in sys.stdin:
             self.assertEqual(docs["args"][-2:], ["project-docs", "--local"])
             self.assertEqual(made["hooks"], {"test": []})
             self.assertEqual(made["mcpServers"]["disabled"]["command"], "do-not-run")
-            self.assertEqual(target.stat().st_mode & 0o777, 0o600)
+            if os.name != "nt":   # Windows files take the profile folder's per-user ACL
+                self.assertEqual(target.stat().st_mode & 0o777, 0o600)
             self.assertEqual({p: p.read_bytes() for p in sources}, sources)
             other = star_engines.ensure_kiro_agent(home, Path(folder) / "other", mcp=True)
             self.assertNotEqual(name, other)

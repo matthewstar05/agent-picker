@@ -277,6 +277,7 @@ class PickerTests(unittest.TestCase):
         self.assertEqual(windows, [{"label": "5h", "pct": 25.0,
                                     "resets": picker._epoch("2030-01-01T00:00:00.123456Z")}])
 
+    @unittest.skipIf(os.name == "nt", "the macOS installer edits a POSIX shell profile")
     def test_macos_install_is_idempotent_and_uses_live_checkout(self):
         with tempfile.TemporaryDirectory() as folder:
             home = Path(folder)

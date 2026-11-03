@@ -53,6 +53,8 @@ def pump(source, target, exited):
 
 def own(argv):
     try:
+        from platform_runtime import direct_argv
+        argv = direct_argv(argv)
         proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                 start_new_session=True)
     except OSError as exc:
@@ -117,7 +119,9 @@ def main():
     with Lease(folder, check_turn=False) if folder else _NoLease() as lease:
         if folder:
             lease.claim(ident)
-        print('{"star_guard":"ready"}', flush=True)
+        # Bytes, so Windows text mode cannot turn the frame's newline into CRLF.
+        sys.stdout.buffer.write(b'{"star_guard":"ready"}\n')
+        sys.stdout.buffer.flush()
         if sys.stdin.buffer.readline().strip() != b"go":
             return 130
         return own(config["argv"])

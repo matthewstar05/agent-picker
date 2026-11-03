@@ -328,7 +328,8 @@ def run_job(job_id):
                 env = dict(os.environ)
                 for key in ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CODEX_THREAD_ID", "CODEX_INTERNAL_ORIGINATOR_OVERRIDE"):
                     env.pop(key, None)
-                argv = command(job)
+                from platform_runtime import direct_argv
+                argv = direct_argv(command(job))
                 if not Path(job["cwd"]).is_dir():
                     raise ValueError("The working directory no longer exists.")
                 process = subprocess.Popen(argv, cwd=job["cwd"], env=env, stdin=subprocess.DEVNULL,
@@ -371,7 +372,9 @@ def daemon():
         stopped = threading.Event()
         def stop(signum, frame):
             stopped.set()
-        old = {sig: signal.signal(sig, stop) for sig in (signal.SIGTERM, signal.SIGINT)}
+        # Windows delivers Ctrl+Break to a console process group as SIGBREAK.
+        signals = [signal.SIGTERM, signal.SIGINT] + ([signal.SIGBREAK] if hasattr(signal, "SIGBREAK") else [])
+        old = {sig: signal.signal(sig, stop) for sig in signals}
         try:
             while not stopped.is_set():
                 workers = {key: p for key, p in workers.items() if p.poll() is None}

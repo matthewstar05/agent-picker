@@ -176,6 +176,7 @@ class SidebarTests(unittest.TestCase):
         build.assert_not_called()
         route.assert_not_called()
 
+    @unittest.skipUnless(hasattr(socket, "AF_UNIX"), "Herdr's API is a Unix socket")
     def test_socket_transport_ignores_events_and_reports_api_errors(self):
         # Short macOS Unix socket path, below sockaddr_un's 104-byte limit.
         with tempfile.TemporaryDirectory() as folder:

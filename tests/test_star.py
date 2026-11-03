@@ -505,6 +505,10 @@ class StarSessionTests(unittest.TestCase):
         self.assertIn("Codex needs native approvals", turn.call_args[0][3])
 
     def runnable(self, path):
+        if os.name == "nt":   # Windows runs no shebang scripts: give it a launcher
+            launcher = path.with_name(path.name + ".cmd")
+            launcher.write_text(f'@"{sys.executable}" "{path}" %*\r\n', encoding="utf-8")
+            return launcher
         path.chmod(0o755)
         return path
 
