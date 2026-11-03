@@ -21,6 +21,7 @@ from grokbot_goal import Goal
 import grokbot_sections as sections
 import grokbot_where as where
 import grokbot_sessions as store
+from platform_runtime import state_dir
 
 VERSION = "0.1.0"
 COMMANDS = [("help", "", "show commands"), ("usage", "", "Cursor models, external models, and Grok Bot limits"),
@@ -35,6 +36,11 @@ CONTROL = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\))
 
 def clean(text):
     return CONTROL.sub("", str(text or ""))
+
+
+def live_dir():
+    """A file per running Grok Bot turn, so the usage panel can light up its bar."""
+    return state_dir() / "grokbot" / "live"
 
 
 def marker(nonce):
@@ -222,6 +228,7 @@ class Conversation:
         self.ask = lambda prompt: input(prompt)   # and routes approval questions to the main thread
 
     def report(self, state):
+        self.mark(state)
         pane = os.environ.get("HERDR_PANE_ID")
         if os.environ.get("HERDR_ENV") != "1" or not pane:
             return
@@ -233,7 +240,23 @@ class Conversation:
         except (OSError, subprocess.SubprocessError):
             pass
 
+    def mark(self, state):
+        """Herdr ignores report() while a stale built-in claim (such as a Cursor
+        that ran in this pane before the picker) holds the pane, so the usage
+        panel also reads this file to know a turn is running."""
+        path = live_dir() / f"{os.getpid()}.json"
+        try:
+            if state == "working":
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(json.dumps({"pid": os.getpid(), "pane": os.environ.get("HERDR_PANE_ID"),
+                                            "started": time.time()}), encoding="utf-8")
+            else:
+                path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
     def release(self):
+        self.mark("idle")
         pane = os.environ.get("HERDR_PANE_ID")
         if os.environ.get("HERDR_ENV") == "1" and pane:
             try:

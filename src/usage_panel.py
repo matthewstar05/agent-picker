@@ -183,6 +183,7 @@ STAR = "Star"
 STAR_LIVE = ap.STATE / "star" / "live"   # one file per turn StarCLI is running
 STAR_DRIVING = set()  # providers StarCLI is running a turn on right now
 STAR_POOLS = {}       # StarCLI pid -> the Cursor pool its current turn uses
+GROKBOT_LIVE = ap.STATE / "grokbot" / "live"   # one file per turn Grok Bot is running
 
 # Seconds between reads while one of its agents is working, when Herdr isn't
 # available to say, and while all of its agents are idle. Codex is a local file
@@ -326,14 +327,19 @@ def herdr_sessions(me):
     tab = mine.get("tab_id") or os.environ.get("HERDR_TAB_ID")
     space = mine.get("workspace_id") or os.environ.get("HERDR_WORKSPACE_ID")
     found, working = {s: {} for s in SCOPE_ORDER}, {}
+    grok = grokbot_turns()
     for pane in panes:
         if pane.get("pane_id") == me:
             continue
         name = provider_of(pane.get("agent")) or pane_agent(pane["pane_id"])
         if not name:
             continue
-        busy = pane.get("agent_status") == "working"
-        pool = cursor_pool(pane) if busy and name == "Cursor" else None
+        # Herdr can ignore Grok Bot's own reports, so its turn file counts too.
+        if name == "Cursor" and pane["pane_id"] in grok:
+            busy, pool = True, "gb"
+        else:
+            busy = pane.get("agent_status") == "working"
+            pool = cursor_pool(pane) if busy and name == "Cursor" else None
         if busy:
             working.setdefault(name, set()).add(pane["pane_id"])
         scopes = ["all"] + ["workspace"] * (pane.get("workspace_id") == space) + ["tab"] * (pane.get("tab_id") == tab)
@@ -378,6 +384,27 @@ def star_turns():
         if data.get("provider") == "Cursor":
             STAR_POOLS[pid] = cursor_pools.model_pool(data.get("model"))
     return turns
+
+
+def grokbot_turns():
+    """Herdr pane ids where Grok Bot is running a turn right now."""
+    panes = set()
+    for path in GROKBOT_LIVE.glob("*.json") if GROKBOT_LIVE.is_dir() else ():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            pid = int(data["pid"])
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+        from star_mesh import alive
+        if not alive(pid):
+            try:
+                path.unlink()
+            except OSError:
+                pass
+            continue
+        if data.get("pane"):
+            panes.add(data["pane"])
+    return panes
 
 
 def add_star_turns(found, working, reach=lambda pane: list(SCOPE_ORDER)):

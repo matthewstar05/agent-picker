@@ -464,6 +464,49 @@ class CardScopeTests(unittest.TestCase):
                                         "OpenCode": {"panes": 1, "working": 0}, "Kiro": {"panes": 1, "working": 1}})
         self.assertEqual(working, {"Codex": {"w:p3"}, "Kiro": {"v:p6"}})
 
+    def test_a_grokbot_turn_drains_gb_even_when_herdr_ignores_its_report(self):
+        import grokbot
+        empty = tempfile.TemporaryDirectory()
+        self.addCleanup(empty.cleanup)
+        state = Path(empty.name)
+        conversation = grokbot.Conversation(None, None, empty.name)
+        # A stale Cursor claim leaves Herdr showing the Grok Bot pane as unknown.
+        panes = [{"pane_id": "w:p1", "tab_id": "w:t1", "workspace_id": "w"},
+                 {"pane_id": "w:g", "tab_id": "w:t1", "workspace_id": "w", "agent_status": "unknown",
+                  "agent_session": {"source": "herdr:cursor", "agent": "cursor"}}]
+        out = type("Out", (), {"stdout": panel.json.dumps({"result": {"panes": panes}})})
+
+        def sessions():
+            with patch.object(panel.subprocess, "run", return_value=out), \
+                    patch.object(panel, "pane_agent", return_value="Cursor"), \
+                    patch.object(panel, "cursor_pool", side_effect=AssertionError("no footer read")), \
+                    patch.object(panel, "STAR_LIVE", state / "star"), \
+                    patch.object(panel, "GROKBOT_LIVE", state / "grokbot" / "live"):
+                return panel.herdr_sessions("w:p1")
+
+        with patch.dict(os.environ, {"AGENT_PICKER_STATE_HOME": empty.name, "HERDR_PANE_ID": "w:g"}), \
+                patch.object(grokbot.subprocess, "run"):
+            conversation.report("working")
+            found, working = sessions()
+            self.assertEqual(found["tab"]["Cursor"], {"panes": 1, "working": 1, "pools": {"gb": 1}})
+            self.assertEqual(working, {"Cursor": {"w:g"}})
+            conversation.report("idle")
+            found, working = sessions()
+            self.assertEqual(found["tab"]["Cursor"], {"panes": 1, "working": 0})
+            conversation.report("working")
+            conversation.release()
+            self.assertEqual(list((state / "grokbot" / "live").iterdir()), [])
+
+    def test_a_dead_grokbot_turn_file_is_dropped(self):
+        empty = tempfile.TemporaryDirectory()
+        self.addCleanup(empty.cleanup)
+        live = Path(empty.name)
+        (live / "1.json").write_text(json.dumps({"pid": 999999, "pane": "w:g"}))
+        (live / "2.json").write_text(json.dumps({"pid": os.getpid(), "pane": "w:h"}))
+        with patch.object(panel, "GROKBOT_LIVE", live):
+            self.assertEqual(panel.grokbot_turns(), {"w:h"})
+        self.assertEqual(sorted(p.name for p in live.iterdir()), ["2.json"])
+
     def test_card_settings_live_on_the_visibility_page(self):
         sections = [s.section for s in preferences.SETTINGS]
         usage = [i for i, s in enumerate(sections) if s == "Usage panel"]
