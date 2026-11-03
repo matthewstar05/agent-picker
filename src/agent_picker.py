@@ -312,25 +312,10 @@ def usage_cursor():
 
 
 def usage_kiro():
-    # Kiro's /usage slash command answers without sending a prompt to a model.
-    agent = next(a for a in AGENTS if a["name"] == "Kiro")
-    argv = resolve_argv(agent)
-    if not argv or Path(argv[0]).stem.lower() not in ("kiro-cli", "kiro"):
-        return None  # custom wrappers have no verified usage protocol
-    out = subprocess.run([argv[0], "chat", "--no-interactive", "/usage"], capture_output=True,
-                         text=True, encoding="utf-8", errors="replace", timeout=30, stdin=subprocess.DEVNULL, start_new_session=True,
-                         cwd=tempfile.gettempdir())
-    text = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", out.stdout + out.stderr)
-    pct = re.search(r"\),\s*([\d.]+)%", text) or re.search(r"([\d.]+)%", text)
-    date = re.search(r"resets on (\d{4}-\d{2}-\d{2})", text)
-    if not pct:
-        return None
-    credits = re.search(r"([\d.]+) of ([\d.]+) covered", text)
-    resets = datetime.strptime(date.group(1), "%Y-%m-%d").timestamp() if date else None
-    window = {"label": "mo", "pct": float(pct.group(1)), "resets": resets}
-    if credits:
-        window.update(used=float(credits.group(1)), limit=float(credits.group(2)))
-    return [window]
+    # /usage starts a full chat client, which can open account or MCP login
+    # pages even with --no-interactive. Keep the existing cache until Kiro
+    # provides a usage-only interface that cannot start browser authentication.
+    return None
 
 
 def usage_antigravity():
