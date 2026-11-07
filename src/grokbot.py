@@ -364,6 +364,9 @@ class Conversation:
         if remote.get("isRunningTurn") or remote.get("isRunning") or final:
             self.output.event({"type": "notice", "text": "Finishing the previous request first."})
             self.observe(report=False)
+        elif pending.get("delivery") == "unknown":
+            raise GrokError("Delivery of the previous request is still unknown. Its request is saved; use grokbot --resume "
+                            + self.session["id"] + " to keep watching before submitting another task.")
         else:
             self.session["messages"].append({"user": pending["text"], "assistant": "", "at": time.time(),
                                              "status": "interrupted"})
@@ -780,9 +783,16 @@ def main(argv=None):
             elif runner.error:
                 raise runner.error
             return isinstance(runner.error, KeyboardInterrupt)
+
+        def resume_working():
+            try:
+                working()
+            except GrokError as exc:
+                print(clean(str(exc)), file=sys.stderr)
+
         conversation.report("idle")
         if session and session.get("pending"):
-            working()
+            resume_working()
         while True:
             if not prompt and editor.queued:
                 prompt = editor.queued.pop(0)
@@ -816,7 +826,7 @@ def main(argv=None):
                     conversation.where = resumed.get("where") or (where.LOCAL if machine else where.CLOUD)
                     goal = Goal(resumed.get("goal"))
                     if conversation.session.get("pending"):
-                        working()
+                        resume_working()
                     print("Resumed " + conversation.session["id"])
                 elif verb == "where":
                     machine = switch_where(conversation, rest.strip(), gateway, machine, output)

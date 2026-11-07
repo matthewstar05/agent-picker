@@ -66,7 +66,7 @@ class RetryTests(unittest.TestCase):
         self.assertEqual(server.calls.count("listAgents"), 1)
 
     def test_post_marks_gateway_errors_transient(self):
-        for code, transient in ((502, True), (503, True), (504, True), (500, False), (404, False)):
+        for code, transient in ((408, True), (417, True), (500, True), (502, True), (503, True), (504, True), (404, False)):
             error = urllib.error.HTTPError("https://box.cursorvm.com/api/x", code, "", {}, None)
             with self.subTest(code=code), patch("urllib.request.OpenerDirector.open", side_effect=error):
                 with self.assertRaises(gateway.GrokError) as caught:

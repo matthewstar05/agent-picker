@@ -27,7 +27,7 @@ class GrokError(RuntimeError):
 
 
 # Read-only gateway methods: repeating one changes nothing, so a cold or
-# restarting sandbox pod's 417/502/503/504 is retried instead of ending the turn.
+# restarting sandbox pod's 417/5xx is retried instead of ending the turn.
 READS = ("listAgents", "getAgentTranscriptTail", "getAgentThread")
 RETRY_DELAYS = (1, 2, 4)
 
@@ -92,8 +92,8 @@ def post(url, body, headers, timeout=30):
     except urllib.error.HTTPError as exc:
         # Do not echo a URL, token, account export, or upstream response body.
         label = "Sign in to Cursor again" if exc.code in (401, 403) else "Grok Bot request failed"
-        raise GrokError(f"{label} (HTTP {exc.code}).", "rejected" if exc.code < 500 else "unknown",
-                        transient=exc.code in (417, 502, 503, 504)) from None
+        raise GrokError(f"{label} (HTTP {exc.code}).", "rejected" if exc.code < 500 and exc.code not in (408, 417) else "unknown",
+                        transient=exc.code in (408, 417, 500, 502, 503, 504)) from None
     except (urllib.error.URLError, TimeoutError, OSError):
         raise GrokError("Cannot reach Grok Bot. Check the connection before retrying.", "unknown", transient=True) from None
     except (ValueError, TypeError):
@@ -148,8 +148,8 @@ class Gateway:
 
     def call(self, method, body=None):
         for attempt in range(len(RETRY_DELAYS) + 1):
-            self.connect()
             try:
+                self.connect()
                 return self.request(self.session[0] + "/api/" + method, body or {}, self.session[1])
             except GrokError as exc:
                 # Writes (sendPrompt, createAgent, approvals) are never repeated here:
@@ -188,7 +188,8 @@ class Gateway:
             receipt = self.call("sendPrompt", body)
         except GrokError as exc:
             if exc.delivery != "rejected":
-                raise GrokError("Delivery is unknown. Resume this session to inspect the existing turn; do not resend.", "unknown") from None
+                raise GrokError("Delivery is unknown. Resume this session to inspect the existing turn; do not resend.",
+                                "unknown", transient=exc.transient) from None
             raise
         if isinstance(receipt, dict) and receipt.get("accepted") is True:
             # Current gateway acknowledges acceptance without a message ID. The
