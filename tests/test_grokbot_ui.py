@@ -290,6 +290,8 @@ class BannerTest(unittest.TestCase):
         # Screen and scrollback cleared and the cursor homed before anything is drawn.
         self.assertTrue(shown.startswith(grokbot.FRESH_SCREEN))
         lines = grokbot.clean(shown[len(grokbot.FRESH_SCREEN):]).splitlines()
+        self.assertEqual(lines[0], "")      # headroom between the pane's top edge and the mascot
+        lines = lines[1:]
         self.assertEqual([line[:len(grokbot.LOGO[0])] for line in lines[:3]], list(grokbot.LOGO))
         self.assertIn("Grok Bot Agent v" + grokbot.VERSION, lines[0])
         self.assertTrue(lines[2].endswith("~" + str(Path("/project"))))
@@ -300,7 +302,7 @@ class BannerTest(unittest.TestCase):
         grokbot.banner("/work", session={"id": "abc"}, out=pane)
         shown = pane.getvalue()
         self.assertNotIn("\x1b", shown)
-        lines = shown.splitlines()
+        lines = shown.splitlines()[1:]
         self.assertEqual(lines[0], grokbot.LOGO[0] + "  Grok Bot Agent v" + grokbot.VERSION)
         # Text past the mascot's three rows stays in the same column.
         self.assertEqual(lines[3], " " * len(grokbot.LOGO[0]) + "  Session abc")

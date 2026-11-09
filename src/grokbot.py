@@ -744,7 +744,7 @@ def banner(cwd, session=None, mode=None, out=None):
     if session:
         text.append(paint("Session " + session["id"], (135, 135, 145)))
     logo = list(LOGO) + [" " * len(LOGO[0])] * (len(text) - len(LOGO))
-    out.write((FRESH_SCREEN if tty else "")
+    out.write((FRESH_SCREEN if tty else "") + "\n"     # a line of headroom above the mascot
               + "\n".join(paint(art, (240, 130, 175)) + "  " + line for art, line in zip(logo, text)) + "\n\n")
     out.flush()
 
