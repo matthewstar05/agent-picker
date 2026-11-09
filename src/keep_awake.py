@@ -3,7 +3,7 @@
 With Usage panel › Keep awake while agents work on, an Amphetamine session runs
 whenever an agent is working, so turning the display off or closing the lid
 doesn't put the Mac to sleep and pause it. The display may still sleep; only
-the system stays awake. The session ends a few minutes after the last agent
+the system stays awake. The session ends a minute after the last agent
 stops working, or as soon as the setting is turned off.
 
 An agent counts as working when Herdr reports one of its panes as working, a
@@ -39,12 +39,12 @@ HERDR = os.environ.get("HERDR_BIN_PATH") or "herdr"
 APP = "Amphetamine"
 APP_PATHS = (Path("/Applications/Amphetamine.app"), Path.home() / "Applications/Amphetamine.app")
 INTERVAL = 10        # seconds between looks at the agents, across every process that ticks
-GRACE = 180          # seconds kept awake after the last working agent, to bridge gaps between turns
+GRACE = 60           # seconds kept awake after the last working agent, to bridge gaps between turns
 _service_checked = False   # whether this process has made sure the dispatcher is installed
 
 KEEP_AWAKE = preferences.register(preferences.Setting(
     "usage.keep_awake", "Usage panel", "Keep awake while agents work", [False, True], False,
-    hint="Runs an Amphetamine session while an agent works, so a closed lid or dark screen doesn't pause it.",
+    hint="Amphetamine keeps the Mac awake while agents work, lid shut too.",
     names={False: "off", True: "on"})) if SUPPORTED else None
 
 
@@ -59,15 +59,16 @@ def installed():
 # ---- what's working ---------------------------------------------------------
 
 def _live_turns(folder):
-    """Whether a live-turn file in folder belongs to a process that's still running."""
+    """The pid of a live-turn file in folder whose process is still running, or None."""
     from star_mesh import alive
     for path in folder.glob("*.json") if folder.is_dir() else ():
         try:
-            if alive(int(json.loads(path.read_text(encoding="utf-8"))["pid"])):
-                return True
+            pid = int(json.loads(path.read_text(encoding="utf-8"))["pid"])
         except (OSError, ValueError, KeyError, TypeError):
             continue
-    return False
+        if alive(pid):
+            return pid
+    return None
 
 
 def _herdr_working():
@@ -76,22 +77,26 @@ def _herdr_working():
                              errors="replace", timeout=5)
         panes = json.loads(out.stdout)["result"]["panes"]
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
-        return False
-    return any(p.get("agent") and p.get("agent_status") == "working" for p in panes)
+        return []
+    return [f"{p.get('agent')} in Herdr pane {p.get('pane_id')}" for p in panes
+            if p.get("agent") and p.get("agent_status") == "working"]
 
 
 def _scheduled_running():
     try:
         import prompt_scheduler
-        return any(job.get("running") for job in prompt_scheduler.read()["jobs"])
+        return [job["id"] for job in prompt_scheduler.read()["jobs"] if job.get("running")]
     except Exception:
-        return False
+        return []
 
 
 def agents_working():
+    """What is working right now, as short descriptions; empty when nothing is."""
     base = state_dir()
-    return (_live_turns(base / "star" / "live") or _live_turns(base / "grokbot" / "live")
-            or _scheduled_running() or _herdr_working())
+    found = [f"{name} turn (pid {pid})" for name, pid in
+             (("StarCLI", _live_turns(base / "star" / "live")), ("Grok Bot", _live_turns(base / "grokbot" / "live"))) if pid]
+    found += [f"scheduled prompt {job}" for job in _scheduled_running()]
+    return found + _herdr_working()
 
 
 # ---- Amphetamine ------------------------------------------------------------
@@ -114,8 +119,12 @@ def session_active():
 
 def ours():
     """Whether the running session looks like the one start() began: no end time, no Trigger.
-    A timed session you started over it is yours, and is left alone."""
-    return _tell("session time remaining") == "0" and _tell("session is Trigger") == "false"
+    A timed session you started over it is yours, and is left alone. None when
+    Amphetamine couldn't be asked."""
+    remaining, trigger = _tell("session time remaining"), _tell("session is Trigger")
+    if remaining is None or trigger is None:
+        return None
+    return remaining == "0" and trigger == "false"
 
 
 def start():
@@ -193,7 +202,9 @@ def tick(now=None, force=False):
             if on and not _service_checked:
                 _service_checked = True
                 threading.Thread(target=ensure_service, daemon=True).start()
-            if on and agents_working():
+            working = agents_working() if on else []
+            state["reason"] = working[:5]   # what kept the Mac awake last, for anyone wondering why
+            if working:
                 state["working"] = now
             wanted = on and now - state.get("working", 0) < GRACE
             if wanted and installed():
@@ -207,9 +218,13 @@ def tick(now=None, force=False):
             elif not wanted:
                 state["dismissed"] = False
                 if state.get("owned"):
-                    if session_active() and ours():
-                        end()
-                    state["owned"] = False
+                    active = session_active()
+                    mine = ours() if active else None
+                    if active is False or mine is False:
+                        state["owned"] = False   # already over, or replaced by a session of yours
+                    elif mine and end():
+                        state["owned"] = False
+                    # Otherwise Amphetamine couldn't be asked or told: keep it and try again next look.
             _write(state)
             return state
     except OSError:

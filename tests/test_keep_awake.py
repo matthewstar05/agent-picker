@@ -54,7 +54,7 @@ class KeepAwakeTests(unittest.TestCase):
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
         self.root = Path(folder.name)
-        self.working = False
+        self.working = []
         self.app = FakeAmphetamine()
         for patcher in (patch.object(preferences, "PATH", self.root / "preferences.json"),
                         patch.object(preferences, "_values", {}),
@@ -73,14 +73,14 @@ class KeepAwakeTests(unittest.TestCase):
         self.assertIs(keep_awake.KEEP_AWAKE.default, False)
 
     def test_a_working_agent_starts_a_session_that_ends_after_the_grace_period(self):
-        self.working = True
+        self.working = ["claude in Herdr pane w1:p1"]
         state = keep_awake.tick(now=1000)
         self.assertTrue(state["owned"])
         self.assertEqual(self.app.started(), 1)
         self.assertIn("displaySleepAllowed:true", self.app.commands[1])
         self.assertTrue(self.app.closed_display, "the lid can close without sleeping")
 
-        self.working = False
+        self.working = []
         keep_awake.tick(now=1000 + keep_awake.GRACE - 5)   # a gap between turns
         self.assertTrue(self.app.active)
         state = keep_awake.tick(now=1000 + keep_awake.GRACE + 5)
@@ -88,8 +88,25 @@ class KeepAwakeTests(unittest.TestCase):
         self.assertFalse(self.app.active)
         self.assertEqual(self.app.ended(), 1)
 
+    def test_records_what_kept_the_mac_awake(self):
+        self.working = ["claude in Herdr pane w1:p1"]
+        self.assertEqual(keep_awake.tick(now=1000)["reason"], ["claude in Herdr pane w1:p1"])
+        self.working = []
+        self.assertEqual(keep_awake.tick(now=1020)["reason"], [])
+
+    def test_a_session_that_cant_be_ended_yet_is_retried_not_forgotten(self):
+        self.working = ["claude in Herdr pane w1:p1"]
+        keep_awake.tick(now=1000)
+        self.working = []
+        later = 1000 + keep_awake.GRACE + 5
+        with patch.object(keep_awake, "_tell", return_value=None):   # Amphetamine busy or not answering
+            self.assertTrue(keep_awake.tick(now=later)["owned"])
+        self.assertTrue(self.app.active)
+        self.assertFalse(keep_awake.tick(now=later + keep_awake.INTERVAL)["owned"])
+        self.assertFalse(self.app.active)
+
     def test_looks_at_agents_at_most_every_interval(self):
-        self.working = True
+        self.working = ["claude in Herdr pane w1:p1"]
         keep_awake.tick(now=1000)
         sent = len(self.app.commands)
         self.assertIsNone(keep_awake.tick(now=1000 + keep_awake.INTERVAL / 2))
@@ -97,38 +114,38 @@ class KeepAwakeTests(unittest.TestCase):
 
     def test_your_own_session_is_never_started_over_or_ended(self):
         self.app.active, self.app.remaining = True, 3600
-        self.working = True
+        self.working = ["claude in Herdr pane w1:p1"]
         keep_awake.tick(now=1000)
-        self.working = False
+        self.working = []
         keep_awake.tick(now=1000 + keep_awake.GRACE + 5)
         self.assertEqual((self.app.started(), self.app.ended()), (0, 0))
         self.assertTrue(self.app.active)
 
     def test_a_timed_session_started_over_ours_is_left_running(self):
-        self.working = True
+        self.working = ["claude in Herdr pane w1:p1"]
         keep_awake.tick(now=1000)
         self.app.remaining = 1800   # you started a 30 minute session over it
-        self.working = False
+        self.working = []
         keep_awake.tick(now=1000 + keep_awake.GRACE + 5)
         self.assertEqual(self.app.ended(), 0)
         self.assertTrue(self.app.active)
 
     def test_a_session_ended_under_us_is_not_restarted_until_agents_idle(self):
-        self.working = True
+        self.working = ["claude in Herdr pane w1:p1"]
         keep_awake.tick(now=1000)
         self.app.active = False   # ended from the menu bar, or on low battery
         keep_awake.tick(now=1020)
         keep_awake.tick(now=1040)
         self.assertEqual(self.app.started(), 1)
 
-        self.working = False
+        self.working = []
         keep_awake.tick(now=1040 + keep_awake.GRACE + 5)
-        self.working = True
+        self.working = ["claude in Herdr pane w1:p1"]
         keep_awake.tick(now=1040 + keep_awake.GRACE + 20)
         self.assertEqual(self.app.started(), 2)
 
     def test_turning_the_setting_off_ends_our_session_right_away(self):
-        self.working = True
+        self.working = ["claude in Herdr pane w1:p1"]
         keep_awake.tick(now=1000)
         preferences.put(keep_awake.KEEP_AWAKE.key, False)
         state = keep_awake.tick(now=1001)
@@ -137,19 +154,19 @@ class KeepAwakeTests(unittest.TestCase):
 
     def test_off_does_nothing_at_all(self):
         preferences.put(keep_awake.KEEP_AWAKE.key, False)
-        self.working = True
+        self.working = ["claude in Herdr pane w1:p1"]
         self.assertIsNone(keep_awake.tick(now=1000))
         self.assertEqual(self.app.commands, [])
 
     def test_missing_amphetamine_is_never_asked(self):
-        self.working = True
+        self.working = ["claude in Herdr pane w1:p1"]
         with patch.object(keep_awake, "installed", return_value=False):
             keep_awake.tick(now=1000)
         self.assertEqual(self.app.commands, [])
 
     def test_another_process_ticking_is_not_doubled_up(self):
         import fcntl
-        self.working = True
+        self.working = ["claude in Herdr pane w1:p1"]
         with open(keep_awake.LOCK, "a") as handle:
             fcntl.flock(handle, fcntl.LOCK_EX)
             self.assertIsNone(keep_awake.tick(now=1000))
@@ -163,7 +180,7 @@ class AgentsWorkingTests(unittest.TestCase):
         self.addCleanup(folder.cleanup)
         self.root = Path(folder.name)
         for patcher in (patch.object(keep_awake, "state_dir", return_value=self.root),
-                        patch.object(keep_awake, "_scheduled_running", return_value=False)):
+                        patch.object(keep_awake, "_scheduled_running", return_value=[])):
             patcher.start()
             self.addCleanup(patcher.stop)
 
@@ -173,24 +190,24 @@ class AgentsWorkingTests(unittest.TestCase):
         return patch.object(keep_awake.subprocess, "run", return_value=Done())
 
     def test_a_working_herdr_agent_counts_and_an_idle_one_does_not(self):
-        with self.herdr([{"agent": "claude", "agent_status": "idle"},
-                         {"agent": None, "agent_status": "working"}]):
-            self.assertFalse(keep_awake.agents_working())
-        with self.herdr([{"agent": "codex", "agent_status": "working"}]):
-            self.assertTrue(keep_awake.agents_working())
+        with self.herdr([{"pane_id": "w1:p1", "agent": "claude", "agent_status": "idle"},
+                         {"pane_id": "w1:p2", "agent": None, "agent_status": "working"}]):
+            self.assertEqual(keep_awake.agents_working(), [])
+        with self.herdr([{"pane_id": "w1:p3", "agent": "codex", "agent_status": "working"}]):
+            self.assertEqual(keep_awake.agents_working(), ["codex in Herdr pane w1:p3"])
 
     def test_live_star_and_grok_bot_turns_count_only_while_their_process_runs(self):
         live = self.root / "grokbot" / "live"
         live.mkdir(parents=True)
         (live / "turn.json").write_text(json.dumps({"pid": os.getpid()}))
         with self.herdr([]):
-            self.assertTrue(keep_awake.agents_working())
+            self.assertEqual(keep_awake.agents_working(), [f"Grok Bot turn (pid {os.getpid()})"])
             (live / "turn.json").write_text(json.dumps({"pid": 999999999}))
-            self.assertFalse(keep_awake.agents_working())
+            self.assertEqual(keep_awake.agents_working(), [])
 
     def test_herdr_missing_is_not_working(self):
         with patch.object(keep_awake.subprocess, "run", side_effect=OSError):
-            self.assertFalse(keep_awake.agents_working())
+            self.assertEqual(keep_awake.agents_working(), [])
 
 
 if __name__ == "__main__":
