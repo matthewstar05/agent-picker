@@ -39,6 +39,7 @@ import urllib.error
 import agent_picker as ap
 import cursor_pools
 import preferences
+import themes
 
 Line, mix, wave, clip, until = ap.Line, ap.mix, ap.wave, ap.clip, ap.until
 ESC, RESET, BOLD, FAINT = ap.ESC, ap.RESET, ap.BOLD, ap.FAINT
@@ -48,21 +49,10 @@ HERDR = os.environ.get("HERDR_BIN_PATH") or "herdr"
 
 # ---- themes -----------------------------------------------------------------
 # "brand" draws each agent in its own colors, like agent-picker. Every other
-# theme paints the whole panel in one gradient, spread across the cards.
+# theme paints the whole panel in one gradient, spread across the cards. The
+# list lives in themes.py, shared with every screen.
 
-THEMES = [
-    {"name": "brand", "stops": None},
-    {"name": "aurora", "stops": [(40, 230, 170), (60, 170, 255), (170, 110, 255)]},
-    {"name": "sunset", "stops": [(255, 200, 90), (255, 120, 90), (230, 70, 150)]},
-    {"name": "vapor", "stops": [(255, 110, 200), (160, 100, 255), (80, 220, 255)]},
-    {"name": "ocean", "stops": [(30, 90, 200), (40, 180, 230), (120, 240, 230)]},
-    {"name": "matrix", "stops": [(20, 120, 40), (60, 220, 90), (180, 255, 170)]},
-    {"name": "ember", "stops": [(200, 40, 30), (255, 120, 30), (255, 210, 80)]},
-    {"name": "sakura", "stops": [(255, 190, 215), (240, 130, 175), (255, 225, 238)]},
-    {"name": "glacier", "stops": [(200, 235, 255), (120, 180, 255), (235, 245, 255)]},
-    {"name": "mono", "stops": [(110, 110, 120), (200, 200, 210), (250, 250, 255)]},
-    {"name": "rainbow", "stops": "rainbow"},
-]
+THEMES = themes.THEMES     # the shared list from themes.json; it grows when a theme is added
 BRAND_FRAME = {"color": (190, 190, 198)}
 
 
@@ -87,7 +77,7 @@ SPIN = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
 
 def theme_index(name):
-    return next((i for i, th in enumerate(THEMES) if th["name"] == name), 0)
+    return themes.index(name)
 
 
 def _legacy(name, default):
@@ -98,9 +88,9 @@ def _legacy(name, default):
         return default
 
 
-THEME = preferences.register(preferences.Setting(
-    "usage.theme", "Usage panel", "Theme", [th["name"] for th in THEMES], _legacy("theme", "brand"),
-    hint="Colors for the usage panel. t and T switch it there too."))
+THEME = themes.track(preferences.register(preferences.Setting(
+    "usage.theme", "Usage panel", "Theme", themes.names(), _legacy("theme", "brand"),
+    hint="Colors for the usage panel. t and T switch it there too.")))
 ANIMATE = preferences.register(preferences.Setting(
     "usage.animate", "Usage panel", "Animation", [True, False], _legacy("animate", "1") == "1",
     hint="Off redraws once a second and uses almost no CPU. a toggles it there too.",
@@ -704,6 +694,7 @@ class View:
 
     @property
     def theme(self):
+        themes.reload()     # rate limited; picks up a theme added to either file
         return theme_index(preferences.get(THEME.key))
 
     @property
@@ -904,7 +895,7 @@ def _card(view, i, cw, t, now, entry, fetching, working, dots=None, rows=3, pane
     agent = view.agents[i]
     name, st = agent["name"], view.style(i)
     themed = THEMES[view.theme]["stops"] is not None
-    rainbow = THEMES[view.theme]["name"] == "rainbow"
+    rainbow = THEMES[view.theme]["stops"] == "rainbow"
     live = working > 0
     dots = int(t * 3) % 3 if dots is None else dots
     stale = bool(entry) and now - entry["fetched"] > 20 * 60 and not fetching
@@ -1068,7 +1059,7 @@ def compact_row(view, i, width, t, now):
     agent = view.agents[i]
     name, st = agent["name"], view.style(i)
     brand = THEMES[view.theme]["stops"] is None
-    rainbow = THEMES[view.theme]["name"] == "rainbow"
+    rainbow = THEMES[view.theme]["stops"] == "rainbow"
     with LOCK:
         entry = USAGE.get(name)
         working = WORKING.get(name, 0)

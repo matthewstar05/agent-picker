@@ -248,9 +248,20 @@ class HerdrAiTests(unittest.TestCase):
         on = patch("handoff.enabled", return_value=True)
         self.handoff_on = on.start()
         self.addCleanup(on.stop)
+        # The file browser is the coordinator's module; any existing file will do,
+        # and the "Terminal pane" setting reads as the browser unless a test says.
+        fs = Path(self.state.name) / "fs_browser.py"
+        fs.write_text("")
+        browser_entry = patch.object(herdr_ai, "FS_ENTRY", fs)
+        browser_entry.start()
+        self.addCleanup(browser_entry.stop)
+        files = patch("team.terminal_files", return_value=True)
+        self.terminal_files = files.start()
+        self.addCleanup(files.stop)
 
-    def run_cli(self, env, argv=(), cwd=ROOT, entry=herdr_ai.main, setup=None):
-        """setup is what the menu answers: None for Standard, a provider name, or False to quit."""
+    def run_cli(self, env, argv=(), cwd=ROOT, entry=herdr_ai.main, setup=None, tty=False):
+        """setup is what the menu answers: None for Standard, a provider name, or False to quit.
+        tty: whether stdin and stdout look interactive, which the file browser needs."""
         clean = {k: v for k, v in os.environ.items() if not k.startswith("HERDR_")}
         self.menu = patch.object(herdr_ai, "pick_setup", side_effect=lambda name=None: setup if name is None
                                  else None if name == "standard" else name.capitalize())
@@ -260,11 +271,24 @@ class HerdrAiTests(unittest.TestCase):
              patch.object(herdr_ai.subprocess, "run", self.fake), \
              patch.object(herdr_ai.subprocess, "call", return_value=0) as attach, \
              patch.object(herdr_ai.os, "execvp") as execvp, \
+             patch.object(herdr_ai.os, "execv") as execv, \
+             patch.object(herdr_ai, "open_browser", side_effect=self.record_browser) as browser, \
+             patch.object(herdr_ai.sys.stdin, "isatty", return_value=tty), \
+             patch.object(herdr_ai.sys.stdout, "isatty", return_value=tty), \
              patch.object(herdr_ai, "stop_panes") as stop:
-            entry(list(argv), herdr="herdr", cwd=str(cwd))
+            self.browser_states = []
+            self.status = entry(list(argv), herdr="herdr", cwd=str(cwd))
+        execv.assert_not_called()   # only open_browser may replace the process
         self.stopped = stop.call_args[0][1] if stop.called else []
         self.menu_calls = menu.call_args_list
+        self.browser_opened = browser.called
         return attach.called or execvp.called
+
+    def record_browser(self):
+        """open_browser's stand-in: the saved layout at the moment herdr-ai becomes the browser."""
+        path = Path(self.state.name) / "herdr-ai-tabs.json"
+        self.browser_states.append(json.loads(path.read_text()) if path.exists() else None)
+        return 0
 
     def test_inside_herdr_lays_out_the_current_tab(self):
         attached = self.run_cli(INSIDE, ["demo"])
@@ -1007,6 +1031,161 @@ class HerdrAiTests(unittest.TestCase):
         self.assertEqual(words[0], "/opt/my python/bin/python3")
         self.assertEqual(words[-2:], ["--picker-launch", "Codex"])
 
+    # ---- the file browser in the terminal pane ---------------------------------
+
+    def test_browser_opens_only_interactively_in_the_terminal_pane(self):
+        entry = {"panes": {"terminal": "w9:p1", "claude": "w9:p2"}}
+        cases = [
+            ("terminal pane", {}, {}, True),
+            ("another pane", {"HERDR_PANE_ID": "w9:p2"}, {}, False),
+            ("no pane id", {"HERDR_PANE_ID": ""}, {}, False),
+            ("stdin not a tty", {}, {"stdin": False}, False),
+            ("stdout not a tty", {}, {"stdout": False}, False),
+            ("--no-fs", {}, {"no_fs": True}, False),
+            ("setting is shell", {}, {"files": False}, False),
+            ("dry run", {"HERDR_AI_DRY": "1"}, {}, False),
+            ("no layout", {}, {"entry": None}, False),
+            ("no browser module", {}, {"missing": True}, False),
+        ]
+        for name, env, opts, expected in cases:
+            with self.subTest(name), \
+                 patch.dict(os.environ, {**INSIDE, "HERDR_AI_DRY": "0", **env}), \
+                 patch.object(herdr_ai.sys.stdin, "isatty", return_value=opts.get("stdin", True)), \
+                 patch.object(herdr_ai.sys.stdout, "isatty", return_value=opts.get("stdout", True)), \
+                 patch.object(herdr_ai, "FS_ENTRY", Path(self.state.name) / "missing.py"
+                              if opts.get("missing") else herdr_ai.FS_ENTRY):
+                self.terminal_files.return_value = opts.get("files", True)
+                self.assertEqual(herdr_ai.opens_browser(opts.get("entry", entry), opts.get("no_fs", False)),
+                                 expected)
+
+    def test_open_browser_replaces_herdr_ai_with_the_icon_view(self):
+        with patch.object(herdr_ai.sys, "platform", "darwin"), \
+             patch.object(herdr_ai.os, "execv") as execv, \
+             patch.object(herdr_ai.subprocess, "call") as call:
+            herdr_ai.open_browser()
+        argv = [sys.executable, str(herdr_ai.FS_ENTRY), "--herdr", "--view", "icon"]
+        execv.assert_called_once_with(sys.executable, argv)
+        call.assert_not_called()
+        self.assertEqual(shlex.split(herdr_ai.fs_command()), argv)
+        # Windows exec would hand the console back to the shell while the browser runs.
+        with patch.object(herdr_ai.sys, "platform", "win32"), \
+             patch.object(herdr_ai.os, "execv") as execv, \
+             patch.object(herdr_ai.subprocess, "call", return_value=0) as call:
+            self.assertEqual(herdr_ai.open_browser(), 0)
+        execv.assert_not_called()
+        call.assert_called_once_with(argv)
+
+    def test_new_layout_and_refresh_end_in_the_browser(self):
+        for setup in (None, "Antigravity"):
+            with self.subTest(setup=setup):
+                self.setUp()
+                self.run_cli(INSIDE, setup=setup, tty=True)
+                self.assertTrue(self.browser_opened)
+                # Only once the layout is saved, labelled and synced.
+                saved = self.browser_states[-1]["default|w9:t1"]
+                self.assertEqual(saved["panes"]["terminal"], "w9:p1")
+                self.assertEqual(saved["label"], ROOT.name)
+                self.assertNotIn("w9:p1", self.fake.runs())
+                self.fake.start_agents()
+                self.run_cli(INSIDE, cwd=ROOT / "src", setup=setup, tty=True)
+                self.assertFalse([c for c in self.fake.calls if c[:2] == ["pane", "split"]])
+                self.assertTrue(self.fake.runs())   # the agents refreshed first
+                self.assertTrue(self.browser_opened)
+                self.assertEqual(self.browser_states[-1]["default|w9:t1"]["label"], "src")
+
+    def test_herdr_ai_in_another_pane_keeps_its_shell(self):
+        self.run_cli(INSIDE, tty=True)
+        panes = self.team_panes()["panes"]
+        self.fake.start_agents()
+        self.run_cli({**INSIDE, "HERDR_PANE_ID": panes["picker"]}, tty=True)
+        self.assertFalse(self.browser_opened)
+
+    def test_terminal_pane_setting_shell_and_no_fs_keep_the_shell(self):
+        self.terminal_files.return_value = False
+        self.run_cli(INSIDE, tty=True)
+        self.assertFalse(self.browser_opened)
+        self.terminal_files.return_value = True
+        self.fake.start_agents()
+        self.run_cli(INSIDE, ["--no-fs"], tty=True)
+        self.assertFalse(self.browser_opened)
+
+    def test_outside_herdr_starts_the_browser_in_the_new_terminal_pane(self):
+        self.assertTrue(self.run_cli({}))
+        terminal = "w9:p1"   # the new workspace's root pane
+        self.assertEqual(self.fake.runs()[terminal], [herdr_ai.fs_command()])
+        self.assertEqual(self.fake.calls[-1], ["pane", "run", terminal, herdr_ai.fs_command()])
+        self.assertFalse(self.browser_opened)   # this process attaches to herdr instead
+        for name, env, argv, files in (("--no-fs", {}, ["--no-fs"], True), ("shell", {}, [], False),
+                                       ("dry", {"HERDR_AI_DRY": "1"}, [], True)):
+            with self.subTest(name):
+                self.setUp()
+                self.terminal_files.return_value = files
+                self.assertTrue(self.run_cli(env, argv))
+                self.assertNotIn(terminal, self.fake.runs())
+
+    def test_refresh_flag_without_a_layout_changes_nothing(self):
+        import contextlib
+        import io
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.run_cli(INSIDE, ["--refresh"], tty=True)
+        self.assertEqual(self.status, 3)
+        self.assertEqual(err.getvalue().strip(), herdr_ai.NO_LAYOUT)
+        self.assertEqual([c for c in self.fake.calls if c[:2] != ["pane", "list"]], [])
+        self.assertEqual(self.menu_calls, [])
+        self.assertFalse((Path(self.state.name) / "herdr-ai-tabs.json").exists())
+        self.assertFalse(self.browser_opened)
+
+    def test_refresh_flag_refreshes_a_laid_out_tab_and_never_opens_the_browser(self):
+        self.run_cli(INSIDE, cwd=ROOT)
+        panes = self.team_panes()["panes"]
+        self.fake.start_agents()
+        self.run_cli(INSIDE, ["--refresh"], cwd=ROOT / "src", tty=True)
+        self.assertEqual(self.status, 0)
+        self.assertFalse(self.browser_opened)
+        self.assertFalse([c for c in self.fake.calls if c[:2] == ["pane", "split"]])
+        self.assertEqual(self.resumed_argv(panes["claude"])[-2:], ["--resume", "session-" + panes["claude"]])
+        self.assertEqual(self.fake.runs()[panes["claude"]][0], herdr_ai.route_directory_command(str(ROOT / "src")))
+        self.assertNotIn(panes["terminal"], self.fake.runs())
+        self.assertEqual(self.fake.label, "src")
+        self.fake.start_agents()
+        self.run_cli(INSIDE, ["--refresh", "demo"], tty=True)
+        self.assertEqual(self.fake.label, "demo")
+        self.assertFalse(self.browser_opened)
+
+    def test_refresh_flag_outside_herdr_exits_2(self):
+        import contextlib
+        import io
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertFalse(self.run_cli({}, ["--refresh"]))
+        self.assertEqual(self.status, 2)
+        self.assertEqual(self.fake.calls, [])
+
+    def test_refresh_flag_keeps_the_layout_checks(self):
+        self.run_cli(INSIDE)
+        self.fake.start_agents()
+        with patch("team.find", return_value="Claude"), self.assertRaises(SystemExit) as stop:
+            self.run_cli(INSIDE, ["--refresh", "--setup", "claude"])
+        self.assertIn("laid out as Standard", str(stop.exception))
+        self.assertEqual([c for c in self.fake.calls if c[:2] in (["pane", "run"], ["pane", "split"])], [])
+
+    def test_no_fs_parses_alongside_mode_setup_and_label(self):
+        for argv in (["--no-fs", "--setup", "codex", "--mode", "individual", "demo"],
+                     ["--setup", "codex", "--mode=individual", "demo", "--no-fs"],
+                     ["--mode", "individual", "--no-fs", "--setup=codex", "demo"]):
+            with self.subTest(argv=argv):
+                self.setUp()
+                self.run_cli(INSIDE, argv, tty=True)
+                self.assertEqual(self.status, 0)
+                self.assertEqual([c.args for c in self.menu_calls], [("codex",)])
+                self.assertEqual(self.team_plan.call_args.args, ("Codex", "individual"))
+                self.assertEqual(self.team_panes()["team"], "Codex")
+                self.assertEqual(self.fake.label, "demo")
+                self.assertFalse(self.browser_opened)
+        with self.assertRaises(SystemExit) as raised:
+            self.run_cli(INSIDE, ["--no-fs", "demo", "extra"])
+        self.assertIn("one label", str(raised.exception))
+
 
 
 class TeamPlanTests(unittest.TestCase):
@@ -1027,6 +1206,21 @@ class TeamPlanTests(unittest.TestCase):
             with patch.object(preferences, "get", return_value=value):
                 self.assertEqual(team.mode(), value)
         self.assertEqual(herdr_ai.team_plan("Codex", "off"), {"lead": "Codex", "gemini": False, "mode": "off"})
+
+    def test_terminal_pane_setting_defaults_to_the_file_browser(self):
+        import preferences
+        import team
+        with tempfile.TemporaryDirectory() as folder, \
+             patch.object(preferences, "PATH", Path(folder) / "preferences.json"), \
+             patch.object(preferences, "_values", None):
+            self.assertTrue(team.terminal_files())
+            self.assertIs(preferences.find(team.TERMINAL.key), team.TERMINAL)
+            self.assertEqual(team.TERMINAL.show("files"), "file browser")
+            preferences.put(team.TERMINAL.key, "shell")
+            self.assertFalse(team.terminal_files())
+            preferences.put(team.TERMINAL.key, "bogus")   # an unknown value means the default
+            self.assertTrue(team.terminal_files())
+
 
 if __name__ == "__main__":
     unittest.main()

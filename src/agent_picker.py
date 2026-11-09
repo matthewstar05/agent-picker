@@ -1366,6 +1366,10 @@ def doctor():
     print(f"Checkout: {ROOT}")
     print(f"Local config: {config_path()}")
     print(f"Local state: {STATE}")
+    import themes   # only the doctor needs it in the selector
+    print("Themes: " + ", ".join(f"{path}{'' if exists else ' (not created)'}" for path, exists in themes.sources()))
+    for problem in themes.problems():
+        print("  " + problem)
     missing = []
     for agent in AGENTS:
         argv = resolve_argv(agent)

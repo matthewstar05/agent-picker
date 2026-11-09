@@ -29,7 +29,7 @@ cd ~/Desktop/Projects/agent-picker
 python3 scripts/install-macos.py
 ```
 
-Open a new terminal, then run `agent --picker-doctor` and `agent`. The installer backs up the existing `~/.local/bin/agent-picker` and changed shell profiles, replaces the launcher with a checkout-linked wrapper, does the same for `~/.local/bin/herdr-ai`, and adds a managed `agent` alias to `.zshrc` and `.bashrc`. On this Mac, it replaces the original alias and preserves Kiro's post integration at the bottom of `.zshrc`. Do not move or delete the checkout after installation; rerun the installer if you relocate it or your Python executable.
+Open a new terminal, then run `agent --picker-doctor` and `agent`. The installer backs up the existing `~/.local/bin/agent-picker` and changed shell profiles, replaces the launcher with a checkout-linked wrapper, does the same for `herdr-ai`, `agent-route`, `herdr-reset`, `herdr-fs`, `starcli`, `schedule`, `grokbot` and `grok` in `~/.local/bin`, and adds managed `agent`, `usage`, `star`, `schedule`, `grok` and `fs` aliases to `.zshrc` and `.bashrc`. On this Mac, it replaces the original alias and preserves Kiro's post integration at the bottom of `.zshrc`. Do not move or delete the checkout after installation; rerun the installer if you relocate it or your Python executable.
 
 ## Commands
 
@@ -47,6 +47,8 @@ usage                                opens straight on the usage panel
 schedule                             open the local prompt scheduler
 grok                                 open the Grok Bot terminal client
 grok -p "fix the failing test"        run one Grok Bot task headless
+fs                                   browse files Finder-style in the terminal
+fs ~/code --view details             open a folder in the details view
 agent --picker-schedule               the same scheduler inside agent
 ```
 
@@ -146,7 +148,9 @@ The [StarCLI parity checklist](docs/STARCLI_PARITY.md) tracks remaining capabili
 
 Run `herdr-ai` in a herdr pane to lay out that tab as the workbench: Antigravity, Codex, Cursor or Kiro, the agent selector, Claude, the usage panel, and a terminal along the bottom. The pane you ran it from becomes that terminal. Nothing else on the tab is touched, and no new tab is created. Outside herdr it opens a new workspace and attaches. An optional label renames the tab; otherwise the tab is named after the directory, unless you already renamed it in herdr (herdr names new tabs with a number).
 
-In the five Standard agent panes, quitting an agent (`/quit`, `/exit`, or Ctrl+C or Ctrl+D) reopens the agent selector in that pane, so you can switch the pane to another provider. Esc or q in that selector leaves you at the pane's shell. Rerouting keeps the provider you switched to. Teams and plain `agent` runs still exit to the shell. The same goes for an agent started any other way in a tab herdr-ai laid out, such as one typed at a pane's shell or a pane split off: herdr-ai's background watcher notices it quit back to the shell prompt and opens the selector there within a second or two. The tab's bottom terminal stays a shell, as does a pane you left with Esc from the selector.
+In every setup, Standard and each provider's team alike, that bottom-left terminal becomes `fs`, the file browser, in icon view. It opens on the Desktop by default; its **Herdr pane opens in** setting (`s` in the browser) picks another folder. q or Esc in it drops to the pane's shell, and `fs` reopens it there. Shift+Enter on a folder refreshes the tab's agents into that folder, the way running `herdr-ai` from it would (`herdr-ai --refresh`); on a tab herdr-ai has not laid out it offers to run `herdr-ai` instead. Set **Terminal pane** to **shell** in `herdr-ai --settings` (or pass `--no-fs` for one run) to keep a plain shell there.
+
+In the five Standard agent panes, quitting an agent (`/quit`, `/exit`, or Ctrl+C or Ctrl+D) reopens the agent selector in that pane, so you can switch the pane to another provider. Esc or q in that selector leaves you at the pane's shell. Rerouting keeps the provider you switched to. Teams and plain `agent` runs still exit to the shell. The same goes for an agent started any other way in a tab herdr-ai laid out, such as one typed at a pane's shell or a pane split off: herdr-ai's background watcher notices it quit back to the shell prompt and opens the selector there within a second or two. The watcher leaves the tab's bottom terminal alone, whether it shows the file browser or a shell, and a pane you left with Esc from the selector stays a shell.
 
 `herdr-ai` first opens a menu drawn like the agent selector, with each provider's usage beside it. **Standard** (sakura pink) is the workbench above, unchanged. Choosing a provider lays out five agents of that provider instead: one on the right, four in a 2x2 grid on the left, the terminal under them, and a short usage panel for that provider alone under the right-hand agent. The launch animation and key bindings match the selector; Esc quits without touching the tab, and the menu remembers your last choice. `herdr-ai --setup NAME [label]` skips the menu (`standard`, `claude`, `codex`, `antigravity`, `cursor`, `kiro`), and without a terminal to draw in it lays out Standard.
 
@@ -194,7 +198,7 @@ A small background observer keeps the expanded Agents sidebar's team indicators 
 
 The expanded Spaces sidebar derives its indicators from orchestrators and standalone agents only. Crew completions and approval prompts do not set a space indicator. A lead still inherits its orange working state while its crew is working, so the space reflects that displayed lead state. Space indicators use the same priority and completion acknowledgement as the Agents sidebar, regardless of whether crew rows are shown. The compact sidebar rail and mobile status badges remain native Herdr aggregates.
 
-Run `herdr-ai` again from a tab it already laid out, usually from the bottom terminal, to refresh it without adding panes or clearing conversations. Idle agents restart with their exact conversation IDs and existing native launch arguments, preserving their provider, model, effort, permission flags, and team instructions. This supports Claude, Codex, Cursor, Kiro, Antigravity, and a Star mesh (each idle StarCLI restarts with `--resume-id`, so its conversation, name, role, provider pin, tier, and plan mode come back). Old opening prompts are removed so refreshing never submits the same task or team introduction again. Quitting a Standard agent still opens the selector.
+Run `herdr-ai` again from a tab it already laid out, usually from the bottom terminal (q leaves the file browser first; Shift+Enter in it does the same refresh), to refresh it without adding panes or clearing conversations. Run from the terminal pane, it reopens the file browser there when it finishes. `herdr-ai --refresh` refreshes the same way but never lays out a tab; on one herdr-ai has not laid out it exits with status 3 and changes nothing. Idle agents restart with their exact conversation IDs and existing native launch arguments, preserving their provider, model, effort, permission flags, and team instructions. This supports Claude, Codex, Cursor, Kiro, Antigravity, and a Star mesh (each idle StarCLI restarts with `--resume-id`, so its conversation, name, role, provider pin, tier, and plan mode come back). Old opening prompts are removed so refreshing never submits the same task or team introduction again. Quitting a Standard agent still opens the selector.
 
 Working or blocked agents stay running so refresh cannot interrupt unfinished work or approval requests. A pane whose exact session ID or launch options cannot be safely identified is also left unchanged, with the reason printed in the bottom terminal. Refresh never guesses the latest session, which could belong to a different pane in the same directory. Panes left at the shell with a recorded agent session are retained rather than silently replaced by a blank agent. The caller's pane and unrelated programs are left alone.
 
@@ -207,6 +211,39 @@ The selector and usage panel reload on every refresh so local UI fixes appear im
 To switch a tab between Standard and a team, to a different team, or between system prompt modes, run `herdr-reset` and then `herdr-ai`; `herdr-ai --setup` refuses a tab laid out differently, and a team whose lead pane was closed is not rerouted.
 
 Rerouting stops the agents, so unsaved conversation state in them is lost. herdr-ai remembers each tab's panes in `herdr-ai-tabs.json` in the local state directory.
+
+## File browser (fs)
+
+`fs` is a Finder-style file browser for the terminal, drawn like the agent selector. herdr-ai runs it in every setup's bottom-left pane in icon view (see above). Anywhere else, `fs` opens the current directory, `fs DIR` opens that folder, and `fs FILE` opens its folder with the file selected.
+
+```
+fs [DIR|FILE] [--icons|--details] [--hidden] [--sort name|kind|date|size] [--theme NAME] [--herdr]
+```
+
+The options apply to that run only. `--herdr` is how herdr-ai starts it: it opens where **Herdr pane opens in** says, and treats the current directory as herdr-ai's folder. `herdr-fs` is the launcher behind the `fs` alias.
+
+**Views.** Icon view lays the folder out as a grid of pixel-art icons drawn with half blocks: Finder-blue folders (Desktop, Documents, Downloads and the other home folders carry their emblems, and a git repository gets a branch mark), paper documents tagged with their type (`PY`, `MD`, `{}`), pictures, movies, archives, apps and terminal tiles for executables. Long names wrap onto a second line and shorten in the middle like Finder's, keeping the extension. The grid fits the pane: two or more rows of large icons when there is room, one row in a short pane such as herdr-ai's (about 7 to 10 rows), smaller icons below that, and a line of names in the smallest panes. Details view is Finder's list view: Name, Date Modified, Size and Kind, dropping columns as the pane narrows. `v` switches between them and remembers the choice.
+
+**The highlight.** The selected item sits in the same animated ring and rolling glow as a working agent's usage card, in the theme's gradient (with the brand theme, in the item's own color). Holding Shift brightens it, a reminder that Enter will now move your agents. That needs a terminal that reports the Shift key on its own (Herdr passes the kitty keyboard protocol through from Ghostty, kitty, WezTerm and similar terminals); elsewhere the highlight brightens only once Shift+Enter is pressed. While the pane is not focused, the highlight holds still and turns grey like Finder's, and fs redraws about once a second.
+
+**Keys.**
+
+- Arrows (and `j`/`k`) move. In details view, Left goes to the enclosing folder and Right opens a folder.
+- Enter opens a folder, or previews a file (below). Apps and other bundles preview too; Enter in that preview shows the package contents.
+- Shift+Enter moves this tab's agents into the selected folder, or the current folder when a file is selected. fs runs `herdr-ai --refresh` there, so every agent pane restarts in that folder the way rerunning `herdr-ai` from it would: idle agents keep their conversations where the provider allows, and working or blocked agents keep running. The browser then follows the agents into the folder and reports who moved. On a tab herdr-ai has not laid out, it offers to lay herdr-ai out in that folder; outside herdr, it offers to open a herdr-ai workspace there.
+- Backspace or `-` goes to the enclosing folder, `[` and `]` go back and forward, `~` goes home.
+- `.` shows hidden files (dotfiles and the ones Finder hides), `,` cycles the sort (name, kind, date modified, size), `/` filters by name (Enter keeps the filter, Esc clears it).
+- Space opens Quick Look on macOS (Space again closes it), `o` opens the item with its default app, `e` edits it in `$VISUAL` or `$EDITOR`, `y` copies its path, and `!` opens a shell in the folder (exit returns to fs).
+- `p` pins the folder as the place herdr-ai's pane opens.
+- `r` reloads; fs also notices files added, removed or renamed within a second.
+- `t` opens the theme menu, `s` the settings, `?` every key. `q` or Esc quits to the shell.
+- With the mouse, a click selects, a double-click opens, and the wheel moves the selection.
+
+**Previews.** Enter on a file shows it full screen. Text and code get line numbers, wrapping (`w` toggles it) and paging (Space and `b`); markdown headings and code comments are shaded. On macOS, pictures, PDFs, movies, documents, fonts and apps are drawn as true-color pixel art from `sips` or Quick Look's thumbnail. Anything else shows its details: kind, size, dates, permissions, and where an alias points. Inside herdr, a pane shorter than 20 rows fills the tab while it previews and goes back to its place after (**Zoom pane for previews**). **Enter on a file** can send Enter to Quick Look or the default app instead. On Windows, `o` uses the default app, Space falls back to the preview, and pictures preview as their details.
+
+**Settings.** `s` opens fs's own settings, saved with every other preference: **View**, **Herdr pane opens in** (Desktop by default, or home, herdr-ai's folder, or the folder `p` pinned), **Hidden files**, **Sort by**, **Folders on top**, **Enter on a file**, **Zoom pane for previews**, **Theme**, **Animation** and **Mouse**, followed by herdr-ai's **Terminal pane**.
+
+**Themes.** `t` opens a theme menu rather than cycling. Each theme shows its gradient; moving through the list previews it on the browser behind the menu, Enter applies it and Esc goes back. The first entry, the default, follows the usage panel's theme, so the two panes match until you pick something else. The list is the shared one described in Themes below.
 
 ## Workbench agent priority
 
@@ -295,6 +332,28 @@ Keys: `t` or `→` next theme, `T` or `←` previous theme, `r` refresh now, `a`
 Holding Tab relies on key release events. On the usage screen the panel turns on the kitty keyboard protocol, which Ghostty, kitty, WezTerm, and Herdr support, and the peek ends the moment Tab is released. Where releases never arrive (other terminals), the peek follows key repeat instead: it opens on the press and closes about a quarter second after the repeats stop, so a quick tap shows it for just over half a second.
 
 Brand uses an animated gray outer border and each provider's own title, count, status, and bar colors. Each working provider gets the same animated border as its row in the agent selector. Every other theme gives all providers one shared palette: the panel title, provider names and instance counts, status dots and spinners, working count and text, borders, glow, and bars follow the selected gradient in both full cards and compact rows. Rainbow uses Antigravity as its reference: all providers share its pastel bar palette and working glow, rainbow borders and titles, white status dots, spinners, working counts, and usage percentages. Filled bars keep the pastel palette while idle and shimmer while working, in full cards and compact rows. Star’s combined meter follows the same palette in Rainbow. Short panes drop the top and bottom of provider borders to keep the limits visible. Border space is reserved even while idle, so titles, bars, and card positions stay fixed as providers start or stop working. The layout changes only when the pane size or installed providers change. The theme name appears in the outer border for 2.5 seconds after changing themes, then disappears.
+
+## Themes
+
+Every screen uses one shared theme list: the usage panel (`t` and `T`, or Settings, Usage panel, Theme), the fs file browser's theme menu, and anything added later. A theme you add once shows up in all of them.
+
+- Built-in themes live in `themes.json` in the checkout: brand, aurora, sunset, vapor, ocean, matrix, ember, sakura, glacier, mono and rainbow.
+- Your own themes go in `themes.json` next to your local config: `~/.config/agent-picker/themes.json` on macOS and `%APPDATA%\agent-picker\themes.json` on Windows. `agent --picker-doctor` prints both paths and any problems with them.
+
+The file holds a list of themes, or `{"themes": [...]}`. Each theme has a `name` and `stops`:
+
+- `null`: each item keeps its own brand colors, like `brand` (providers in the usage panel, file kinds in fs).
+- `"rainbow"`: the animated rainbow.
+- A list of 1 to 8 colors, each `[r, g, b]` (0 to 255) or `"#rrggbb"`. The screens blend smoothly between them.
+
+```json
+[
+  {"name": "dusk", "stops": ["#ff9a5a", "#c050a0", "#4030a0"]},
+  {"name": "ocean", "stops": [[20, 60, 160], [60, 200, 240]]}
+]
+```
+
+Using a built-in's name (like `ocean` above) replaces that theme in place. New names are added after the built-ins, in file order. Running screens notice edits within about a second, so there is no need to restart them. Entries that can't be used are skipped, and a file that can't be parsed keeps the themes it last loaded; `--picker-doctor` shows why.
 
 ## Settings
 

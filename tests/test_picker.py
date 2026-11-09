@@ -312,6 +312,8 @@ class PickerTests(unittest.TestCase):
             self.assertIn(f"alias usage='{home}/.local/bin/agent-picker --picker-usage'", text)
             self.assertIn(f"alias schedule={home}/.local/bin/schedule", text)
             self.assertIn(str(ROOT / "src/prompt_scheduler.py"), (home / ".local/bin/schedule").read_text())
+            self.assertIn(f"alias fs={home}/.local/bin/herdr-fs", text)
+            self.assertIn(str(ROOT / "src/fs_browser.py"), (home / ".local/bin/herdr-fs").read_text())
             wrapper = home / ".local/bin/agent-picker"
             self.assertIn(str(ROOT / "src/agent_picker.py"), wrapper.read_text())
             result = subprocess.run([str(wrapper), "--picker-doctor"], env=env, capture_output=True, text=True)

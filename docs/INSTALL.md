@@ -53,6 +53,9 @@ its managed aliases. It preserves the current provider flags and preferences.
   computer, then enable its local connection in Grok Bot. Windows reads the
   existing signed-in Cursor desktop profile; macOS uses its Keychain item.
   `CURSOR_ACCESS_TOKEN` can override discovery. Never share this token.
+- `fs`: a Finder-style file browser in the terminal, with icon and details
+  views; `fs DIR` opens that folder. herdr-ai shows it in icon view in each
+  tab's bottom-left pane.
 
 Herdr and provider CLIs are separate products. Only installed providers appear
 in the selector. Follow each vendor's platform requirements; a provider that

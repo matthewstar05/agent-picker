@@ -70,6 +70,17 @@ MODE = preferences.Setting(
     hint="Herdr instructions only; provider prompt settings are separate. Off: five plain agents. Individual: sharing context. "
          "Orchestrator-crew: a lead and four crew on herdr-ai's own team models.",
     names={OFF: "off", INDIVIDUAL: "individual", ORCHESTRATOR: "orchestrator-crew"})
+TERMINAL = preferences.Setting(
+    "herdr_ai.terminal_pane", "Herdr AI", "Terminal pane", ["files", "shell"], "files",
+    hint="The pane under the agents: the fs file browser in icon view, or a plain shell. "
+         "q in the browser drops to its shell; fs reopens it.",
+    names={"files": "file browser", "shell": "shell"})
+
+
+def terminal_files():
+    """Whether herdr-ai opens the file browser in its terminal pane, rather than leaving a shell."""
+    preferences.register(TERMINAL)
+    return preferences.get(TERMINAL.key) == "files"
 
 
 def mode():
@@ -526,7 +537,7 @@ def choose(settings_only=False):
     ap.visibility_rows([a for a in ap.AGENTS if ap.installed(a)])
     menu = preferences.Menu([preferences.register(s) for s in
                              (ap.VISIBILITY, *herdr_sidebar.SETTINGS, ap.BARS, ap.CURSOR_GROK_TRANSIENT, handoff.AUTO, MODE,
-                              ap.GROKBOT_WHERE)])
+                              TERMINAL, ap.GROKBOT_WHERE)])
     settings_open = settings_only
     models = None          # a provider's models screen (models_menu), while open
     confirming, choice = False, 0

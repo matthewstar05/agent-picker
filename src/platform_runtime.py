@@ -25,6 +25,14 @@ def state_dir():
 
 
 class Terminal:
+    # Opt-in decoding for screens that need more than menu keys (the file
+    # browser): Shift+Enter, the Shift key itself, shifted symbols, focus and
+    # SGR mouse reports. Off, every key reads exactly as before.
+    extended = False
+    # Whether Shift is held as the terminal last reported it, None until a key
+    # event says. Only tracked while extended.
+    shift = None
+
     def __init__(self, raw=False):
         self.raw = raw
 
@@ -52,6 +60,13 @@ class Terminal:
         return self
 
     def __exit__(self, *exc):
+        # Mouse and focus reports outlive the alternate screen, so never hand
+        # them to the shell, even when the screen that enabled them crashed.
+        try:
+            self.mouse(False)
+            self.focus_events(False)
+        except OSError:
+            pass
         if sys.platform == "win32":
             for handle, mode in self.modes:
                 self.kernel.SetConsoleMode(handle, mode)
@@ -78,15 +93,33 @@ class Terminal:
         import select
         return bool(select.select([self.fd], [], [], max(0, seconds))[0])
 
-    def keyboard(self, enhanced):
+    def keyboard(self, enhanced, flags=11):
         """Turn the kitty keyboard protocol on or off: every key as an escape code,
         with repeat and release events, so a held key can be told from a tap.
         Terminals without it ignore the request and keep sending plain keys.
-        Only used on the alternate screen, whose flags the shell never sees."""
-        if enhanced == getattr(self, "enhanced", False):
+        Only used on the alternate screen, whose flags the shell never sees.
+        flags 15 adds alternate keys, so Shift+/ can arrive as "?". New flags
+        while already on replace the pushed entry, so one pop still restores."""
+        on = getattr(self, "enhanced", False)
+        if enhanced == on and (not enhanced or flags == getattr(self, "keyboard_flags", 11)):
             return
         self.enhanced = enhanced
-        self.write("\x1b[>11u" if enhanced else "\x1b[<u")
+        self.keyboard_flags = flags
+        self.write(("\x1b[<u" if on else "") + f"\x1b[>{flags}u" if enhanced else "\x1b[<u")
+
+    def mouse(self, on):
+        """Turn on click and wheel reports in SGR form, read as "mouse:..." keys."""
+        if on == getattr(self, "mouse_reports", False):
+            return
+        self.mouse_reports = on
+        self.write("\x1b[?1000h\x1b[?1006h" if on else "\x1b[?1006l\x1b[?1000l")
+
+    def focus_events(self, on):
+        """Turn on focus reports, read as "focus-in" and "focus-out"."""
+        if on == getattr(self, "focus_reports", False):
+            return
+        self.focus_reports = on
+        self.write("\x1b[?1004h" if on else "\x1b[?1004l")
 
     def _byte(self):
         pending = getattr(self, "_pending", b"")
@@ -167,9 +200,15 @@ class Terminal:
             record = self._console_record()
             if not self.kernel.ReadConsoleInputW(self.input_handle, ctypes.byref(record), 1, ctypes.byref(count)):
                 raise ctypes.WinError(ctypes.get_last_error())
-            if record.kind != 1 or not record.event.key.down:
+            if record.kind != 1:
                 continue
             key = record.event.key
+            if not key.down:
+                data = self._windows_key(False, "", key.virtual, key.control)
+                if data:
+                    self._console_pending += data
+                    return True
+                continue
             text = key.character
             if text and 0xd800 <= ord(text) <= 0xdbff:
                 self._surrogate = text
@@ -177,15 +216,30 @@ class Terminal:
             if self._surrogate:
                 text = (self._surrogate + text).encode("utf-16-le", "surrogatepass").decode("utf-16-le", "replace")
                 self._surrogate = ""
-            data = windows_key_bytes(text, key.virtual, key.control)
+            data = self._windows_key(True, text, key.virtual, key.control)
             if data:
                 self._console_pending += data * max(1, key.repeat)
                 return True
 
+    def _windows_key(self, down, text, virtual, control):
+        """Bytes for one console key record. Only presses type anything. With
+        extended decoding a bare Shift press or release comes through as
+        kitty's left Shift code, so read_key reports "shift" and
+        "release:shift" as it does under the kitty protocol, and every other
+        record, releases included, updates self.shift."""
+        if self.extended:
+            if virtual in (0x10, 0xa0, 0xa1):   # VK_SHIFT, VK_LSHIFT, VK_RSHIFT
+                return b"\x1b[57441u" if down else b"\x1b[57441;1:3u"
+            self.shift = bool(control & 0x10)
+        return windows_key_bytes(text, virtual, control) if down else b""
+
     def read_key(self):
         """A key name: a character, "up"/"down"/"left"/"right", or "esc". With
         the kitty protocol a release comes as "release:" + the key, and
-        self.releases turns true once one has."""
+        self.releases turns true once one has. While self.extended, also
+        "shift-enter", "shift", "focus-in"/"focus-out" and
+        "mouse:<button>:<x>:<y>:press|release" (see decode_key), and
+        self.shift follows the Shift key."""
         ch = self._byte()
         if not ch:
             return "esc"
@@ -207,6 +261,9 @@ class Terminal:
         if not self.wait(0.1):
             return "esc"
         prefix = self._byte()
+        if self.extended and prefix in (b"\r", b"\n"):
+            # ESC CR: what terminals set up for Shift+Enter, and Windows consoles, send.
+            return "shift-enter"
         if prefix not in (b"[", b"O"):
             self._pending = prefix + self._pending
             return "esc"
@@ -244,7 +301,15 @@ class Terminal:
             return "paste:" + (pasted + tail).decode("utf-8", errors="replace")
         if not seq:
             return "esc"
-        key, event = decode_key(prefix, seq.decode(errors="ignore"))
+        text = seq.decode(errors="ignore")
+        key, event = decode_key(prefix, text, self.extended)
+        if self.extended:
+            if key == "shift":
+                self.shift = event != 3
+            else:
+                bits = key_modifiers(prefix, text)
+                if bits is not None:
+                    self.shift = bool(bits & 1)
         if event == 3:
             self.releases = True
             return "release:" + key if key else ""
@@ -280,15 +345,33 @@ ARROWS = {"A": "up", "B": "down", "C": "right", "D": "left"}
 # Kitty protocol key codes the screens use, besides plain characters.
 KITTY_KEYS = {9: "\t", 13: "\r", 27: "esc", 127: "\x7f", 8: "\b", 57414: "\r",
               57417: "left", 57418: "right", 57419: "up", 57420: "down"}
+# Shift+key on a US layout, for terminals that report Shift+/ as / with the
+# Shift bit and no alternate key, as Herdr does.
+US_SHIFTED = dict(zip("`1234567890-=[]\\;',./", '~!@#$%^&*()_+{}|:"<>?'))
 
 
-def decode_key(prefix, seq):
+def decode_key(prefix, seq, extended=False):
     """(key name, event) for the bytes after ESC [ or ESC O. event is 1 press,
     2 repeat, 3 release. Kitty sends CSI code;mods:event u, and arrows as
     CSI 1;mods:event A. Other sequences (Home, F-keys, focus, paste and mouse
     reports) have no binding and come back as "", so they are ignored rather
-    than read as Esc, which quits most screens."""
+    than read as Esc, which quits most screens.
+
+    extended adds "shift-enter", "shift" (either Shift key), shifted symbols
+    ("?" for Shift+/), "focus-in"/"focus-out", and SGR mouse reports as
+    "mouse:<button>:<x>:<y>:press" or ":release", numbers as sent (1-based
+    cells; the wheel is button 64/65, motion adds 32)."""
     final, fields = seq[-1:], seq[:-1].split(";")
+    if extended and prefix == b"[":
+        if seq in ("I", "O"):
+            return ("focus-in" if seq == "I" else "focus-out"), 1
+        if seq[:1] == "<" and final in ("M", "m"):
+            numbers = seq[1:-1].split(";")
+            if len(numbers) != 3 or not all(n.isdigit() for n in numbers):
+                return "", 1
+            button, x, y = (int(n) for n in numbers)
+            state = "press" if final == "M" else "release"
+            return f"mouse:{button}:{x}:{y}:{state}", 1
     mods, event = 1, 1
     if len(fields) > 1:
         parts = fields[1].split(":")
@@ -298,9 +381,13 @@ def decode_key(prefix, seq):
         return ARROWS[final], event
     if prefix != b"[" or final != "u":
         return "", event
-    code = fields[0].split(":")[0]
-    code = int(code) if code.isdigit() else 0
+    codes = fields[0].split(":")
+    code = int(codes[0]) if codes[0].isdigit() else 0
     bits = mods - 1
+    if extended and code in (13, 57414) and bits & 1:
+        return "shift-enter", event
+    if extended and code in (57441, 57447):   # left and right Shift
+        return "shift", event
     if code == 9 and bits & 1:   # Shift+Tab, unbound like the legacy ESC [ Z
         return "", event
     if code in KITTY_KEYS:
@@ -314,9 +401,29 @@ def decode_key(prefix, seq):
     key = chr(code)
     if bits & 4 and key.isalpha():   # ctrl: ctrl+c is "\x03", as without the protocol
         return chr(ord(key.lower()) & 0x1f), event
+    if extended and bits & 1:
+        # Report-alternate-keys sends the shifted key as CSI base:shifted;mods u.
+        shifted = int(codes[1]) if len(codes) > 1 and codes[1].isdigit() else 0
+        return (chr(shifted) if 32 <= shifted <= 126 else US_SHIFTED.get(key, key.upper())), event
     if bits & (1 | 64):   # shift or caps lock
         key = key.upper()
     return key, event
+
+
+def key_modifiers(prefix, seq):
+    """Modifier bits (1 Shift, 2 Alt, 4 Ctrl, ...) of a key event after ESC [:
+    kitty's CSI code;mods u, CSI 1;mods A and CSI number;mods ~. None for bytes
+    that report no modifiers, such as ESC O keys, focus and mouse reports."""
+    final, fields = seq[-1:], seq[:-1].split(";")
+    if prefix != b"[":
+        return None
+    if final in ("u", "~"):
+        if not fields[0].split(":")[0].isdigit():
+            return None
+    elif not final or final not in "ABCDEFHPQS" or fields[0] not in ("", "1"):
+        return None
+    mods = fields[1].split(":")[0] if len(fields) > 1 else "1"
+    return max(int(mods) - 1, 0) if mods.isdigit() else 0
 
 
 # Where agent CLI installers put their binaries when that folder isn't always

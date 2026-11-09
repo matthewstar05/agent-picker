@@ -12,7 +12,7 @@ Standard is the mixed workbench:
   | agent        | Cursor/Kiro  |              |
   | selector     |              +--------------+
   +--------------+--------------+ usage        |
-  | terminal                    |              |
+  | terminal (fs browser)       |              |
   +-----------------------------+--------------+
 
 Star lays the same grid out with StarCLIs: a lead and four crew that know about
@@ -40,14 +40,18 @@ trivial tasks. The lead is told to delegate through herdr (see team.py):
   | crew         | crew         |              |
   |              |              |              |
   +--------------+--------------+--------------+
-  | terminal                    | usage        |
+  | terminal (fs browser)       | usage        |
   +-----------------------------+--------------+
 
-The pane you run it in becomes the terminal. Run it again in a tab it already
-laid out and it refreshes instead: idle agents resume their exact conversations,
-and the selector and usage panel reload, with no new panes or tabs. Working
-agents and panes whose session cannot be safely resumed stay running. Outside
-herdr it opens a new workspace and attaches.
+The pane you run it in becomes the terminal, and once the tab is laid out it
+turns into the fs file browser in icon view (the "Terminal pane" setting, or
+--no-fs, keeps a plain shell there). q in the browser drops to that shell.
+Run it again in a tab it already laid out and it refreshes instead: idle agents
+resume their exact conversations, and the selector and usage panel reload, with
+no new panes or tabs. Working agents and panes whose session cannot be safely
+resumed stay running. Outside herdr it opens a new workspace and attaches.
+Shift+Enter on a folder in the browser runs herdr-ai --refresh there, which
+refreshes a laid-out tab the same way and never lays one out.
 
 agent-route reroutes every agent on the current tab, including ones herdr-ai
 did not start, to the directory you run it from.
@@ -65,11 +69,16 @@ on the next provider with quota, Codex, then Claude, then Cursor or Kiro
 its crew share hands off the whole team.
 The middle-bottom pane chooses Cursor or Kiro by remaining quota and reset date.
 
-Usage: herdr-ai [--setup NAME] [--mode off|individual|orchestrator] [label]
+Usage: herdr-ai [--setup NAME] [--mode off|individual|orchestrator] [--no-fs] [label]
                               (label defaults to the directory name; --setup
                               skips the menu: standard, star, claude, codex, ...;
-                              --mode overrides the System prompt setting for this layout)
-       herdr-ai --settings    change crew visibility, handoff and usage bars without rerouting
+                              --mode overrides the System prompt setting for this layout;
+                              --no-fs leaves the terminal pane a shell this time)
+       herdr-ai --refresh [label]
+                              refresh the tab's agents into this directory, as a
+                              rerun does; exits 3 on a tab herdr-ai has not laid out
+       herdr-ai --settings    change crew visibility, handoff, usage bars and the
+                              terminal pane without rerouting
        herdr-ai --open-settings    open those settings in a Herdr popup
        herdr-ai --usage       every provider's usage, and who a handoff would pick
        herdr-ai --handoff GOAL NOTES
@@ -98,6 +107,8 @@ import herdr_sidebar
 import session_refresh
 
 ENTRY = Path(__file__).resolve().parent / "agent_picker.py"
+FS_ENTRY = Path(__file__).resolve().parent / "fs_browser.py"
+NO_LAYOUT = "herdr-ai: this tab has no herdr-ai layout; run herdr-ai to lay one out"
 
 # pane -> picker arguments; panes not listed stay plain shells. --picker-return
 # reopens the selector when an agent quits, so /quit switches providers in place.
@@ -128,6 +139,49 @@ def find_herdr():
 def picker_command(args):
     """The line typed into a pane's shell to run the picker with args."""
     return shlex.join([sys.executable, str(ENTRY), *args])
+
+
+def fs_argv():
+    """The file browser as the terminal pane runs it: icon view, opening where its
+    own "Opens in" setting says, with this directory as herdr-ai's folder."""
+    return [sys.executable, str(FS_ENTRY), "--herdr", "--view", "icon"]
+
+
+def fs_command():
+    """The line typed into a new workspace's terminal pane to start the browser."""
+    return shlex.join(fs_argv())
+
+
+def browser_wanted(no_fs=False):
+    """Whether this run may turn the terminal pane into the file browser."""
+    if no_fs or os.environ.get("HERDR_AI_DRY", "0") == "1" or not FS_ENTRY.is_file():
+        return False
+    import team
+    return team.terminal_files()
+
+
+def opens_browser(entry, no_fs=False):
+    """Whether herdr-ai, done laying out or refreshing the tab, becomes the file
+    browser: it runs interactively in the tab's terminal pane, and the "Terminal
+    pane" setting asks for the browser. Elsewhere the caller keeps its shell."""
+    me = os.environ.get("HERDR_PANE_ID")
+    if not me or ((entry or {}).get("panes") or {}).get("terminal") != me:
+        return False
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return False
+    return browser_wanted(no_fs)
+
+
+def open_browser():
+    """Replace this process with the file browser, so it is the pane's foreground
+    job and quitting it leaves the pane at its shell."""
+    sys.stdout.flush()
+    sys.stderr.flush()
+    argv = fs_argv()
+    if sys.platform == "win32":
+        # Windows exec starts a second process and lets the shell take the console back.
+        return subprocess.call(argv)
+    os.execv(argv[0], argv)
 
 
 def cd_command(path):
@@ -936,7 +990,13 @@ def main(argv=None, herdr=None, cwd=None):
         import team
         team.choose(settings_only=True)
         return 0
-    setup, mode = None, None
+    setup, mode, argv = None, None, list(argv)
+    # --no-fs keeps every pane a shell this run; --refresh only refreshes a laid-out tab.
+    no_fs, refresh = "--no-fs" in argv, "--refresh" in argv
+    argv = [a for a in argv if a not in ("--no-fs", "--refresh")]
+    if refresh and not inside_herdr():
+        print("herdr-ai: --refresh runs from a pane inside herdr, on a tab herdr-ai laid out", file=sys.stderr)
+        return 2
     if "--mode" in argv or any(a.startswith("--mode=") for a in argv):
         i = next(i for i, a in enumerate(argv) if a == "--mode" or a.startswith("--mode="))
         mode = argv[i].split("=", 1)[1] if "=" in argv[i] else (argv[i + 1] if i + 1 < len(argv) else "")
@@ -955,6 +1015,13 @@ def main(argv=None, herdr=None, cwd=None):
     cwd = cwd or os.getcwd()
     auto = not argv
     label = argv[0] if argv else (Path(cwd).name or "home")
+    if refresh:
+        state, key = load_state(), tab_key(os.environ["HERDR_TAB_ID"])
+        recorded = recorded_panes(herdr, state, key)
+        if not recorded:
+            # The file browser's Shift+Enter offers a full herdr-ai run instead.
+            print(NO_LAYOUT, file=sys.stderr)
+            return 3
     if os.environ.get("HERDR_AI_DRY", "0") != "1":
         sidebar_update(lambda: herdr_sidebar.install_startup(herdr.binary))
 
@@ -984,10 +1051,13 @@ def main(argv=None, herdr=None, cwd=None):
                                    "terminals": {p: live.get(p, {}).get("terminal_id") for p in panes.values()}}
             save_state(state)
         sidebar_update(lambda: herdr_sidebar.sync(load_state()))
+        if browser_wanted(no_fs):
+            herdr("pane", "run", panes["terminal"], fs_command())
         return os.execvp(herdr.binary, [herdr.binary])
 
-    state, key = load_state(), tab_key(os.environ["HERDR_TAB_ID"])
-    recorded = recorded_panes(herdr, state, key)
+    if not refresh:
+        state, key = load_state(), tab_key(os.environ["HERDR_TAB_ID"])
+        recorded = recorded_panes(herdr, state, key)
     if recorded:
         entry = state[key]
         problem = layout_problem(entry, recorded, setup, mode)
@@ -1018,6 +1088,8 @@ def main(argv=None, herdr=None, cwd=None):
         follow_directory(herdr, entry, label)
     save_state(state)
     sidebar_update(lambda: herdr_sidebar.sync(state))
+    if not refresh and opens_browser(entry, no_fs):
+        return open_browser()
     return 0
 
 

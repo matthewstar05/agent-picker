@@ -47,6 +47,7 @@ def main(argv=None):
         "herdr-ai": ("herdr_ai.py", []), "agent-route": ("agent_route.py", []),
         "herdr-reset": ("herdr_reset.py", []), "starcli": ("starcli.py", []),
         "star": ("starcli.py", []), "grokbot": ("grokbot.py", []), "grok": ("grokbot.py", []),
+        "fs": ("fs_browser.py", []), "herdr-fs": ("fs_browser.py", []),
     }
     for name, (script, extra) in commands.items():
         # Quote every path, including paths without spaces. Batch constants may
