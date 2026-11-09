@@ -143,9 +143,66 @@ def select_machine(machines, requested=None):
     return rows[0]
 
 
-def connect_machine(gateway, requested=None, wait=30, poll=1.5, app=APP, opener=subprocess.run):
+HIDE_SECONDS = 30
+# Grok Bot has no hidden or menu-bar-only launch mode, and its local execution daemon
+# runs inside the app, so the CLI must start the app. `open -g -j` asks for a hidden
+# launch, but Electron shows and focuses its window once loaded. This watcher hides
+# the app whenever it appears during startup (NSRunningApplication.hide, the same as
+# Cmd+H, so no permission is needed) and hands focus back to the app that had it.
+# The Dock icon cannot be removed without modifying the signed app bundle.
+KEEP_HIDDEN = """
+ObjC.import("AppKit");
+function run(argv) {
+  const bundle = argv[0], end = Date.now() + Number(argv[1]) * 1000;
+  const workspace = $.NSWorkspace.sharedWorkspace, before = workspace.frontmostApplication;
+  const isGrok = app => app && ObjC.unwrap(app.bundleIdentifier) === bundle;
+  while (Date.now() < end) {
+    for (const app of $.NSRunningApplication.runningApplicationsWithBundleIdentifier(bundle).js) {
+      if (!app.hidden) app.hide;
+    }
+    if (isGrok(workspace.frontmostApplication) && before && !isGrok(before)) before.activateWithOptions(0);
+    delay(0.25);
+  }
+}
+"""
+
+
+def bundle_id(app):
+    try:
+        import plistlib
+        with open(Path(app) / "Contents" / "Info.plist", "rb") as handle:
+            ident = plistlib.load(handle).get("CFBundleIdentifier")
+        return ident if isinstance(ident, str) and ident else None
+    except (OSError, ValueError, ImportError):
+        return None
+
+
+def app_running(app):
+    """Grok Bot is already open, whether the user opened it or an earlier turn did."""
+    try:
+        return subprocess.run(["pgrep", "-f", str(Path(app) / "Contents" / "MacOS") + "/"],
+                              capture_output=True, timeout=5).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def keep_hidden(app, seconds=HIDE_SECONDS, spawn=subprocess.Popen):
+    """Start the background watcher that keeps a CLI-started Grok Bot out of sight."""
+    ident = bundle_id(app)
+    if not ident:
+        return
+    try:
+        spawn(["osascript", "-l", "JavaScript", "-e", KEEP_HIDDEN, ident, str(seconds)],
+              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    except OSError:
+        pass
+
+
+def connect_machine(gateway, requested=None, wait=30, poll=1.5, app=APP, opener=subprocess.run,
+                    running=app_running, hide=keep_hidden):
     """select_machine, but when this Mac is registered and offline because Grok Bot is
-    closed, open the app in the background and wait for it to connect."""
+    closed, start the app hidden in the background and wait for it to connect. An app
+    that is already open (for example one the user opened) is left exactly as it is."""
     machines = gateway.machines()
     try:
         return select_machine(machines, requested)
@@ -155,8 +212,12 @@ def connect_machine(gateway, requested=None, wait=30, poll=1.5, app=APP, opener=
         if not mine or sys.platform != "darwin" or not Path(app).exists():
             raise
         error = exc
-    print("Opening Grok Bot to connect this Mac...", file=sys.stderr, flush=True)
-    opener(["open", "-g", "-j", "-a", str(app)], capture_output=True)
+    if running(app):
+        print("Waiting for Grok Bot to connect this Mac...", file=sys.stderr, flush=True)
+    else:
+        print("Starting Grok Bot in the background to connect this Mac...", file=sys.stderr, flush=True)
+        hide(app)   # first, so it records which app has focus before Grok Bot can take it
+        opener(["open", "-g", "-j", "-a", str(app)], capture_output=True)
     deadline = time.monotonic() + wait
     while time.monotonic() < deadline:
         time.sleep(poll)

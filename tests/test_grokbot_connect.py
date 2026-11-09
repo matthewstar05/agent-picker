@@ -27,8 +27,9 @@ class Roster:
 
 
 class ConnectMachineTest(unittest.TestCase):
-    def connect(self, roster, requested=None, app_exists=True):
+    def connect(self, roster, requested=None, app_exists=True, running=False):
         opened = []
+        self.hidden = []
         with tempfile.TemporaryDirectory() as folder, \
                 patch.object(cli.socket, "gethostname", return_value="test.local"), \
                 patch.object(cli.socket, "getfqdn", return_value="test.local"), \
@@ -39,14 +40,37 @@ class ConnectMachineTest(unittest.TestCase):
                 app.mkdir()
             try:
                 return cli.connect_machine(roster, requested, wait=5, poll=0, app=app,
-                                           opener=lambda argv, **_: opened.append(argv)), opened
+                                           opener=lambda argv, **_: opened.append(argv),
+                                           running=lambda _: running,
+                                           hide=lambda app: opened.append(["hide", str(app)])), opened
             except GrokError as exc:
                 return exc, opened
 
-    def test_opens_grok_bot_in_background_when_this_mac_is_offline(self):
+    def test_opens_grok_bot_hidden_in_background_when_this_mac_is_offline(self):
         machine, opened = self.connect(Roster([MAC], after=2))
         self.assertEqual(machine["machineId"], "local")
-        self.assertEqual(opened[0][:4], ["open", "-g", "-j", "-a"])
+        # The watcher starts first so it knows which app had focus before the launch.
+        self.assertEqual(opened[0][0], "hide")
+        self.assertEqual(opened[1][:4], ["open", "-g", "-j", "-a"])
+
+    def test_an_app_the_user_already_opened_is_left_alone(self):
+        machine, opened = self.connect(Roster([MAC], after=2), running=True)
+        self.assertEqual((machine["machineId"], opened), ("local", []))
+
+    def test_keep_hidden_watches_the_apps_own_bundle(self):
+        spawned = []
+        with tempfile.TemporaryDirectory() as folder:
+            app = Path(folder) / "Grok Bot.app"
+            cli.keep_hidden(app, spawn=lambda argv, **_: spawned.append(argv))
+            self.assertEqual(spawned, [])          # no Info.plist, nothing to watch
+            (app / "Contents").mkdir(parents=True)
+            import plistlib
+            with open(app / "Contents" / "Info.plist", "wb") as handle:
+                plistlib.dump({"CFBundleIdentifier": "com.example.grok"}, handle)
+            cli.keep_hidden(app, seconds=7, spawn=lambda argv, **_: spawned.append(argv))
+        self.assertEqual(spawned[0][:3], ["osascript", "-l", "JavaScript"])
+        self.assertEqual(spawned[0][-2:], ["com.example.grok", "7"])
+        self.assertIn("hide", spawned[0][4])
 
     def test_connected_mac_opens_nothing(self):
         machine, opened = self.connect(Roster([dict(MAC, connected=True)]))
@@ -66,7 +90,7 @@ class ConnectMachineTest(unittest.TestCase):
     def test_gives_up_with_the_original_message_when_it_never_connects(self):
         error, opened = self.connect(Roster([MAC]))
         self.assertRegex(str(error), "No unique connected machine")
-        self.assertEqual(len(opened), 1)
+        self.assertEqual([argv[0] for argv in opened], ["hide", "open"])
 
     def test_missing_app_keeps_the_error(self):
         error, opened = self.connect(Roster([MAC]), app_exists=False)
