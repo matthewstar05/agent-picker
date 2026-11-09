@@ -94,9 +94,16 @@ class IconTests(unittest.TestCase):
         self.assertNotEqual(fs_icons.icon("python", "large"), fs_icons.icon("python", "large", link=True))
 
     def test_github_repositories_carry_a_star_and_other_repositories_none(self):
+        gold = lambda icon: [(y, x) for y, row in enumerate(icon) for x, cell in enumerate(row)
+                             if {fs_icons.STAR_GOLD, fs_icons.STAR_SHADE} & {cell[1], cell[2]}]
+        star = gold(fs_icons.icon("folder-github", "large"))
+        # drawn in pixels across the body, centred: columns 1-6 of the 8, rows 1-2 of the 3
+        self.assertEqual({x for _, x in star}, {1, 2, 3, 4, 5, 6})
+        self.assertEqual({y for y, _ in star}, {1, 2})
+        self.assertTrue(gold(fs_icons.icon("folder-github", "small")))
+        self.assertIn("★", [cell[0] for cell in fs_icons.icon("folder-github", "mini")[0]])
+        self.assertEqual(fs_icons.icon("folder-github", "large", accent=(240, 130, 175))[1][3][1], fs_icons.STAR_GOLD)
         for size in fs_icons.SIZES:
-            star = fs_icons.icon("folder-github", size)
-            self.assertIn("★", [cell[0] for row in star for cell in row], size)
             self.assertEqual(fs_icons.icon("folder-git", size), fs_icons.icon("folder", size), size)
 
     def test_gradients_and_colors_are_rgb(self):
