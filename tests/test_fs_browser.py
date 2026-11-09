@@ -369,9 +369,35 @@ class DrawingTests(Base):
         app = self.app()
         app.handle("focus-out")
         self.assertFalse(app.animating())
+        self.assertFalse(app.lit_for(app.selected(), 1.0).active)   # Finder's grey
         self.assertEqual(app.frame_step(), 1.0)
         app.handle("focus-in")
         self.assertTrue(app.animating())
+
+    def test_always_on_keeps_animating_in_color_without_focus(self):
+        app = self.app()
+        preferences.put(fsb.ANIMATE.key, "always")
+        app.handle("focus-out")
+        self.assertTrue(app.animating())
+        self.assertTrue(app.lit_for(app.selected(), 1.0).active)
+        self.assertEqual(app.frame_step(), 1 / 30)
+        preferences.put(fsb.ANIMATE.key, False)
+        app.handle("focus-in")
+        self.assertFalse(app.animating())
+        self.assertTrue(app.lit_for(app.selected(), 1.0).active)
+        self.assertEqual(app.frame_step(), 1.0)
+
+    def test_animation_cycles_through_its_three_choices_in_settings(self):
+        app = self.app()
+        app.handle("s")
+        app.settings.index = app.settings.items.index(fsb.ANIMATE)
+        seen = []
+        for _ in range(3):
+            app.handle("right")
+            seen.append(preferences.get(fsb.ANIMATE.key))
+            if len(seen) == 1:
+                self.assertIn("always on", "".join(self.draw(app, 120, 30)))
+        self.assertEqual(seen, ["always", False, True])
 
 
 class RouteTests(Base):

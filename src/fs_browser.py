@@ -98,9 +98,10 @@ THEME = preferences.register(preferences.Setting(
     names={"usage": "match usage panel"}))
 themes.track(THEME, extra=["usage"])
 ANIMATE = preferences.register(preferences.Setting(
-    "fs.animate", SECTION, "Animation", [True, False], True,
-    hint="Off draws the highlight still. It also holds still while the pane is not focused.",
-    names={True: "on", False: "off"}))
+    "fs.animate", SECTION, "Animation", [True, "always", False], True,
+    hint="On animates the highlight while this pane is focused, then holds it still and grey. "
+         "Always on keeps it moving in color when another pane has focus. Off draws it still.",
+    names={True: "on · while focused", "always": "always on", False: "off"}))
 MOUSE = preferences.register(preferences.Setting(
     "fs.mouse", SECTION, "Mouse", [True, False], True,
     hint="Click selects, double-click opens, the wheel moves. Off leaves the mouse to the terminal.",
@@ -978,7 +979,13 @@ class App:
         return self.entries[self.index] if self.entries and 0 <= self.index < len(self.entries) else None
 
     def animating(self):
-        return bool(preferences.get(ANIMATE.key)) and self.focused
+        mode = preferences.get(ANIMATE.key)
+        return mode == "always" or (mode is True and self.focused)
+
+    def lively(self):
+        """Whether the selection keeps its colors: Finder greys it out when the window loses
+        focus, unless the Animation setting is always on."""
+        return self.focused or preferences.get(ANIMATE.key) == "always"
 
     def shift_held(self):
         held = bool(getattr(self.terminal, "shift", False))
@@ -1088,7 +1095,7 @@ class App:
                 sweep = min(1.0, (elapsed / 0.18) ** 1.6)
             else:
                 self.sweep_at = None
-        return Lit(style, t if self.animating() else 0.4, self.boost, self.focused, sweep)
+        return Lit(style, t if self.animating() else 0.4, self.boost, self.lively(), sweep)
 
     def accent(self, x_frac):
         style = theme_style(self.theme())
@@ -1351,7 +1358,7 @@ class App:
         if cols < 24 or rows < 4:
             return None
         W, H = cols - 2, rows - 2
-        key = (cols, rows, self.cwd, id(self.entries), self.index, self.view, self.theme(), self.focused,
+        key = (cols, rows, self.cwd, id(self.entries), self.index, self.view, self.theme(), self.lively(),
                self.sort, len(self.entries), self.top, self.error)
         if self.static is None or self.static[0] != key:
             content, regions, hits = self.content(W, H, t)
