@@ -89,9 +89,100 @@ class GatewayRecoveryTests(unittest.TestCase):
                 self.assertFalse(caught.exception.transient)
 
 
+def gateway_error(code, body):
+    return urllib.error.HTTPError("https://box.cursorvm.com/api/sendPrompt", code, "", {}, io.BytesIO(body))
+
+
+REFUSAL = b'{"error":"A Sand box session may not make this request on this endpoint."}'
+
+
+class RefusalTests(unittest.TestCase):
+    def test_explicit_gateway_refusal_is_a_known_unsent_prompt(self):
+        with patch("urllib.request.OpenerDirector.open", side_effect=gateway_error(502, REFUSAL)):
+            with self.assertRaises(gateway.GrokError) as caught:
+                gateway.post("https://box.cursorvm.com/api/sendPrompt", {}, {})
+        self.assertEqual(caught.exception.delivery, "rejected")
+        self.assertFalse(caught.exception.transient)
+        self.assertIn("may not make this request", str(caught.exception))
+        self.assertIn("Nothing was sent", str(caught.exception))
+
+    def test_other_error_bodies_stay_unknown_and_unechoed(self):
+        for body in (b'{"error":"token abc123 expired upstream"}', b"<html>Bad Gateway</html>", b""):
+            with self.subTest(body=body):
+                with patch("urllib.request.OpenerDirector.open", side_effect=gateway_error(502, body)):
+                    with self.assertRaises(gateway.GrokError) as caught:
+                        gateway.post("https://box.cursorvm.com/api/sendPrompt", {}, {})
+                self.assertEqual(caught.exception.delivery, "unknown")
+                self.assertNotIn("abc123", str(caught.exception))
+
+    def test_refused_send_is_not_wrapped_as_unknown_delivery(self):
+        refused = gateway.GrokError("Grok Bot refused the request (HTTP 502): no. Nothing was sent.", "rejected")
+        server = Server(sendPrompt=[refused])
+        with self.assertRaises(gateway.GrokError) as caught:
+            gateway.Gateway(token="test", request=server).send("bot", "task", "nonce")
+        self.assertEqual(caught.exception.delivery, "rejected")
+        self.assertEqual(server.calls.count("sendPrompt"), 1)
+
+
 class DeliveryRecoveryTests(unittest.TestCase):
     setUp = fixtures.GrokBotTests.setUp
     conversation = fixtures.GrokBotTests.conversation
+
+    def test_refused_prompt_fails_at_once_and_leaves_nothing_pending(self):
+        def refuse(ident, prompt, nonce, machine=None):
+            self.gateway.sent.append(nonce)
+            raise gateway.GrokError("Grok Bot refused the request (HTTP 502): no. Nothing was sent.", "rejected")
+        self.gateway.send = refuse
+        conversation = self.conversation()
+        with self.assertRaisesRegex(gateway.GrokError, "refused"):
+            conversation.turn("Task")
+        self.assertEqual(len(self.gateway.sent), 1)
+        self.assertIsNone(sessions.load(fixtures.BOT)["pending"])
+
+    def unknown_pending(self, age):
+        conversation = self.conversation()
+        conversation.ensure_session()
+        conversation.session["pending"] = {"nonce": "lost", "text": "Lost task", "root": None, "delivery": "unknown",
+                                           "started": cli.time.time() - age, "before": [], "shown": []}
+        sessions.save(conversation.session)
+        return conversation
+
+    def test_a_lost_prompt_absent_from_the_transcript_is_closed_without_resending(self):
+        conversation = self.unknown_pending(cli.ARRIVAL_GRACE + 60)
+        with contextlib.redirect_stdout(io.StringIO()):
+            conversation.turn("New task")
+        saved = sessions.load(fixtures.BOT)
+        self.assertEqual([m["status"] for m in saved["messages"] if m.get("status")], ["not delivered"])
+        self.assertEqual(saved["messages"][0]["user"], "Lost task")
+        self.assertEqual([prompt for _, prompt, _, _ in self.gateway.sent if "Lost task" in prompt], [])
+        self.assertEqual(len(self.gateway.sent), 1)    # only the new task
+
+    def test_a_recent_or_visible_lost_prompt_is_still_preserved(self):
+        conversation = self.unknown_pending(5)
+        with self.assertRaisesRegex(gateway.GrokError, "still unknown"):
+            conversation.turn("New task")
+        conversation = self.unknown_pending(cli.ARRIVAL_GRACE + 60)
+        self.gateway.entries = [{"kind": "message", "id": "u", "role": "user", "clientNonce": "lost"}]
+        with self.assertRaisesRegex(gateway.GrokError, "still unknown"):
+            conversation.turn("New task")
+        self.assertEqual(self.gateway.sent, [])
+        self.assertEqual(sessions.load(fixtures.BOT)["pending"]["nonce"], "lost")
+
+    def test_a_partial_transcript_cannot_prove_a_prompt_was_lost(self):
+        conversation = self.unknown_pending(cli.ARRIVAL_GRACE + 60)
+        recent = int(cli.time.time() * 1000)
+        self.gateway.entries = [{"kind": "send-message", "id": f"e{i}", "timestampMs": recent} for i in range(cli.TRANSCRIPT_TAIL)]
+        with self.assertRaisesRegex(gateway.GrokError, "still unknown"):
+            conversation.turn("New task")
+        self.assertEqual(self.gateway.sent, [])
+
+    def test_watching_a_lost_prompt_ends_once_it_provably_never_arrived(self):
+        conversation = self.unknown_pending(cli.ARRIVAL_GRACE + 60)
+        conversation.wait = lambda _: None
+        with self.assertRaisesRegex(gateway.GrokError, "never received"):
+            conversation.observe()
+        self.assertIsNone(sessions.load(fixtures.BOT)["pending"])
+        self.assertEqual(self.gateway.sent, [])
 
     def test_missing_receipt_and_empty_transcript_preserve_original_prompt(self):
         conversation = self.conversation()

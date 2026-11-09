@@ -16,7 +16,7 @@ import sys
 import threading
 import time
 
-from grokbot_gateway import Gateway, GrokError, entry_text, request_id
+from grokbot_gateway import TRANSCRIPT_TAIL, Gateway, GrokError, entry_text, request_id
 from grokbot_goal import Goal
 import grokbot_sections as sections
 import grokbot_where as where
@@ -48,6 +48,11 @@ def marker(nonce):
 
 
 APP = Path("/Applications/Grok Bot.app")
+
+# A prompt appears in the bot's transcript within seconds of being accepted. A lost
+# receipt whose nonce is still absent this long after sending, from a transcript that
+# reaches back past the send while the bot is idle, was never delivered.
+ARRIVAL_GRACE = 90
 
 # Reverse-engineering requests get REA's local CLI; Grok Bot cannot attach a local MCP server.
 REVERSE = re.compile(r"\brevers(?:e|ing)[- ]?engineer|\bdecompil|\bdisassembl|\bREA\b", re.I)
@@ -360,20 +365,49 @@ class Conversation:
         remote = self.gateway.agent(self.session["id"])
         if remote is None:
             raise GrokError("This bot no longer exists. Start a new CLI session.")
-        final = any(e.get("kind") == "send-message" and marker(pending["nonce"]) in entry_text(e)
-                    for e in self.gateway.transcript(self.session["id"]))
+        entries = self.gateway.transcript(self.session["id"])
+        final = any(e.get("kind") == "send-message" and marker(pending["nonce"]) in entry_text(e) for e in entries)
         if remote.get("isRunningTurn") or remote.get("isRunning") or final:
             self.output.event({"type": "notice", "text": "Finishing the previous request first."})
             self.observe(report=False)
         elif pending.get("delivery") == "unknown":
-            raise GrokError("Delivery of the previous request is still unknown. Its request is saved; use grokbot --resume "
-                            + self.session["id"] + " to keep watching before submitting another task.")
+            if not self.never_arrived(pending, entries, remote):
+                raise GrokError("Delivery of the previous request is still unknown. Its request is saved; use grokbot --resume "
+                                + self.session["id"] + " to keep watching before submitting another task.")
+            self.undelivered(pending)
         else:
             self.session["messages"].append({"user": pending["text"], "assistant": "", "at": time.time(),
                                              "status": "interrupted"})
             self.session["pending"] = None
             store.save(self.session)
         self.output.answer = ""
+
+    def never_arrived(self, pending, entries, remote):
+        """True when a prompt whose receipt was lost provably never reached the bot.
+
+        Without this, a refused or dropped send is watched until --timeout (30 minutes
+        by default) for a reply that cannot come. The evidence must be complete: the
+        grace period has passed, the bot is idle, the transcript reaches back past the
+        send, and no entry carries this request's nonce or marker.
+        """
+        started = pending.get("started")
+        if pending.get("delivery") != "unknown" or not started or time.time() - started < ARRIVAL_GRACE:
+            return False
+        if not remote or remote.get("isRunningTurn") or remote.get("isRunning") or remote.get("isComposingMessage"):
+            return False
+        nonce = pending["nonce"]
+        if any(e.get("clientNonce") == nonce or marker(nonce) in entry_text(e) for e in entries):
+            return False
+        stamps = [e["timestampMs"] for e in entries if isinstance(e.get("timestampMs"), (int, float))]
+        return len(entries) < TRANSCRIPT_TAIL or bool(stamps and min(stamps) < started * 1000)
+
+    def undelivered(self, pending):
+        """Close a request that never reached Grok Bot. It is recorded, never resent."""
+        self.session["messages"].append({"user": pending["text"], "assistant": "", "at": time.time(),
+                                         "status": "not delivered"})
+        self.session["pending"] = None
+        store.save(self.session)
+        self.output.event({"type": "notice", "text": "The previous request never reached Grok Bot, so nothing ran. It was not resent."})
 
     def watch_read(self, read, deadline):
         """Reconnect read-only observation without repeating the pending task."""
@@ -455,6 +489,9 @@ class Conversation:
             remote = self.watch_read(self.gateway.agent, deadline)
             if remote is None:
                 raise GrokError("The bot disappeared while this request was running.")
+            if not accepted and self.never_arrived(pending, entries, remote):
+                self.undelivered(pending)
+                raise GrokError("Grok Bot never received this request, so nothing ran. Send it again once Grok Bot accepts prompts.")
             idle = remote.get("isRunningTurn") is False and not remote.get("isRunning") and not remote.get("isComposingMessage")
             settled = settled + 1 if done and idle else 0
             if settled >= 2:

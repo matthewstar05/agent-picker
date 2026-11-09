@@ -6,6 +6,7 @@ stay in memory; only the provider's HTTPS hosts may receive them.
 
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -17,6 +18,12 @@ import uuid
 
 BACKEND = "https://api2.cursor.sh"
 MAX_BODY = 8 * 1024 * 1024
+TRANSCRIPT_TAIL = 200
+# The gateway's own refusal, sent with a 5xx status. It means the request was turned
+# away, not lost, so a refused prompt is known to be unsent and never needs watching.
+# Since Grok Bot's November 2026 update it answers this CLI's sendPrompt with
+# "A Sand box session may not make this request on this endpoint."
+REFUSED = re.compile(r"may not make this request", re.I)
 
 
 class GrokError(RuntimeError):
@@ -90,6 +97,9 @@ def post(url, body, headers, timeout=30):
             raise GrokError("Grok Bot returned more data than this client can safely retain.")
         return json.loads(raw) if raw else {}
     except urllib.error.HTTPError as exc:
+        detail = refusal(exc)
+        if detail:
+            raise GrokError(f"Grok Bot refused the request (HTTP {exc.code}): {detail} Nothing was sent.", "rejected") from None
         # Do not echo a URL, token, account export, or upstream response body.
         label = "Sign in to Cursor again" if exc.code in (401, 403) else "Grok Bot request failed"
         raise GrokError(f"{label} (HTTP {exc.code}).", "rejected" if exc.code < 500 and exc.code not in (408, 417) else "unknown",
@@ -98,6 +108,21 @@ def post(url, body, headers, timeout=30):
         raise GrokError("Cannot reach Grok Bot. Check the connection before retrying.", "unknown", transient=True) from None
     except (ValueError, TypeError):
         raise GrokError("Grok Bot returned an invalid response.", "unknown") from None
+
+
+def refusal(exc):
+    """The gateway's explicit refusal text from an HTTP error, or None.
+
+    Only a short, known refusal phrase is shown; any other body is discarded so
+    tokens or account data in an upstream error are never echoed.
+    """
+    try:
+        message = json.loads(exc.read(4096)).get("error")
+    except Exception:   # no body, not JSON, or not an object
+        return None
+    if isinstance(message, str) and REFUSED.search(message):
+        return re.sub(r"[\x00-\x1f\x7f]", "", message).strip()[:200]
+    return None
 
 
 class Gateway:
@@ -200,7 +225,7 @@ class Gateway:
         return receipt["messageId"]
 
     def transcript(self, ident):
-        data = self.call("getAgentTranscriptTail", {"id": ident, "limit": 200})
+        data = self.call("getAgentTranscriptTail", {"id": ident, "limit": TRANSCRIPT_TAIL})
         rows = data.get("entries", []) if isinstance(data, dict) else []
         if not isinstance(rows, list) or not all(isinstance(e, dict) for e in rows):
             raise GrokError("Invalid Grok Bot transcript.")
