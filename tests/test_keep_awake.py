@@ -1,0 +1,197 @@
+import json
+import os
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+import keep_awake
+import preferences
+
+
+class FakeAmphetamine:
+    """Answers the AppleScript commands keep_awake sends, without touching the real app."""
+
+    def __init__(self, active=False, remaining=0, trigger=False):
+        self.active, self.remaining, self.trigger = active, remaining, trigger
+        self.closed_display = False
+        self.commands = []
+
+    def __call__(self, command):
+        self.commands.append(command)
+        if command == "session is active":
+            return "true" if self.active else "false"
+        if command == "session time remaining":
+            return str(self.remaining if self.active else -3)
+        if command == "session is Trigger":
+            return "true" if self.trigger else "false"
+        if command.startswith("start new session"):
+            self.active, self.remaining, self.trigger = True, 0, False
+            return ""
+        if command == "end session":
+            self.active = False
+            return ""
+        if command == "closed display mode enabled":
+            return "true" if self.closed_display else "false"
+        if command == "enable closed display mode":
+            self.closed_display = True
+            return ""
+        raise AssertionError(command)
+
+    def started(self):
+        return sum(c.startswith("start new session") for c in self.commands)
+
+    def ended(self):
+        return self.commands.count("end session")
+
+
+@unittest.skipUnless(keep_awake.SUPPORTED, "Amphetamine is macOS only")
+class KeepAwakeTests(unittest.TestCase):
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.root = Path(folder.name)
+        self.working = False
+        self.app = FakeAmphetamine()
+        for patcher in (patch.object(preferences, "PATH", self.root / "preferences.json"),
+                        patch.object(preferences, "_values", {}),
+                        patch.object(keep_awake, "STATE", self.root / "keep-awake.json"),
+                        patch.object(keep_awake, "LOCK", self.root / "keep-awake.lock"),
+                        patch.object(keep_awake, "installed", return_value=True),
+                        patch.object(keep_awake, "agents_working", side_effect=lambda: self.working),
+                        patch.object(keep_awake, "_tell", side_effect=self.app),
+                        patch.object(keep_awake, "ensure_service")):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        preferences.put(keep_awake.KEEP_AWAKE.key, True)
+
+    def test_setting_is_listed_with_the_usage_panel_and_starts_off(self):
+        self.assertEqual(keep_awake.KEEP_AWAKE.section, "Usage panel")
+        self.assertIs(keep_awake.KEEP_AWAKE.default, False)
+
+    def test_a_working_agent_starts_a_session_that_ends_after_the_grace_period(self):
+        self.working = True
+        state = keep_awake.tick(now=1000)
+        self.assertTrue(state["owned"])
+        self.assertEqual(self.app.started(), 1)
+        self.assertIn("displaySleepAllowed:true", self.app.commands[1])
+        self.assertTrue(self.app.closed_display, "the lid can close without sleeping")
+
+        self.working = False
+        keep_awake.tick(now=1000 + keep_awake.GRACE - 5)   # a gap between turns
+        self.assertTrue(self.app.active)
+        state = keep_awake.tick(now=1000 + keep_awake.GRACE + 5)
+        self.assertFalse(state["owned"])
+        self.assertFalse(self.app.active)
+        self.assertEqual(self.app.ended(), 1)
+
+    def test_looks_at_agents_at_most_every_interval(self):
+        self.working = True
+        keep_awake.tick(now=1000)
+        sent = len(self.app.commands)
+        self.assertIsNone(keep_awake.tick(now=1000 + keep_awake.INTERVAL / 2))
+        self.assertEqual(len(self.app.commands), sent)
+
+    def test_your_own_session_is_never_started_over_or_ended(self):
+        self.app.active, self.app.remaining = True, 3600
+        self.working = True
+        keep_awake.tick(now=1000)
+        self.working = False
+        keep_awake.tick(now=1000 + keep_awake.GRACE + 5)
+        self.assertEqual((self.app.started(), self.app.ended()), (0, 0))
+        self.assertTrue(self.app.active)
+
+    def test_a_timed_session_started_over_ours_is_left_running(self):
+        self.working = True
+        keep_awake.tick(now=1000)
+        self.app.remaining = 1800   # you started a 30 minute session over it
+        self.working = False
+        keep_awake.tick(now=1000 + keep_awake.GRACE + 5)
+        self.assertEqual(self.app.ended(), 0)
+        self.assertTrue(self.app.active)
+
+    def test_a_session_ended_under_us_is_not_restarted_until_agents_idle(self):
+        self.working = True
+        keep_awake.tick(now=1000)
+        self.app.active = False   # ended from the menu bar, or on low battery
+        keep_awake.tick(now=1020)
+        keep_awake.tick(now=1040)
+        self.assertEqual(self.app.started(), 1)
+
+        self.working = False
+        keep_awake.tick(now=1040 + keep_awake.GRACE + 5)
+        self.working = True
+        keep_awake.tick(now=1040 + keep_awake.GRACE + 20)
+        self.assertEqual(self.app.started(), 2)
+
+    def test_turning_the_setting_off_ends_our_session_right_away(self):
+        self.working = True
+        keep_awake.tick(now=1000)
+        preferences.put(keep_awake.KEEP_AWAKE.key, False)
+        state = keep_awake.tick(now=1001)
+        self.assertFalse(state["owned"])
+        self.assertFalse(self.app.active)
+
+    def test_off_does_nothing_at_all(self):
+        preferences.put(keep_awake.KEEP_AWAKE.key, False)
+        self.working = True
+        self.assertIsNone(keep_awake.tick(now=1000))
+        self.assertEqual(self.app.commands, [])
+
+    def test_missing_amphetamine_is_never_asked(self):
+        self.working = True
+        with patch.object(keep_awake, "installed", return_value=False):
+            keep_awake.tick(now=1000)
+        self.assertEqual(self.app.commands, [])
+
+    def test_another_process_ticking_is_not_doubled_up(self):
+        import fcntl
+        self.working = True
+        with open(keep_awake.LOCK, "a") as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            self.assertIsNone(keep_awake.tick(now=1000))
+        self.assertEqual(self.app.started(), 0)
+
+
+@unittest.skipUnless(keep_awake.SUPPORTED, "Amphetamine is macOS only")
+class AgentsWorkingTests(unittest.TestCase):
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.root = Path(folder.name)
+        for patcher in (patch.object(keep_awake, "state_dir", return_value=self.root),
+                        patch.object(keep_awake, "_scheduled_running", return_value=False)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def herdr(self, panes):
+        class Done:
+            stdout = json.dumps({"result": {"panes": panes}})
+        return patch.object(keep_awake.subprocess, "run", return_value=Done())
+
+    def test_a_working_herdr_agent_counts_and_an_idle_one_does_not(self):
+        with self.herdr([{"agent": "claude", "agent_status": "idle"},
+                         {"agent": None, "agent_status": "working"}]):
+            self.assertFalse(keep_awake.agents_working())
+        with self.herdr([{"agent": "codex", "agent_status": "working"}]):
+            self.assertTrue(keep_awake.agents_working())
+
+    def test_live_star_and_grok_bot_turns_count_only_while_their_process_runs(self):
+        live = self.root / "grokbot" / "live"
+        live.mkdir(parents=True)
+        (live / "turn.json").write_text(json.dumps({"pid": os.getpid()}))
+        with self.herdr([]):
+            self.assertTrue(keep_awake.agents_working())
+            (live / "turn.json").write_text(json.dumps({"pid": 999999999}))
+            self.assertFalse(keep_awake.agents_working())
+
+    def test_herdr_missing_is_not_working(self):
+        with patch.object(keep_awake.subprocess, "run", side_effect=OSError):
+            self.assertFalse(keep_awake.agents_working())
+
+
+if __name__ == "__main__":
+    unittest.main()

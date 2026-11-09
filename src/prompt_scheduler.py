@@ -22,6 +22,7 @@ from zoneinfo import ZoneInfo
 
 from platform_runtime import resolve_argv, state_dir, SEARCH_DIRS, stop_process_tree
 from settings import load_agents
+import keep_awake
 
 PROVIDERS = ("Claude", "Codex", "Gemini")
 REPEATS = ("once", "hourly", "daily", "weekdays", "weekly", "monthly")
@@ -398,7 +399,17 @@ def daemon():
                         if stopped.wait(1):
                             break
                 else:
-                    stopped.wait(POLL_SECONDS)
+                    # Keep awake while agents work: follow them more closely than
+                    # the prompt schedule needs (see keep_awake.py).
+                    deadline = time.monotonic() + POLL_SECONDS
+                    while not stopped.is_set():
+                        try:
+                            keep_awake.tick()
+                        except Exception as exc:
+                            print(f"scheduler: keep awake: {exc}", file=sys.stderr, flush=True)
+                        left = deadline - time.monotonic()
+                        if left <= 0 or stopped.wait(min(left, keep_awake.INTERVAL if keep_awake.enabled() else left)):
+                            break
         finally:
             for sig, handler in old.items():
                 signal.signal(sig, handler)

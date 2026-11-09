@@ -138,6 +138,7 @@ CARD_NAMES = {"all": "on · all workspaces", "workspace": "on · this workspace"
               "always": "on · always shown", "off": "off"}
 
 
+import keep_awake  # registers Keep awake while agents work, after the panel's own settings
 STAR_RESETS = preferences.register(ap.STAR_RESETS)
 GROKBOT_WHERE = preferences.register(ap.GROKBOT_WHERE)
 
@@ -495,6 +496,10 @@ def watch_sessions(stop):
             HERDR_OK, SCOPES = herdr, scopes
         rescope()
         seen = now_working
+        try:
+            keep_awake.tick()   # looks at the agents itself, at most every few seconds
+        except Exception:
+            pass
         stop.wait(2)
 
 
