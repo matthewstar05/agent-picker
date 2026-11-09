@@ -270,3 +270,37 @@ class SelectionTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Pane(io.StringIO):
+    def __init__(self, tty):
+        super().__init__()
+        self.tty = tty
+
+    def isatty(self):
+        return self.tty
+
+
+class BannerTest(unittest.TestCase):
+    def test_header_starts_a_fresh_pane_with_the_mascot_beside_the_name(self):
+        import grokbot
+        pane = Pane(True)
+        grokbot.banner(Path.home() / "project", mode="local", out=pane)
+        shown = pane.getvalue()
+        # Screen and scrollback cleared and the cursor homed before anything is drawn.
+        self.assertTrue(shown.startswith(grokbot.FRESH_SCREEN))
+        lines = grokbot.clean(shown[len(grokbot.FRESH_SCREEN):]).splitlines()
+        self.assertEqual([line[:len(grokbot.LOGO[0])] for line in lines[:3]], list(grokbot.LOGO))
+        self.assertIn("Grok Bot Agent v" + grokbot.VERSION, lines[0])
+        self.assertTrue(lines[2].endswith("~" + str(Path("/project"))))
+
+    def test_piped_output_gets_no_escape_codes_and_keeps_the_session(self):
+        import grokbot
+        pane = Pane(False)
+        grokbot.banner("/work", session={"id": "abc"}, out=pane)
+        shown = pane.getvalue()
+        self.assertNotIn("\x1b", shown)
+        lines = shown.splitlines()
+        self.assertEqual(lines[0], grokbot.LOGO[0] + "  Grok Bot Agent v" + grokbot.VERSION)
+        # Text past the mascot's three rows stays in the same column.
+        self.assertEqual(lines[3], " " * len(grokbot.LOGO[0]) + "  Session abc")

@@ -718,14 +718,35 @@ def list_sessions(cwd):
         print("No saved conversations in this project.")
 
 
-def banner(cwd, session=None, mode=None):
-    color = "\x1b[38;2;255;160;165m" if sys.stdout.isatty() else ""
-    reset = "\x1b[0m" if color else ""
-    print("\n  " + color + "Grok Bot Agent" + reset + "\n  v" + VERSION)
-    print("  " + clean(str(cwd)))
+# The Grok Bot mascot, a small round bot drawn with quadrant blocks (8 columns, 3 rows).
+LOGO = (" ▗▄██▄▖ ", " █▌▐▌▐█ ", " ▝█▀▀█▘ ")
+# Clear the screen and the terminal's scrollback, then home the cursor, so the header
+# and prompt start at the top of the pane with nothing older to scroll back to.
+FRESH_SCREEN = "\x1b[2J\x1b[3J\x1b[H"
+
+
+def home(path):
+    path = str(path)
+    user = str(Path.home())
+    return "~" + path[len(user):] if path == user or path.startswith(user + os.sep) else path
+
+
+def banner(cwd, session=None, mode=None, out=None):
+    """Claude Code-style header: the mascot on the left, name, account and folder beside it."""
+    out = out or sys.stdout
+    tty = out.isatty()
+    def paint(text, rgb, bold=False):
+        return (("\x1b[1m" if bold else "") + f"\x1b[38;2;{';'.join(map(str, rgb))}m{text}\x1b[0m") if tty else text
+    text = [paint("Grok Bot Agent", (255, 190, 215), bold=True) + " " + paint("v" + VERSION, (135, 135, 145)),
+            paint("Cursor Grok Bot usage · " + (where.WHERE.show(mode) + " · " if mode else "") + "/help for commands",
+                  (135, 135, 145)),
+            paint(clean(home(cwd)), (135, 135, 145))]
     if session:
-        print("  Session " + session["id"])
-    print("  Cursor Grok Bot usage · " + (where.WHERE.show(mode) + " · " if mode else "") + "/help for commands\n")
+        text.append(paint("Session " + session["id"], (135, 135, 145)))
+    logo = list(LOGO) + [" " * len(LOGO[0])] * (len(text) - len(LOGO))
+    out.write((FRESH_SCREEN if tty else "")
+              + "\n".join(paint(art, (240, 130, 175)) + "  " + line for art, line in zip(logo, text)) + "\n\n")
+    out.flush()
 
 
 def piped(wait=0.2):
@@ -927,6 +948,7 @@ def main(argv=None):
                 elif verb in ("new", "clear"):
                     conversation.session = None
                     goal.clear()
+                    banner(cwd, None, conversation.where)   # a fresh screen, like Claude Code's /clear
                     print("New conversation. Your next task creates a separate bot.")
                 elif verb == "resume":
                     resumed = store.load(rest.strip() or None, str(cwd))
