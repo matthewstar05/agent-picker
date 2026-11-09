@@ -999,6 +999,22 @@ class HerdrAiTests(unittest.TestCase):
         self.assertIsNone(self.team_panes()["team"])
         self.assertIn("picker", self.team_panes()["panes"])
 
+    def test_standard_uses_the_arranged_sizes_with_a_team_height_terminal(self):
+        self.run_cli(INSIDE, ["--setup=standard"])
+        panes = self.team_panes()["panes"]
+        ratio = {}
+        for c in self.fake.calls:
+            if c[:2] == ["pane", "split"]:
+                ratio[(c[2], c[c.index("--direction") + 1])] = float(c[c.index("--ratio") + 1])
+        # The terminal was split from the caller's pane and swapped down, so its split
+        # is the one made on the pane that ends up as "terminal".
+        self.assertEqual(ratio[(panes["terminal"], "right")], 0.7173)
+        self.assertEqual(ratio[(panes["claude"], "down")], 0.5167)
+        self.assertEqual(ratio[(panes["terminal"], "down")], herdr_ai.TEAM_TERMINAL)
+        self.assertEqual(ratio[(panes["agy"], "right")], 0.5109)
+        self.assertEqual(ratio[(panes["agy"], "down")], 0.5306)
+        self.assertEqual(ratio[(panes["codex"], "down")], 0.5306)
+
     def test_setup_flag_on_a_tab_laid_out_differently_refuses(self):
         self.run_cli(INSIDE)
         self.fake.start_agents()

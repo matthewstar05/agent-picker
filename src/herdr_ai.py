@@ -631,6 +631,15 @@ def type_line(herdr, pane, line):
     herdr("pane", "send-text", pane, "\x15" + line + "\n")
 
 
+# Standard's split ratios, as herdr's --ratio: the share kept by the pane being split
+# (the left or upper part). They reproduce the owner's arranged workbench of
+# 2026-11-09: the right column a little narrower than 3/10 with Claude just over
+# half of it, a 2x2 crew grid with the left column and top row slightly larger,
+# and the terminal row as short as a team layout's (TEAM_TERMINAL, the solo Codex height).
+TEAM_TERMINAL = 0.82
+STANDARD_SIZES = {"side": 0.7173, "usage": 0.5167, "terminal": TEAM_TERMINAL, "columns": 0.5109, "rows": 0.5306}
+
+
 def build(herdr, root, cwd, team=None, plan=None):
     """Split root into the workbench, or into team's layout (plan from team_plan).
     root ends up as the terminal along the bottom."""
@@ -640,15 +649,16 @@ def build(herdr, root, cwd, team=None, plan=None):
 
     if team:
         return build_team(herdr, root, split, team, plan or {})
+    sizes = STANDARD_SIZES
     panes = {"terminal": root}
-    panes["claude"] = split(root, "right", 0.72)            # right column: Claude over usage
-    panes["usage"] = split(panes["claude"], "down", 0.54)
-    panes["agy"] = split(root, "down", 0.80)                # terminal across the bottom of the left 2/3
+    panes["claude"] = split(root, "right", sizes["side"])           # right column: Claude over usage
+    panes["usage"] = split(panes["claude"], "down", sizes["usage"])
+    panes["agy"] = split(root, "down", sizes["terminal"])           # terminal across the bottom of the left part
     # Swap so the caller's shell, which keeps focus, becomes the terminal.
     herdr("pane", "swap", "--source-pane", root, "--target-pane", panes["agy"])
-    panes["codex"] = split(panes["agy"], "right", 0.49)
-    panes["picker"] = split(panes["agy"], "down", 0.54)
-    panes["cursor"] = split(panes["codex"], "down", 0.54)
+    panes["codex"] = split(panes["agy"], "right", sizes["columns"])
+    panes["picker"] = split(panes["agy"], "down", sizes["rows"])
+    panes["cursor"] = split(panes["codex"], "down", sizes["rows"])
 
     launch_panes(herdr, panes, PANES)
     return panes
@@ -674,7 +684,7 @@ def build_team(herdr, root, split, team, plan):
     rows), the crew in a 2x2 grid on the left, and the terminal under them."""
     panes = {"terminal": root}
     panes["lead"] = split(root, "right", 0.72)
-    ratio = 0.82
+    ratio = TEAM_TERMINAL
     if team in TALL_USAGE:
         # Cursor's card has three bars, so its usage pane and the terminal beside
         # it start two rows higher, keeping the bars and the terminal lined up.
