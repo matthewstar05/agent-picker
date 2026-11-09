@@ -235,6 +235,26 @@ class GrokBotTests(unittest.TestCase):
             c.approve({"id": "e"}, card)
         self.assertEqual(self.gateway.approved, [])
 
+    def test_bypass_approves_every_card_even_headless(self):
+        c = self.conversation("text")
+        c.bypass = True
+        c.ensure_session()
+        entry = {"id": "e", "kind": "send-message",
+                 "message": {"type": "local-tool-permission", "ask": {"status": "pending", "requestId": "r"}}}
+        self.gateway.entries.append(entry)
+        card = {"status": "pending", "command": "touch file", "requestId": "r"}
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            c.approve(entry, card)
+        self.assertEqual(self.gateway.approved, [("e", True)])
+        self.assertIn("Auto-approved", err.getvalue())
+
+    def test_bypass_flag_matches_the_other_agents(self):
+        for flag in ("--dangerously-skip-permissions", "--yolo"):
+            self.assertTrue(cli.parser().parse_args([flag]).bypass)
+        self.assertFalse(cli.parser().parse_args([]).bypass)
+        grok = next(a for a in ap.AGENTS if a["name"] == "Grok Bot")
+        self.assertIn("--dangerously-skip-permissions", grok["argv"])
+
     def test_print_text_mode_writes_only_the_final_answer_like_claude(self):
         c = self.conversation("text")
         with contextlib.redirect_stdout(io.StringIO()) as out, contextlib.redirect_stderr(io.StringIO()) as err:
@@ -412,6 +432,8 @@ class GrokBotTests(unittest.TestCase):
         run = subprocess.run([sys.executable, str(ROOT / "src/agent_picker.py"), "--picker-launch", "Grok Bot", "-p", "quoted task"],
                              cwd=self.root, env=env, capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(run.returncode, 0, run.stderr)
+        # An argv override replaces the whole array, flags included; agents.json's
+        # bypass flag is covered by test_bypass_flag_matches_the_other_agents.
         self.assertEqual(json.loads(output.read_text()), {"argv": ["-p", "quoted task"], "cwd": str(self.root)})
 
 

@@ -277,6 +277,24 @@ class PickerTests(unittest.TestCase):
         self.assertEqual(windows, [{"label": "5h", "pct": 25.0,
                                     "resets": picker._epoch("2030-01-01T00:00:00.123456Z")}])
 
+    def test_antigravity_quota_identifies_as_the_installed_agy(self):
+        # Google reports the Gemini group only to a current agy client User-Agent.
+        token = {"token": {"access_token": "fake", "expiry": "2030-01-01T00:00:00Z"}}
+        claude_only = {"groups": [{"displayName": "Claude and GPT models", "buckets": [
+            {"window": "5h", "remainingFraction": 1, "resetTime": "2030-01-01T00:00:00Z"}]}]}
+        gemini = {"groups": [{"displayName": "Gemini Models", "buckets": [
+            {"window": "weekly", "remainingFraction": 0.9, "resetTime": "2030-01-02T00:00:00Z"},
+            {"window": "5h", "remainingFraction": 0.99, "resetTime": "2030-01-01T00:00:00Z"}]}]}
+
+        def http(url, headers, body):
+            return gemini if headers["User-Agent"] == "antigravity/cli/9.8.7" else claude_only
+
+        with patch.object(picker, "_keychain", return_value=json.dumps(token)), \
+                patch.object(picker, "_agy_version", return_value="9.8.7"), \
+                patch.object(picker, "_http_json", side_effect=http):
+            windows = picker.usage_antigravity()
+        self.assertEqual([(w["label"], round(w["pct"])) for w in windows], [("5h", 1), ("wk", 10)])
+
     @unittest.skipIf(os.name == "nt", "the macOS installer edits a POSIX shell profile")
     def test_macos_install_is_idempotent_and_uses_live_checkout(self):
         with tempfile.TemporaryDirectory() as folder:

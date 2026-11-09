@@ -327,9 +327,11 @@ def usage_antigravity():
         return None
     project_file = Path.home() / ".gemini/antigravity-cli/cache/default_project_id.txt"
     project = project_file.read_text().strip() if project_file.exists() else ""
+    # The Gemini group is only reported to a current agy client: a bare
+    # "antigravity" User-Agent (or an old version) now gets only Claude and GPT.
     d = _http_json("https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
                    {"Authorization": f"Bearer {token['access_token']}", "Content-Type": "application/json",
-                    "User-Agent": "antigravity"},
+                    "User-Agent": f"antigravity/cli/{_agy_version()}"},
                    json.dumps({"project": project} if project else {}).encode())
     for group in d.get("groups", []):
         if "gemini" not in group.get("displayName", "").lower():
@@ -342,6 +344,21 @@ def usage_antigravity():
                                 "resets": _epoch(bucket["resetTime"])})
         return sorted(windows, key=lambda w: w["label"] != "5h") or None
     return None
+
+
+def _agy_version():
+    """The installed agy's version, e.g. '1.4.4' (the last one checked if it can't be run)."""
+    agent = next(a for a in AGENTS if a["name"] == "Antigravity")
+    argv = resolve_argv(agent)
+    try:
+        out = subprocess.run([argv[0], "--version"], capture_output=True, text=True, timeout=10,
+                             stdin=subprocess.DEVNULL).stdout
+        match = re.search(r"\d+\.\d+\.\d+", out)
+        if match:
+            return match.group(0)
+    except (OSError, TypeError, IndexError, subprocess.SubprocessError):
+        pass
+    return "1.4.4"
 
 
 FETCHERS = {"Claude": usage_claude, "Codex": usage_codex, "Cursor": usage_cursor,

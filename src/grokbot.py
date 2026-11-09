@@ -217,13 +217,14 @@ class Output:
 
 
 class Conversation:
-    def __init__(self, gateway, output, cwd, machine=None, session=None, timeout=1800, poll=1.5, system=None):
+    def __init__(self, gateway, output, cwd, machine=None, session=None, timeout=1800, poll=1.5, bypass=False, system=None):
         self.gateway, self.output, self.cwd = gateway, output, str(Path(cwd).resolve())
         self.machine, self.session = machine, session
         self.where = where.LOCAL if machine else where.CLOUD   # main() sets the chosen mode
         self.timeout, self.poll = timeout, poll
         self.system = system    # --append-system-prompt: saved with the session, sent with every turn
         self.allowed = set()    # actions answered "always" this run, like the other agents' session approvals
+        self.bypass = bypass    # --dangerously-skip-permissions: approve every card, like the other agents' bypass flags
         self.wait = time.sleep  # the interactive CLI's runner makes this interruptible
         self.ask = lambda prompt: input(prompt)   # and routes approval questions to the main thread
 
@@ -495,6 +496,12 @@ class Conversation:
 
     def approve(self, entry, card):
         details = {key: card[key] for key in ("command", "action", "reason", "workingDirectory", "machineId") if key in card}
+        if self.bypass:
+            self.output.event({"type": "notice", "text": "Auto-approved: " + json.dumps(details, ensure_ascii=False)})
+            fresh = next((e for e in self.gateway.transcript(self.session["id"]) if e.get("id") == entry["id"]), None)
+            if fresh:
+                self.gateway.approval(self.session["id"], fresh, True)
+            return
         key = json.dumps({k: v for k, v in details.items() if k != "reason"}, sort_keys=True)
         if key in self.allowed:
             self.output.event({"type": "notice", "text": "Allowed for this session: " + json.dumps(details, ensure_ascii=False)})
@@ -651,6 +658,8 @@ def parser():
                    help="this Mac, its cloud computer, or auto to choose per request (default: the picker's Grok Bot setting)")
     p.add_argument("--model", choices=("auto",), default="auto", help="Grok Bot manages model selection")
     p.add_argument("--timeout", type=float, default=1800, help="seconds to observe a turn before leaving it saved")
+    p.add_argument("--dangerously-skip-permissions", "--yolo", action="store_true", dest="bypass",
+                   help="approve every Grok Bot approval card automatically, including in --print mode")
     return p
 
 
@@ -709,7 +718,8 @@ def main(argv=None):
                                                                mode, session, output)
         if machine is None and mode != where.CLOUD:
             mode = where.CLOUD
-        conversation = Conversation(gateway, output, cwd, machine, session, args.timeout, system=args.system)
+        conversation = Conversation(gateway, output, cwd, machine, session, args.timeout, bypass=args.bypass,
+                                    system=args.system)
         conversation.where = mode
         prompt = " ".join(args.prompt).strip()
         if args.printing and not sys.stdin.isatty() and not (session and session.get("pending")) and (not prompt or piped()):
@@ -732,7 +742,8 @@ def main(argv=None):
         def hint():
             return ("Grok Bot · Auto" + (" · " + goal.status() if goal.text else ""),
                     ("Cloud" if machine is None else ("Auto" if conversation.where == where.AUTO else "Local")
-                     + " · " + machine.get("localToolPermission", "ask")))
+                     + " · " + machine.get("localToolPermission", "ask"))
+                    + (" · bypass permissions" if args.bypass else ""))
 
         def save_goal():
             if conversation.session:

@@ -345,54 +345,55 @@
   {
     "name": "Grok Bot",
     "pastel": [
-      225,
-      225,
-      235
+      255,
+      205,
+      225
     ],
     "gradient": [
       [
-        245,
-        245,
-        250
+        255,
+        190,
+        215
       ],
       [
-        125,
+        240,
         130,
-        145
+        175
       ],
       [
-        235,
-        150,
-        160
+        255,
+        225,
+        238
       ]
     ],
     "bar_gradient": [
       [
-        230,
-        230,
-        240
+        255,
+        190,
+        215
       ],
       [
-        165,
-        170,
-        190
+        240,
+        130,
+        175
       ],
       [
         255,
-        160,
-        165
+        225,
+        238
       ]
     ],
     "model": "provider-managed",
     "short": "Grok Bot",
     "color": [
-      225,
-      225,
-      235
+      240,
+      130,
+      175
     ],
     "detail": "Cursor Grok Bot usage \u00b7 local machine tools",
     "argv": [
-      "grokbot"
+      "grokbot",
+      "--dangerously-skip-permissions"
     ],
     "detect": [
       "grokbot",
@@ -403,12 +404,8 @@
       "gb"
     ],
     "team": {
-      "lead": {
-        "model": "auto"
-      },
-      "crew": {
-        "model": "auto"
-      }
+      "lead": {"model": "auto"},
+      "crew": {"model": "auto"}
     }
   },
   {
