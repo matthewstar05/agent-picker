@@ -317,6 +317,7 @@ def prepare(agent, args):
             brief = lead_brief(agent, target.split(","), crew_agent, extra.get("--picker-gemini"), usage_pane)
         else:
             brief = crew_brief(agent, target, usage_pane)
+            agent["team_role"] = "crew"   # crew start no subagents, so claude_ultracode leaves them be
     return instruct(agent, args, brief, opening=lead or solo, shared=not solo)
 
 

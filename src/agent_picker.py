@@ -927,6 +927,10 @@ def render_defaults(menu, cols, rows, t):
             out.append(note("Faster replies use more quota.", bw, accent))
         if field == "system_prompts":
             out.append(note("agy context only; herdr-ai adds its own instructions.", bw, accent))
+        if field == "ultracode":
+            text = ("Claude Code's ultracode: a workflow for every substantive task in new Claude sessions. "
+                    "Uses more quota; narrow workflow agents use haiku.")
+            out += [note(line, bw, accent) for line in textwrap.wrap(text, max(20, bw - 4))]
         if hasattr(menu, "note"):
             out += [note(line, bw, accent) for line in textwrap.wrap(menu.note(), max(20, bw - 4))]
         if menu.error:
@@ -1526,6 +1530,8 @@ def main():
         args = args[1:]
     import agy_prompts
     argv = agy_prompts.prepare(agent, argv + args)
+    import claude_ultracode
+    argv = claude_ultracode.prepare(agent, argv)
     save_last(index)
     defaults = provider_defaults.current(agent)
     if os.environ.get("AGENT_PICKER_NO_PRETRUST") != "1" and (defaults is None or defaults["bypass_permissions"]):

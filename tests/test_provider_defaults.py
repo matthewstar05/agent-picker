@@ -109,8 +109,24 @@ class DefaultsTests(unittest.TestCase):
         menu.handle("down")
         menu.handle("left")
         self.assertFalse(menu.values["bypass_permissions"])
+        menu.handle("down")
+        self.assertEqual(menu.fields()[menu.index], "ultracode")
+        self.assertFalse(menu.values["ultracode"])
+        menu.handle(" ")
+        self.assertTrue(menu.values["ultracode"])
+        self.assertEqual(menu.shown("ultracode", True), "On")
         self.assertTrue(menu.changed)
         self.assertEqual(menu.handle("esc"), "save")
+
+    def test_claude_ultracode_is_a_default_not_a_flag(self):
+        agent = self.agents()["Claude"]
+        before = list(agent["argv"])
+        defaults.apply(agent, dict(defaults.current(agent), ultracode=True))
+        self.assertEqual(agent["argv"], before)
+        self.assertTrue(agent["defaults"]["ultracode"])
+        self.assertTrue(agent["detail"].endswith(" · ultracode"))
+        defaults.apply(agent, dict(defaults.current(agent), ultracode=False))
+        self.assertNotIn("ultracode", agent["detail"])
 
     def test_save_failure_does_not_change_launch_profile(self):
         agent = self.agents()["Claude"]
@@ -154,7 +170,8 @@ class DefaultsTests(unittest.TestCase):
             stack.enter_context(patch.object(sys, "stdout", io.StringIO()))
             self.assertIsNone(picker.choose())
             saved = json.loads(path.read_text())["agents"]["Claude"]["defaults"]
-            self.assertEqual(saved, {"model": "opus", "effort": "low", "bypass_permissions": False})
+            self.assertEqual(saved, {"model": "opus", "effort": "low", "bypass_permissions": False,
+                                     "ultracode": False})
         visible = picker._ANSI.sub("", "".join(frames))
         self.assertIn("Save Claude settings?", visible)
         self.assertIn("Save settings", visible)

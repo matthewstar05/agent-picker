@@ -95,6 +95,9 @@ def current(agent):
     if name == "Antigravity":
         values["system_prompts"] = agent.get("defaults", {}).get(
             "system_prompts", agent.get("system_prompts", True))
+    if name == "Claude":
+        # Applied at launch by claude_ultracode, not stored in argv.
+        values["ultracode"] = agent.get("defaults", {}).get("ultracode", agent.get("ultracode", False))
     return values
 
 
@@ -116,6 +119,8 @@ def apply(agent, values):
         raise ValueError("Fast Mode must be on or off")
     if agent["name"] == "Antigravity" and not isinstance(values["system_prompts"], bool):
         raise ValueError("System Prompts must be on or off")
+    if agent["name"] == "Claude" and not isinstance(values["ultracode"], bool):
+        raise ValueError("Ultracode must be on or off")
     name = agent["name"]
     if name == "Antigravity" and not str(model).startswith("gemini"):
         model = CURSOR_EFFORT.sub("", model)
@@ -189,6 +194,8 @@ def apply(agent, values):
     agent["detail"] = model if str(model).startswith("gemini") else model + " · " + effort
     if name == "Codex" and values["fast_mode"]:
         agent["detail"] += " · fast"
+    if name == "Claude" and values["ultracode"]:
+        agent["detail"] += " · ultracode"
     return agent
 
 
@@ -212,7 +219,7 @@ def save(agent, values, path):
 
 class Menu:
     LABELS = {"model": "Model", "effort": "Effort", "bypass_permissions": "Bypass Permissions",
-              "fast_mode": "Fast Mode", "system_prompts": "System Prompts"}
+              "fast_mode": "Fast Mode", "system_prompts": "System Prompts", "ultracode": "Ultracode"}
 
     def __init__(self, agent):
         self.agent = agent
@@ -231,7 +238,7 @@ class Menu:
 
     @staticmethod
     def shown(key, value):
-        return ("On" if value else "Off") if key in ("bypass_permissions", "fast_mode", "system_prompts") else str(value)
+        return ("On" if value else "Off") if key in ("bypass_permissions", "fast_mode", "system_prompts", "ultracode") else str(value)
 
     def review(self):
         """(label, new) for the model and effort to keep, then (label, old, new) for each change."""
@@ -246,6 +253,8 @@ class Menu:
     def fields(self):
         if self.agent["name"] == "Codex":
             return ("model", "effort", "bypass_permissions", "fast_mode")
+        if self.agent["name"] == "Claude":
+            return ("model", "effort", "bypass_permissions", "ultracode")
         if str(self.values.get("model", "")).startswith("gemini"):
             fields = ("model", "bypass_permissions")
         else:
