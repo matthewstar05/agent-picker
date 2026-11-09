@@ -73,7 +73,7 @@ MODE = preferences.Setting(
 TERMINAL = preferences.Setting(
     "herdr_ai.terminal_pane", "Herdr AI", "Terminal pane", ["files", "shell"], "files",
     hint="The pane under the agents: the fs file browser in icon view, or a plain shell. "
-         "q in the browser drops to its shell; fs reopens it.",
+         "Shift+Q in the browser drops to its shell; fs reopens it.",
     names={"files": "file browser", "shell": "shell"})
 
 

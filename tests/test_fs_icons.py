@@ -35,6 +35,22 @@ class ClassifyTests(unittest.TestCase):
             self.assertEqual(fs_icons.classify(home / "repo", is_dir=True, home=home), "folder-git")
             self.assertEqual(fs_icons.classify(home / "plain", is_dir=True, home=home), "folder")
             self.assertEqual(fs_icons.classify(home / "Thing.app", is_dir=True, home=home), "app")
+            (home / "hub" / ".git").mkdir(parents=True)
+            (home / "hub" / ".git" / "config").write_text(
+                '[core]\n\tbare = false\n[remote "origin"]\n\turl = git@github.com:someone/hub.git\n')
+            self.assertEqual(fs_icons.classify(home / "hub", is_dir=True, home=home), "folder-github")
+            (home / "lab" / ".git").mkdir(parents=True)
+            (home / "lab" / ".git" / "config").write_text(
+                '[remote "origin"]\n\turl = https://gitlab.com/someone/lab.git\n'
+                '[url "https://github.com/"]\n\tinsteadOf = gh:\n')
+            self.assertEqual(fs_icons.classify(home / "lab", is_dir=True, home=home), "folder-git")
+            # a worktree's .git file points at its git directory, which shares the main config
+            (home / "hub" / ".git" / "worktrees" / "wt").mkdir(parents=True)
+            (home / "hub" / ".git" / "worktrees" / "wt" / "commondir").write_text("../..\n")
+            (home / "wt").mkdir()
+            (home / "wt" / ".git").write_text(f"gitdir: {home / 'hub' / '.git' / 'worktrees' / 'wt'}\n")
+            self.assertEqual(fs_icons.classify(home / "wt", is_dir=True, home=home), "folder-github")
+            self.assertEqual(fs_icons.label("folder-github"), "GitHub repository")
             # a Desktop folder somewhere else is an ordinary folder
             (home / "plain" / "Desktop").mkdir()
             self.assertEqual(fs_icons.classify(home / "plain" / "Desktop", is_dir=True, home=home), "folder")
@@ -76,6 +92,12 @@ class IconTests(unittest.TestCase):
         tinted = fs_icons.icon("folder", "large", accent=(240, 130, 175))
         self.assertNotEqual(plain, tinted)
         self.assertNotEqual(fs_icons.icon("python", "large"), fs_icons.icon("python", "large", link=True))
+
+    def test_github_repositories_carry_a_star_and_other_repositories_none(self):
+        for size in fs_icons.SIZES:
+            star = fs_icons.icon("folder-github", size)
+            self.assertIn("★", [cell[0] for row in star for cell in row], size)
+            self.assertEqual(fs_icons.icon("folder-git", size), fs_icons.icon("folder", size), size)
 
     def test_gradients_and_colors_are_rgb(self):
         for kind in ("folder", "python", "image", "file"):

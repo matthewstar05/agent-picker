@@ -10,7 +10,7 @@ and brightens while Shift is held. Themes are the usage panel's list
 
 herdr-ai runs it in every setup's bottom-left pane in icon view (--herdr). There
 it opens on the Desktop unless the "Herdr pane opens in" setting says otherwise.
-q or Esc leaves it at the pane's shell, and fs opens it again.
+Shift+Q, and nothing else, leaves it at the pane's shell; fs opens it again.
 
 Usage: fs [DIR|FILE] [--icons|--details] [--hidden] [--sort name|kind|date|size]
           [--theme NAME] [--herdr]
@@ -18,10 +18,10 @@ Usage: fs [DIR|FILE] [--icons|--details] [--hidden] [--sort name|kind|date|size]
        folder with the file selected. The options apply to this run only.
 
 Keys:  ←↑↓→ move     ⏎ open or preview    ⇧⏎ move this tab's agents here
-       ⌫ or - enclosing folder   [ ] back, forward   ~ home   . hidden files
-       v icons or details   , sort   / filter   space Quick Look   o open in app
-       y copy path   e edit   ! shell here   p pin for herdr-ai's pane
-       r reload   t themes   s settings   ? every key   q or esc quit
+       esc, ⌫ or - back to the enclosing folder   [ ] back, forward   ~ home
+       . hidden files   v icons or details   , sort   / filter   space Quick Look
+       o open in app   y copy path   e edit   ! shell here   p pin for herdr-ai's pane
+       r reload   t themes   s settings   ? every key   ⇧Q quit
 """
 
 import json
@@ -834,7 +834,7 @@ def tile_name(name, width, lines):
         if used > width:
             break
         cut = k + 1
-    breaks = [k + 1 for k in range(max(1, cut - 6), cut) if name[k] in " -_."]
+    breaks = [k + 1 for k in range(1, cut) if name[k] in " -_."]
     head = name[:breaks[-1] if breaks else cut]
     rest = name[len(head):].lstrip(" ")
     return [head.rstrip(" "), middle(rest, width)]
@@ -877,12 +877,12 @@ class Confirm:
 
 
 HELP = [("←↑↓→", "move"), ("⏎", "open a folder, preview a file"),
-        ("⇧⏎", "move this tab's agents here (herdr-ai)"), ("⌫  -", "enclosing folder"),
+        ("⇧⏎", "move this tab's agents here (herdr-ai)"), ("esc  ⌫", "back to the enclosing folder"),
         ("[  ]", "back, forward"), ("~", "home folder"), ("v", "icons or details"),
         (",", "sort by name, kind, date, size"), (".", "show or hide hidden files"), ("/", "filter by name"),
         ("space", "Quick Look"), ("o", "open with the default app"), ("e", "edit in $EDITOR"),
         ("y", "copy the path"), ("!", "a shell in this folder"), ("p", "pin this folder for herdr-ai"),
-        ("r", "reload"), ("t", "themes"), ("s", "settings"), ("q  esc", "quit to the shell")]
+        ("r", "reload"), ("t", "themes"), ("s", "settings"), ("⇧Q", "quit to the shell")]
 
 
 class SegmentScreen:
@@ -1171,8 +1171,12 @@ class App:
             x = (iw - len(icon[0])) // 2
             for y, row in enumerate(icon):
                 put(inner[y], x, row)
-            for k, line in enumerate(tile_name(entry.name, iw, g.lines)):
-                put(inner[len(icon) + k], (iw - text_width(line)) // 2, cells_of(line, name_color, None, bool(lit)))
+            names = tile_name(entry.name, iw, g.lines)
+            # A one-line name takes the last row, leaving a row between it and the icon,
+            # so the icon and name sit evenly inside the highlight's ring.
+            first = len(icon) + g.lines - len(names)
+            for k, line in enumerate(names):
+                put(inner[first + k], (iw - text_width(line)) // 2, cells_of(line, name_color, None, bool(lit)))
         if lit is None:
             if not side:
                 return inner
@@ -1336,7 +1340,8 @@ class App:
         route = "⇧⏎ move agents" if inside_herdr() else "⇧⏎ herdr-ai"
         if self.typing:
             return [" type to filter · ⏎ keep · esc clear ", " ⏎ keep · esc clear ", ""]
-        return [f" ⏎ open · {route} · v view · t theme · s settings · ? keys · q quit ",
+        return [f" ⏎ open · esc back · {route} · v view · t theme · s settings · ? keys · ⇧Q quit ",
+                f" ⏎ open · {route} · v view · t theme · s settings · ? keys · ⇧Q quit ",
                 f" ⏎ open · {route} · v view · t theme · s settings · ? keys ",
                 f" ⏎ open · {route} · t theme · s settings · ? keys ",
                 f" {route} · t theme · s · ? keys ", " ? keys ", ""]
@@ -1921,7 +1926,7 @@ class App:
         if key.startswith("mouse:"):
             self.handle_mouse(key)
             return None
-        if key in ("\x03", "\x04"):
+        if key == "Q" and not self.typing:   # the only way out; q, Esc and Ctrl+C never quit
             return "quit"
         screen = self.screen
         if screen == "preview":
@@ -1986,12 +1991,14 @@ class App:
         return None
 
     def handle_browse(self, key):
-        if key in ("q", "esc"):
-            if key == "esc" and self.query:
+        if key == "esc":
+            # Back one step: a filter clears first, then each Esc goes to the enclosing folder.
+            if self.query is not None:
                 self.query = None
                 self.refilter()
-                return None
-            return "quit"
+            else:
+                self.up()
+            return None
         if key in ("up", "down", "left", "right", "j", "k"):
             if self.view == "details" and key == "left":
                 self.up()
@@ -2051,7 +2058,7 @@ class App:
 
     def handle_preview(self, key):
         p = self.preview
-        if key in ("esc", "q", "\x7f", "\b", "\r", "\n") and not (key in ("\r", "\n") and p.entry.is_dir):
+        if key in ("esc", "\x7f", "\b", "\r", "\n") and not (key in ("\r", "\n") and p.entry.is_dir):
             self.close_preview()
         elif key in ("\r", "\n"):
             entry = p.entry
@@ -2107,6 +2114,13 @@ class App:
         return 1.0
 
     def run(self):
+        quiet = signal.signal(signal.SIGINT, lambda *_: None)   # Ctrl+C does not quit; Shift+Q does
+        try:
+            return self.loop()
+        finally:
+            signal.signal(signal.SIGINT, quiet)
+
+    def loop(self):
         self.terminal = Terminal()
         self.terminal.extended = True
         self.writer = SegmentScreen(self.terminal)

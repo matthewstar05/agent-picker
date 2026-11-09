@@ -45,7 +45,7 @@ trivial tasks. The lead is told to delegate through herdr (see team.py):
 
 The pane you run it in becomes the terminal, and once the tab is laid out it
 turns into the fs file browser in icon view (the "Terminal pane" setting, or
---no-fs, keeps a plain shell there). q in the browser drops to that shell.
+--no-fs, keeps a plain shell there). Shift+Q in the browser drops to that shell.
 Run it again in a tab it already laid out and it refreshes instead: idle agents
 resume their exact conversations, and the selector and usage panel reload, with
 no new panes or tabs. Working agents and panes whose session cannot be safely

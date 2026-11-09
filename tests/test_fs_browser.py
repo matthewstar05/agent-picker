@@ -115,6 +115,7 @@ class TextTests(unittest.TestCase):
         self.assertTrue(all(fsb.text_width(line) <= 14 for line in lines))
         self.assertTrue(lines[1].endswith(".png"))
         self.assertEqual(len(fsb.tile_name("x" * 40, 14, 1)), 1)
+        self.assertEqual(fsb.tile_name("GameDev Projects", 14, 2), ["GameDev", "Projects"])
 
     def test_sizes_read_like_finder(self):
         self.assertEqual(fsb.human_size(1), "1 byte")
@@ -197,6 +198,43 @@ class NavigationTests(Base):
         self.assertEqual(app.cwd, self.tree / "alpha")
         app.handle("]")
         self.assertEqual(app.cwd, self.tree)
+
+    def test_only_shift_q_quits(self):
+        app = self.app()
+        for key in ("q", "\x03", "\x04"):
+            self.assertIsNone(app.handle(key), key)
+        self.assertEqual(app.handle("Q"), "quit")
+        for screen_key in ("t", "s", "?"):
+            app = self.app()
+            app.handle(screen_key)
+            self.assertEqual(app.handle("Q"), "quit", screen_key)
+
+    def test_esc_goes_back_a_folder_after_clearing_a_filter(self):
+        app = self.app()
+        app.handle("\r")
+        self.assertEqual(app.cwd, self.tree / "alpha")
+        app.handle("esc")
+        self.assertEqual(app.cwd, self.tree)
+        self.assertEqual(app.selected().name, "alpha")
+        for key in "/fi":
+            app.handle(key)
+        app.handle("\r")
+        app.handle("esc")
+        self.assertEqual((app.cwd, app.query), (self.tree, None))
+        app.handle("esc")
+        self.assertEqual(app.cwd, self.root)
+        app.go(Path(app.cwd.anchor))
+        app.handle("esc")   # nothing above the root
+        self.assertEqual(app.cwd, Path(app.cwd.anchor))
+
+    def test_esc_in_a_preview_returns_to_the_folder(self):
+        app = self.app()
+        app.index = self.names(app).index("notes.md")
+        app.handle("\r")
+        app.handle("q")
+        self.assertEqual(app.screen, "preview")
+        app.handle("esc")
+        self.assertEqual((app.screen, app.cwd), ("browse", self.tree))
 
     def test_arrows_move_across_the_grid_then_down_a_row(self):
         app = self.app()
@@ -284,6 +322,20 @@ class DrawingTests(Base):
         self.assertEqual(fsb.Grid.choose(177, 5, 30).size, "small")
         self.assertEqual(fsb.Grid.choose(177, 3, 30).size, "mini")
         self.assertFalse(fsb.Grid.choose(177, 1, 30).lids)
+
+    def test_a_one_line_name_sits_a_row_below_its_icon(self):
+        app = self.app()
+        grid = fsb.Grid.choose(177, 7, 6)
+        short = app.tile(app.entries[0], grid, None)              # "alpha"
+        blank = lambda row: all(c[0] == " " for c in row)
+        icon_rows, name_row = short[1:4], short[5]
+        self.assertTrue(all(not blank(row) for row in icon_rows))
+        self.assertTrue(blank(short[4]))
+        self.assertIn("alpha", "".join(c[0] for c in name_row))
+        long_name = fsb.Entry("Install agent-picker.command", self.tree / "x", kind="executable")
+        tall = app.tile(long_name, grid, None)
+        self.assertIn("Install agent-", "".join(c[0] for c in tall[4]))
+        self.assertIn("picker.command", "".join(c[0] for c in tall[5]))
 
     def test_the_frame_names_the_folder_and_its_keys(self):
         lines = self.draw(self.app(), 179, 9)

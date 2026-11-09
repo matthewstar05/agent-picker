@@ -10,13 +10,14 @@ Run this file to preview every kind at every size in true color.
 import colorsys
 import functools
 import os
+import re
 import sys
 import unicodedata
 from pathlib import Path
 
 WHITE, BLACK = (255, 255, 255), (0, 0, 0)
 FOLDER_BLUE = (92, 172, 238)      # the macOS folder blue, softened for a dark screen
-GIT_ORANGE = (240, 98, 62)
+STAR_GOLD = (250, 204, 72)       # GitHub's star
 PAGE = (232, 230, 224)            # off-white paper, easier on the eyes than pure white
 PAGE_EDGE = (206, 204, 198)
 FOLD = (172, 171, 166)
@@ -43,6 +44,7 @@ _KIND_TABLE = (
     ("folder-library", "Folder", FOLDER_BLUE, ""),
     ("folder-public", "Folder", FOLDER_BLUE, ""),
     ("folder-git", "Git repository", FOLDER_BLUE, ""),
+    ("folder-github", "GitHub repository", FOLDER_BLUE, ""),
     ("home", "Folder", FOLDER_BLUE, ""),
     ("app", "Application", (122, 140, 250), ""),
     ("package", "Package", (200, 156, 104), ""),
@@ -251,7 +253,7 @@ def classify(path, is_dir=False, is_link=False, executable=False, home=None):
         if parent == os.path.dirname(parent) and lower in _ROOT_SPECIAL:
             return _ROOT_SPECIAL[lower]
         if os.path.exists(os.path.join(os.fspath(path), ".git")):
-            return "folder-git"
+            return "folder-github" if on_github(path) else "folder-git"
         return "folder"
     if lower in _NAMES:
         return _NAMES[lower]
@@ -267,6 +269,54 @@ def classify(path, is_dir=False, is_link=False, executable=False, home=None):
     if executable:
         return "executable"
     return "file"
+
+
+_REMOTE_URL = re.compile(r"^\s*url\s*=\s*(\S+)", re.M)
+
+
+def git_config(path):
+    """The repository's config file: .git/config, or for a worktree or submodule
+    (a .git file naming its git directory) the config that directory shares."""
+    dot = os.path.join(os.fspath(path), ".git")
+    folder = dot
+    if os.path.isfile(dot):
+        try:
+            with open(dot, encoding="utf-8", errors="replace") as handle:
+                line = handle.read(4096).strip()
+        except OSError:
+            return None
+        if not line.startswith("gitdir:"):
+            return None
+        folder = os.path.join(os.fspath(path), line[7:].strip())
+        common = os.path.join(folder, "commondir")
+        if os.path.isfile(common):
+            try:
+                with open(common, encoding="utf-8", errors="replace") as handle:
+                    folder = os.path.join(folder, handle.read(4096).strip())
+            except OSError:
+                pass
+    config = os.path.join(folder, "config")
+    return config if os.path.isfile(config) else None
+
+
+def on_github(path):
+    """Whether the repository at path has a remote on github.com (https or ssh)."""
+    config = git_config(path)
+    if not config:
+        return False
+    try:
+        with open(config, encoding="utf-8", errors="replace") as handle:
+            text = handle.read(65536)
+    except OSError:
+        return False
+    for section in re.split(r"^\s*\[", text, flags=re.M):
+        if not section.lower().startswith("remote "):
+            continue
+        for url in _REMOTE_URL.findall(section):
+            host = re.sub(r"^[a-z+]+://", "", url.lower()).split("@")[-1]
+            if host.split("/")[0].split(":")[0] in ("github.com", "www.github.com"):
+                return True
+    return False
 
 
 def label(kind, name=""):
@@ -407,28 +457,35 @@ _EMBLEMS = {
     "folder-movies": ("........", "...e....", "...ee...", "...eee..", "...ee...", "...e...."),
     "folder-library": ("........", "........", ".eeeeee.", "..e..e..", "..e..e..", ".eeeeee."),
     "folder-public": ("........", "........", "...ee...", "........", "..eeee..", "..eeee.."),
-    "folder-git": ("........", "........", "...oo...", "..oooo..", "...oo...", "........"),
 }
 
 
 def _folder_colors(base):
     return {"t": _mix(base, WHITE, 0.30), "1": _mix(base, WHITE, 0.14), "2": _mix(base, WHITE, 0.05),
             "3": base, "4": _mix(base, BLACK, 0.07), "5": _mix(base, BLACK, 0.15),
-            "e": _mix(base, BLACK, 0.40), "o": GIT_ORANGE}
+            "e": _mix(base, BLACK, 0.40)}
 
 
 def _folder(kind, size, accent):
     base = accent or FOLDER_BLUE
     if size == "mini":
+        if kind == "folder-github":
+            return [[("▙", base, None, False), ("★", STAR_GOLD, None, True)]]
         return [[("▙", base, None, False), ("▄", base, None, False)]]
     grid = _FOLDER[size]
     if kind in _EMBLEMS:
         if size == "large":
             grid = _overlay(grid, _EMBLEMS[kind])
         else:   # too small to tell emblems apart: a mark says "special"
-            dot = "o" if kind == "folder-git" else "e"
-            grid = _overlay(grid, ("....", "....", "." + dot * 2 + ".", "...."))
-    return _render(grid, _folder_colors(base))
+            grid = _overlay(grid, ("....", "....", ".ee.", "...."))
+    rows = _render(grid, _folder_colors(base))
+    if kind == "folder-github":
+        # GitHub's star, as a character on the folder's body (a 6-pixel-tall
+        # icon has no room to draw one), in the cell's own body color.
+        colors = _folder_colors(base)
+        row, col, back = (1, 3, _mix(colors["2"], colors["3"], 0.5)) if size == "large" else (1, 1, colors["3"])
+        rows[row][col] = ("★", STAR_GOLD, back, True)
+    return rows
 
 
 _HOUSE = {

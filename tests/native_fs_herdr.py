@@ -127,8 +127,14 @@ while True:
         assert "project" in after.splitlines()[0], after   # the browser followed the agents
         if shots:
             Path(shots, "native-after.ansi").write_text(screen(terminal, ansi=True))
+        cli("pane", "send-keys", terminal, "esc")   # back to the work folder, still browsing
+        wait(lambda: "work" in screen(terminal).splitlines()[0] and "project" not in screen(terminal).splitlines()[0],
+             what="Esc to go back a folder")
         cli("pane", "send-keys", terminal, "q")
-        wait(lambda: "fs_browser.py" not in foreground(terminal), what="q to leave the browser")
+        time.sleep(1)
+        assert "fs_browser.py" in foreground(terminal), "q must not quit the browser"
+        cli("pane", "send-keys", terminal, "shift+q")
+        wait(lambda: "fs_browser.py" not in foreground(terminal), what="Shift+Q to leave the browser")
         print(after)
         print("Native fs smoke passed:", root)
     except Exception:
