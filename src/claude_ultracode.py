@@ -21,7 +21,10 @@ GUIDANCE = ("Ultracode workflows: pass model: 'haiku' to Workflow agent() calls 
             "mechanical or narrow, such as searching, listing or reading files, extracting or "
             "reformatting data, or simple checks, so they run fast and cheap. Leave model unset "
             "(the session model) for stages that design, write or change important code, judge, "
-            "synthesize, or adversarially verify, and whenever the user asks for a specific model.")
+            "synthesize, or adversarially verify, and whenever the user asks for a specific model. "
+            "Reviews cost tokens: when the relevant tests pass, add no review or verify stage; use one "
+            "haiku reviewer only for untested or risky changes (security, credentials, data loss, "
+            "concurrency, money), and a full review only when the user asks for one.")
 SETTINGS_FLAG = "--settings"
 PROMPT_FLAG = "--append-system-prompt"
 WINDOWS = os.name == "nt"
