@@ -65,7 +65,9 @@ class VisibilityTests(unittest.TestCase):
         self.assertFalse(watch.visible)
 
     def test_unavailable_api_falls_back_without_spinning_or_leaving_a_thread(self):
-        with patch.dict(os.environ, ENV), patch.object(visibility.socket, "socket", side_effect=OSError("offline")) as connect:
+        with patch.dict(os.environ, ENV), \
+                patch.object(visibility.socket, "AF_UNIX", getattr(socket, "AF_UNIX", 1), create=True), \
+                patch.object(visibility.socket, "socket", side_effect=OSError("offline")) as connect:
             watch = visibility.Visibility().start()
             deadline = time.monotonic() + 1
             while not watch.visible and time.monotonic() < deadline:
@@ -75,6 +77,15 @@ class VisibilityTests(unittest.TestCase):
             self.assertEqual(connect.call_count, 1)
             watch.close()
         self.assertFalse(watch._thread.is_alive())
+
+    def test_platform_without_unix_sockets_keeps_its_terminal_usable(self):
+        transport = SimpleNamespace(socket=Mock())
+        with patch.dict(os.environ, ENV), patch.object(visibility, "socket", transport):
+            watch = visibility.Visibility().start()
+            self.assertFalse(watch.enabled)
+            self.assertTrue(watch.visible)
+            watch.close()
+        transport.socket.assert_not_called()
 
     @unittest.skipUnless(hasattr(socket, "AF_UNIX"), "Herdr uses Unix sockets")
     def test_focus_events_update_visibility_without_idle_polling_and_close_unblocks_read(self):
