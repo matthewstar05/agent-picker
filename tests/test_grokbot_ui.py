@@ -1,4 +1,5 @@
 import io
+import os
 from pathlib import Path
 import sys
 import threading
@@ -282,6 +283,24 @@ class Pane(io.StringIO):
 
 
 class BannerTest(unittest.TestCase):
+    def test_narrow_panes_keep_every_logo_row_without_terminal_wrap(self):
+        import grokbot
+        from star_input import cell_width
+        for width in (20, 32, 40, 64, 80):
+            with self.subTest(width=width), patch.object(grokbot.shutil, "get_terminal_size",
+                                                       return_value=os.terminal_size((width, 12))):
+                pane = Pane(True)
+                grokbot.banner("/projects/" + "界" * 80, session={"id": "x" * 36}, mode="auto", out=pane)
+                lines = grokbot.clean(pane.getvalue()).splitlines()[1:]
+                self.assertEqual([line[:len(grokbot.LOGO[0])] for line in lines[:3]], list(grokbot.LOGO))
+                self.assertTrue(all(sum(cell_width(ch) for ch in line) < width for line in lines))
+
+    def test_header_returns_to_column_zero_even_without_terminal_newline_translation(self):
+        import grokbot
+        pane = Pane(True)
+        grokbot.banner("/work", out=pane)
+        self.assertNotIn("\n", pane.getvalue().replace("\r\n", ""))
+
     def test_header_starts_a_fresh_pane_with_the_mascot_beside_the_name(self):
         import grokbot
         pane = Pane(True)

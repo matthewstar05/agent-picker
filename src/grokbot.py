@@ -737,15 +737,46 @@ def banner(cwd, session=None, mode=None, out=None):
     tty = out.isatty()
     def paint(text, rgb, bold=False):
         return (("\x1b[1m" if bold else "") + f"\x1b[38;2;{';'.join(map(str, rgb))}m{text}\x1b[0m") if tty else text
-    text = [paint("Grok Bot Agent", (255, 190, 215), bold=True) + " " + paint("v" + VERSION, (135, 135, 145)),
-            paint("Cursor Grok Bot usage · " + (where.WHERE.show(mode) + " · " if mode else "") + "/help for commands",
-                  (135, 135, 145)),
-            paint(clean(home(cwd)), (135, 135, 145))]
+    # Leave the last terminal cell unused: wrapping a detail line displaces the
+    # next mascot row and can scroll its top out of a short pane.
+    width = max(1, shutil.get_terminal_size((100, 30)).columns - 1) if tty else None
+    stacked = width is not None and width < len(LOGO[0]) + 2 + len("Grok Bot")
+    available = width if stacked else width - len(LOGO[0]) - 2 if width is not None else None
+
+    def fit(text):
+        if available is None:
+            return text
+        from star_input import cell_width
+        if sum(cell_width(ch) for ch in text) <= available:
+            return text
+        result, cells = "", 0
+        for ch in text:
+            if cells + cell_width(ch) > available - 1:
+                break
+            result += ch
+            cells += cell_width(ch)
+        return result + "…"
+
+    name = "Grok Bot Agent"
+    if available is not None and available < len(name):
+        name = "Grok Bot"
+    title = paint(fit(name), (255, 190, 215), bold=True)
+    if available is None or len(name) + len(VERSION) + 2 <= available:
+        title += " " + paint("v" + VERSION, (135, 135, 145))
+    detail = "Cursor Grok Bot usage · " + (where.WHERE.show(mode) + " · " if mode else "") + "/help for commands"
+    if available is not None and len(detail) > available:
+        detail = (where.WHERE.show(mode) + " · " if mode else "") + "/help"
+    text = [title, paint(fit(detail), (135, 135, 145)),
+            paint(fit(clean(home(cwd))), (135, 135, 145))]
     if session:
-        text.append(paint("Session " + session["id"], (135, 135, 145)))
+        text.append(paint(fit("Session " + session["id"]), (135, 135, 145)))
     logo = list(LOGO) + [" " * len(LOGO[0])] * (len(text) - len(LOGO))
-    out.write((FRESH_SCREEN if tty else "") + "\n"     # a line of headroom above the mascot
-              + "\n".join(paint(art, (240, 130, 175)) + "  " + line for art, line in zip(logo, text)) + "\n\n")
+    lines = [paint(art, (240, 130, 175)) + "  " + line for art, line in zip(logo, text)]
+    if stacked:
+        lines = [paint(fit(art.strip()), (240, 130, 175)) for art in LOGO] + text
+    # Explicit carriage returns also work when the previous CLI left ONLCR off.
+    newline = "\r\n" if tty else "\n"
+    out.write((FRESH_SCREEN if tty else "") + newline + newline.join(lines) + newline * 2)
     out.flush()
 
 
