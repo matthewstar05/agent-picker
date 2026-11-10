@@ -37,6 +37,7 @@ import preferences
 import provider_defaults
 import usage_cache
 from platform_runtime import Terminal, launch, resolve_argv, state_dir
+from herdr_visibility import Visibility
 from settings import ROOT, config_path, load_agents, update_checkout
 
 try:
@@ -1184,8 +1185,17 @@ def choose(screen=None, only=None):
     writer = Screen(terminal)
     out = sys.stdout
     start = time.monotonic()
+    visibility = Visibility()
+    was_hidden = False
 
     def draw(sweep=None):
+        nonlocal was_hidden
+        if not visibility.visible:
+            was_hidden = True
+            return
+        if was_hidden:
+            writer.reset()
+            was_hidden = False
         # Sized to the terminal on every frame, so resizing or a narrow pane
         # can never wrap and smear.
         cols, rows = shutil.get_terminal_size((80, 24))
@@ -1240,6 +1250,8 @@ def choose(screen=None, only=None):
     out.flush()  # frames go straight to the fd after this
     try:
         terminal.__enter__()
+        if hasattr(terminal, "fd"):
+            visibility.start()
         if screen == "scheduler":
             terminal.write(f"{ESC}[?2004h")
         draw()
@@ -1247,7 +1259,7 @@ def choose(screen=None, only=None):
         while True:
             # Frames on a fixed clock, so drawing time doesn't slow the rate:
             # 60 fps for the picker, less for the screens that sit open.
-            step = (FRAME_TIME if screen == "agents" else
+            step = (1.0 if not visibility.visible else FRAME_TIME if screen == "agents" else
                     usage_panel.frame_time(usage) if screen == "usage" else
                     1 if screen == "scheduler" and not preferences.get(usage_panel.ANIMATE.key) else 1 / 30)
             frame_at += step
@@ -1348,6 +1360,7 @@ def choose(screen=None, only=None):
                 return None
             draw()
     finally:
+        visibility.close()
         terminal.keyboard(False)
         if hasattr(terminal, "old") or hasattr(terminal, "modes"):
             terminal.__exit__()

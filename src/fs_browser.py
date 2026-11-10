@@ -48,6 +48,7 @@ import agent_picker as ap
 import fs_icons
 import preferences
 import themes
+from herdr_visibility import Visibility
 from platform_runtime import Terminal
 
 ESC, RESET, BOLD = ap.ESC, ap.RESET, ap.BOLD
@@ -100,7 +101,7 @@ themes.track(THEME, extra=["usage"])
 ANIMATE = preferences.register(preferences.Setting(
     "fs.animate", SECTION, "Animation", [True, "always", False], True,
     hint="On animates the highlight while this pane is focused, then holds it still and grey. "
-         "Always on keeps it moving in color when another pane has focus. Off draws it still.",
+         "Always on keeps it moving in color in the selected tab when another pane has focus. Off draws it still.",
     names={True: "on · while focused", "always": "always on", False: "off"}))
 MOUSE = preferences.register(preferences.Setting(
     "fs.mouse", SECTION, "Mouse", [True, False], True,
@@ -952,6 +953,7 @@ class App:
         self.routing = None            # {"target", "started", "result"}
         self.sweep_at = None
         self.focused = True
+        self.visibility = None
         self.bare_shift = False        # the terminal reports Shift on its own, so its release is seen
         self.shift_until = 0.0
         self.polling_shift = False
@@ -991,7 +993,10 @@ class App:
 
     def animating(self):
         mode = preferences.get(ANIMATE.key)
-        return mode == "always" or (mode is True and self.focused)
+        return self.visible() and (mode == "always" or (mode is True and self.focused))
+
+    def visible(self):
+        return self.visibility is None or self.visibility.visible
 
     def lively(self):
         """Whether the selection keeps its colors: Finder greys it out when the window loses
@@ -999,7 +1004,7 @@ class App:
         return self.focused or preferences.get(ANIMATE.key) == "always"
 
     def shift_held(self):
-        if not self.focused:
+        if not self.focused or not self.visible():
             return False
         reader = getattr(self.terminal, "shift_pressed", None)
         actual = reader() if reader else None
@@ -2134,6 +2139,7 @@ class App:
     # -- the loop --
 
     def enter(self):
+        self.visibility = Visibility().start()
         out = sys.stdout
         out.write(f"{ESC}[?1049h{ESC}[?25l{ESC}[?7l")
         out.flush()
@@ -2145,6 +2151,8 @@ class App:
         self.static = None
 
     def leave(self):
+        if self.visibility is not None:
+            self.visibility.close()
         term = self.terminal
         try:
             term.mouse(False)
@@ -2157,6 +2165,8 @@ class App:
             sys.stdout.flush()
 
     def frame_step(self):
+        if not self.visible():
+            return 1.0  # input/lifecycle checks only, with no hidden frames or Shift polling
         now = time.monotonic()
         busy = (self.routing or self.sweep_at or (self.toast and self.toast[2] > now) or self.theme_toast > now
                 or (self.preview and self.preview.loading) or self.boost not in (0.0, 1.0) or self.typing)
@@ -2180,10 +2190,18 @@ class App:
         self.enter()
         try:
             frame_at = time.monotonic()
+            was_visible = False
             while True:
-                cols, rows = shutil.get_terminal_size((80, 24))
-                t = time.monotonic() - self.start
-                self.writer.show(self.frame(cols, rows, t), cols, rows)
+                visible = self.visible()
+                if visible:
+                    if not was_visible:
+                        self.writer.reset()
+                        self.static = None
+                        self.last_frame = frame_at = time.monotonic()
+                    cols, rows = shutil.get_terminal_size((80, 24))
+                    t = time.monotonic() - self.start
+                    self.writer.show(self.frame(cols, rows, t), cols, rows)
+                was_visible = visible
                 frame_at += self.frame_step()
                 wait = frame_at - time.monotonic()
                 if wait < 0:
@@ -2205,7 +2223,7 @@ class App:
             self.leave()
 
     def tick(self):
-        if self.screen in ("browse", "preview"):
+        if self.visible() and self.screen in ("browse", "preview"):
             self.watch()
         self.routed()
 
