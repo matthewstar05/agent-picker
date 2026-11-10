@@ -80,9 +80,12 @@ class WindowsInstallerTests(unittest.TestCase):
     @unittest.skipUnless(os.name == "nt", "native .cmd forwarding requires Windows")
     def test_every_shared_launcher_forwards_arguments_and_exit_code(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory) / "source checkout"
+            root.mkdir()
             src = root / "src"
             src.mkdir()
+            bindir = Path(directory) / "my commands"
+            bindir.mkdir()
             stub = ("import json, sys\nprint(json.dumps(sys.argv[1:]))\n"
                     "raise SystemExit(7)\n")
             for filename in {script for script, _ in installer.install_common.COMMANDS.values()}:
@@ -91,12 +94,10 @@ class WindowsInstallerTests(unittest.TestCase):
             with mock.patch.object(installer, "ROOT", root):
                 for name, (script, extra) in installer.install_common.COMMANDS.items():
                     with self.subTest(command=name):
-                        launcher = root / (name + ".cmd")
+                        launcher = bindir / (name + ".cmd")
                         launcher.write_text(installer.launcher_content(Path(sys.executable), script, extra),
                                             encoding="utf-8")
-                        command_line = subprocess.list2cmdline([str(launcher), *arguments])
-                        result = subprocess.run(["cmd.exe", "/d", "/c", command_line],
-                                                capture_output=True, text=True)
+                        result = subprocess.run([str(launcher), *arguments], capture_output=True, text=True)
                         import json
                         self.assertEqual(result.returncode, 7, result.stderr)
                         self.assertEqual(json.loads(result.stdout.strip()), [*extra, *arguments])
