@@ -26,6 +26,9 @@ class FakeGateway:
         self.entries, self.sent, self.stopped, self.approved = [], [], False, []
         self.unknown = self.rejected = self.foreign = False
 
+    def warm(self):
+        pass
+
     def create(self, name, description):
         return {"id": BOT, "name": name}
 
@@ -67,6 +70,11 @@ class GrokBotTests(unittest.TestCase):
         self.env = patch.dict(os.environ, AGENT_PICKER_STATE_HOME=str(self.root / "state"), HERDR_ENV="")
         self.env.start()
         self.addCleanup(self.env.stop)
+        # A new session files its bot by week on a background thread, which writes a
+        # lock under the state directory and could race this test's cleanup.
+        week = patch.object(cli, "file_by_week")
+        week.start()
+        self.addCleanup(week.stop)
         self.gateway = FakeGateway()
 
     def conversation(self, kind="json", session=None):
@@ -405,11 +413,15 @@ class GrokBotTests(unittest.TestCase):
             calls.append((url, body, headers))
             if url.endswith("EnsureSandBox"):
                 return {"gatewayUrl": "https://box.cursorvm.com", "gatewayToken": "private", "networkToken": "network"}
-            return {"accepted": True}
+            return {"delivery": "GROK_BOT_USER_MESSAGE_DELIVERY_ACCEPTED_BOX"}
         g = gateway.Gateway(token="account", request=request)
         self.assertIsNone(g.send(BOT, "task", "nonce", machine="local"))
-        self.assertEqual(calls[-1][1], {"agentId": BOT, "prompt": "task", "clientNonce": "nonce", "machineId": "local"})
-        self.assertEqual(calls[-1][2]["x-anyrun-network-token"], "network")
+        self.assertTrue(calls[-1][0].endswith("GrokBotService/SendGrokBotUserMessage"))
+        body = calls[-1][1]
+        self.assertEqual({k: body[k] for k in ("agentId", "text", "messageId", "machineId")},
+                         {"agentId": BOT, "text": "task", "messageId": "nonce", "machineId": "local"})
+        self.assertEqual(calls[-1][2]["Authorization"], "Bearer account")
+        self.assertNotIn("x-anyrun-network-token", calls[-1][2])
 
     def test_malformed_transcript_is_reported_as_a_gateway_error(self):
         g = gateway.Gateway()

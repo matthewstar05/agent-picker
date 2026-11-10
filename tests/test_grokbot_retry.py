@@ -53,10 +53,10 @@ class RetryTests(unittest.TestCase):
         self.assertEqual(server.calls.count("listAgents"), 4)
 
     def test_sending_a_prompt_is_never_repeated(self):
-        server = Server(sendPrompt=[bad_gateway()])
+        server = Server(SendGrokBotUserMessage=[bad_gateway()])
         with self.assertRaisesRegex(gateway.GrokError, "Delivery is unknown"):
             self.gw(server).send("bot", "task", "nonce")
-        self.assertEqual(server.calls.count("sendPrompt"), 1)
+        self.assertEqual(server.calls.count("SendGrokBotUserMessage"), 1)
         self.assertEqual(self.slept, [])
 
     def test_client_errors_are_not_retried(self):
@@ -67,8 +67,7 @@ class RetryTests(unittest.TestCase):
 
     def test_post_marks_gateway_errors_transient(self):
         for code, transient in ((408, True), (417, True), (500, True), (502, True), (503, True), (504, True), (404, False)):
-            error = urllib.error.HTTPError("https://box.cursorvm.com/api/x", code, "", {}, None)
-            with self.subTest(code=code), patch("urllib.request.OpenerDirector.open", side_effect=error):
+            with self.subTest(code=code), patch.object(gateway, "exchange", return_value=(code, b"")):
                 with self.assertRaises(gateway.GrokError) as caught:
                     gateway.post("https://box.cursorvm.com/api/x", {}, {})
                 self.assertIs(caught.exception.transient, transient)

@@ -4,12 +4,15 @@ No model API key, Cursor Agent turn, or background relay is involved. Secrets
 stay in memory; only the provider's HTTPS hosts may receive them.
 """
 
+import http.client
 import json
 import os
 import re
+import ssl
 import subprocess
 import sys
 from pathlib import Path
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -21,8 +24,9 @@ MAX_BODY = 8 * 1024 * 1024
 TRANSCRIPT_TAIL = 200
 # The gateway's own refusal, sent with a 5xx status. It means the request was turned
 # away, not lost, so a refused prompt is known to be unsent and never needs watching.
-# Since Grok Bot's November 2026 update it answers this CLI's sendPrompt with
-# "A Sand box session may not make this request on this endpoint."
+# Since Grok Bot's November 2026 update (desktop 0.79) the sandbox gateway answers a
+# sendPrompt from anything but the box itself with "A Sand box session may not make
+# this request on this endpoint." Prompts now go through GrokBotService instead.
 REFUSED = re.compile(r"may not make this request", re.I)
 
 
@@ -87,39 +91,138 @@ def cursor_token():
     return token or None
 
 
-def post(url, body, headers, timeout=30):
-    req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"),
-                                 headers=dict({"Content-Type": "application/json"}, **headers))
+# Requests that change nothing when repeated. Only these are resent after a pooled
+# connection turns out to have been closed by the server while it sat idle.
+IDEMPOTENT = {"listAgents", "getAgentTranscriptTail", "getAgentThread", "getHostSettings", "EnsureSandBox",
+              "ListSandMachines", "GetFilteredUsageEvents", "GetGrokBotSendStatus"}
+# One persistent HTTPS connection per host and thread. A new TLS handshake to the
+# sandbox gateway costs 100 to 300 ms, and a running turn reads it every poll.
+IDLE_REUSE = 4      # seconds; Node servers drop an idle keep-alive connection after 5
+_pool = threading.local()
+_tls = []
+
+
+def tls():
+    if not _tls:
+        _tls.append(ssl.create_default_context())
+    return _tls[0]
+
+
+def proxied(host):
+    """urllib honors HTTPS_PROXY and NO_PROXY; keep doing so where one applies."""
     try:
-        with urllib.request.build_opener(NoRedirect).open(req, timeout=timeout) as response:
-            raw = response.read(MAX_BODY + 1)
-        if len(raw) > MAX_BODY:
-            raise GrokError("Grok Bot returned more data than this client can safely retain.")
-        return json.loads(raw) if raw else {}
-    except urllib.error.HTTPError as exc:
-        detail = refusal(exc)
-        if detail:
-            raise GrokError(f"Grok Bot refused the request (HTTP {exc.code}): {detail} Nothing was sent.", "rejected") from None
-        # Do not echo a URL, token, account export, or upstream response body.
-        label = "Sign in to Cursor again" if exc.code in (401, 403) else "Grok Bot request failed"
-        raise GrokError(f"{label} (HTTP {exc.code}).", "rejected" if exc.code < 500 and exc.code not in (408, 417) else "unknown",
-                        transient=exc.code in (408, 417, 500, 502, 503, 504)) from None
-    except (urllib.error.URLError, TimeoutError, OSError):
+        return bool(urllib.request.getproxies().get("https")) and not urllib.request.proxy_bypass(host)
+    except Exception:
+        return False
+
+
+def exchange(url, data, headers, timeout):
+    """POST and return (status, body) with at most MAX_BODY + 1 bytes of body.
+
+    Redirects are never followed: a 3xx is returned like any other failure status."""
+    parts = urllib.parse.urlsplit(allowed_url(url, gateway=True))
+    if proxied(parts.hostname):
+        try:
+            with urllib.request.build_opener(NoRedirect).open(
+                    urllib.request.Request(url, data=data, headers=headers), timeout=timeout) as response:
+                return response.status, response.read(MAX_BODY + 1)
+        except urllib.error.HTTPError as exc:
+            return exc.code, exc.read(MAX_BODY + 1) if exc.fp else b""
+    key = (parts.hostname, parts.port or 443)
+    pool = getattr(_pool, "connections", None)
+    if pool is None:
+        pool = _pool.connections = {}
+    method = parts.path.rsplit("/", 1)[-1]
+    for attempt in (0, 1):
+        held = pool.pop(key, None)
+        reused = bool(held and time.monotonic() - held[1] < IDLE_REUSE)
+        if held and not reused:
+            held[0].close()
+        connection = held[0] if reused else http.client.HTTPSConnection(key[0], key[1], timeout=timeout, context=tls())
+        connection.timeout = timeout
+        if connection.sock:
+            connection.sock.settimeout(timeout)
+        try:
+            connection.request("POST", parts.path or "/", body=data, headers=headers)
+            response = connection.getresponse()
+            body = response.read(MAX_BODY + 1)
+        except (http.client.RemoteDisconnected, ConnectionResetError, BrokenPipeError):
+            connection.close()
+            # The server closed a kept-alive connection; resend only what is safe to repeat.
+            if reused and attempt == 0 and method in IDEMPOTENT:
+                continue
+            raise
+        except BaseException:
+            connection.close()
+            raise
+        if len(body) > MAX_BODY or response.will_close or not response.isclosed():
+            connection.close()
+        else:
+            pool[key] = (connection, time.monotonic())
+        return response.status, body
+    raise ConnectionResetError()
+
+
+def post(url, body, headers, timeout=30):
+    try:
+        status, raw = exchange(url, json.dumps(body).encode("utf-8"),
+                               dict({"Content-Type": "application/json"}, **headers), timeout)
+    except GrokError:
+        raise
+    except (urllib.error.URLError, http.client.HTTPException, TimeoutError, OSError):
         raise GrokError("Cannot reach Grok Bot. Check the connection before retrying.", "unknown", transient=True) from None
+    if not 200 <= status < 300:
+        failure(status, raw)
+    if len(raw) > MAX_BODY:
+        raise GrokError("Grok Bot returned more data than this client can safely retain.")
+    try:
+        return json.loads(raw) if raw else {}
     except (ValueError, TypeError):
         raise GrokError("Grok Bot returned an invalid response.", "unknown") from None
 
 
-def refusal(exc):
-    """The gateway's explicit refusal text from an HTTP error, or None.
+# Connect's error codes, named for the user instead of echoing the server's text.
+CONNECT_CODES = {"resource_exhausted": "Grok Bot usage or rate limit reached",
+                 "permission_denied": "This Cursor account may not do that in Grok Bot",
+                 "unauthenticated": "Sign in to Cursor again",
+                 "invalid_argument": "Grok Bot rejected the request as invalid",
+                 "failed_precondition": "Grok Bot is not ready for that request",
+                 "not_found": "Grok Bot could not find that conversation",
+                 "unimplemented": "This Grok Bot server does not support that request"}
+
+
+def failure(status, raw):
+    detail = refusal(raw)
+    if detail:
+        raise GrokError(f"Grok Bot refused the request (HTTP {status}): {detail} Nothing was sent.", "rejected")
+    code = connect_code(raw)
+    # Do not echo a URL, token, account export, or upstream response body.
+    label = CONNECT_CODES.get(code) or ("Sign in to Cursor again" if status in (401, 403) else "Grok Bot request failed")
+    raise GrokError(f"{label} (HTTP {status}" + (f", {code}" if code else "") + ").",
+                    "rejected" if status < 500 and status not in (408, 417) else "unknown",
+                    transient=status in (408, 417, 500, 502, 503, 504))
+
+
+def error_body(raw):
+    try:
+        data = json.loads(raw[:4096])
+    except Exception:   # no body, not JSON
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def connect_code(raw):
+    code = error_body(raw).get("code")
+    return code if isinstance(code, str) and re.fullmatch(r"[a-z_]{1,40}", code) else None
+
+
+def refusal(raw):
+    """The gateway's explicit refusal text from an HTTP error body, or None.
 
     Only a short, known refusal phrase is shown; any other body is discarded so
     tokens or account data in an upstream error are never echoed.
     """
-    try:
-        message = json.loads(exc.read(4096)).get("error")
-    except Exception:   # no body, not JSON, or not an object
-        return None
+    message = error_body(raw).get("error")
     if isinstance(message, str) and REFUSED.search(message):
         return re.sub(r"[\x00-\x1f\x7f]", "", message).strip()[:200]
     return None
@@ -131,18 +234,34 @@ class Gateway:
         self.request = request
         self.session = None
         self.sleep = sleep or time.sleep
+        self.lock = threading.RLock()   # one EnsureSandBox at a time, shared by warm() and the turn
 
-    def account(self, method, body=None, service="GrokBotService"):
+    def warm(self):
+        """Start EnsureSandBox (0.5 s warm, about 4 s while the pod wakes) in the background,
+        so the first read or send does not wait for it. Any failure surfaces on that call."""
+        def run():
+            try:
+                self.connect()
+            except Exception:
+                pass
+        threading.Thread(target=run, name="grokbot-warm", daemon=True).start()
+
+    def account(self, method, body=None, service="GrokBotService", headers=None):
         if not self.token:
             self.token = cursor_token()
         if not self.token:
             raise GrokError("No Cursor account session. Run cursor-cli login, then grokbot status.")
         return self.request(BACKEND + "/aiserver.v1." + service + "/" + method, body or {},
-                            {"Authorization": "Bearer " + self.token, "Connect-Protocol-Version": "1"})
+                            dict(headers or {}, **{"Authorization": "Bearer " + self.token, "Connect-Protocol-Version": "1"}))
 
     def connect(self):
         if self.session:
             return
+        with self.lock:
+            if not self.session:
+                self.open_session()
+
+    def open_session(self):
         url = os.environ.get("GROK_BOT_GATEWAY_URL", "").strip()
         token = os.environ.get("GROK_BOT_GATEWAY_TOKEN", "").strip()
         if bool(url) != bool(token):
@@ -204,25 +323,50 @@ class Gateway:
         return row
 
     def send(self, ident, prompt, nonce, reply_to=None, machine=None):
-        body = {"agentId": ident, "prompt": prompt, "clientNonce": nonce}
+        """Submit a prompt the way Grok Bot's desktop app does since 0.79: through the
+        account's GrokBotService, not the sandbox gateway, which now refuses it.
+
+        The nonce is the message ID, so the service answers a repeat as DUPLICATE and a
+        prompt can never run twice. When the receipt is lost, the service's own send
+        status decides: a prompt it never saw is submitted once more under the same ID
+        (as the desktop app does), and anything else is watched, never replayed.
+        Returns None: the transcript entry carrying the nonce anchors the request.
+        """
+        first = time.time()
+        body = {"agentId": ident, "messageId": nonce, "text": prompt, "sentAtMs": str(int(first * 1000)),
+                "isFork": False, "source": SURFACE_DESKTOP, "initiator": INITIATOR_USER, "sendSource": SEND_CHAT}
         if reply_to:
             body["replyToId"] = reply_to
         if machine:
             body["machineId"] = machine
-        try:
-            receipt = self.call("sendPrompt", body)
-        except GrokError as exc:
-            if exc.delivery != "rejected":
+        zone = timezone_name()
+        for attempt in (0, 1):
+            try:
+                receipt = self.account("SendGrokBotUserMessage", body, headers={"x-cursor-timezone": zone} if zone else None)
+            except GrokError as exc:
+                if exc.delivery == "rejected":
+                    raise
+                status = self.send_status(ident, nonce, first)
+                if status == "ACCEPTED":
+                    return None
+                if status == "REJECTED":
+                    raise GrokError("Grok Bot rejected this request, so nothing ran.", "rejected") from None
+                if status == "NOT_FOUND" and attempt == 0:
+                    body["firstSentAgeMs"] = str(max(0, int((time.time() - first) * 1000)))
+                    continue
                 raise GrokError("Delivery is unknown. Resume this session to inspect the existing turn; do not resend.",
                                 "unknown", transient=exc.transient) from None
-            raise
-        if isinstance(receipt, dict) and receipt.get("accepted") is True:
-            # Current gateway acknowledges acceptance without a message ID. The
-            # transcript's clientNonce supplies the exact request anchor.
-            return receipt.get("messageId")
-        if not isinstance(receipt, dict) or not receipt.get("messageId"):
-            raise GrokError("Delivery is unknown. Resume this session to inspect the existing turn; do not resend.", "unknown")
-        return receipt["messageId"]
+            return delivered(receipt)
+
+    def send_status(self, ident, nonce, first):
+        """GrokBotService's record of one message ID: NOT_FOUND, ACCEPTED, REJECTED, PENDING,
+        UNKNOWN_DURABILITY, or None when the lookup itself fails."""
+        try:
+            data = self.account("GetGrokBotSendStatus", {"agentId": ident, "messageId": nonce,
+                                                         "firstSentAgeMs": str(max(0, int((time.time() - first) * 1000)))})
+        except GrokError:
+            return None
+        return enum(data.get("status") if isinstance(data, dict) else None, "GROK_BOT_SEND_STATUS_", SEND_STATUS)
 
     def transcript(self, ident):
         data = self.call("getAgentTranscriptTail", {"id": ident, "limit": TRANSCRIPT_TAIL})
@@ -259,7 +403,7 @@ class Gateway:
         return sorted(rows, key=lambda row: int(row.get("timestamp") or 0))
 
     def interrupt(self, ident):
-        return self.call("interruptAgentRun", {"id": ident})
+        return self.account("InterruptGrokBotAgentRun", {"agentId": ident, "reason": "user_interrupt"})
 
     def approval(self, ident, entry, accept):
         message = entry.get("message") or {}
@@ -267,9 +411,59 @@ class Gateway:
         card = message.get("ask" if local else "approval") or {}
         if message.get("type") not in ("local-tool-permission", "auto-review-approval") or card.get("status") != "pending":
             raise GrokError("This approval is no longer pending. Refresh the conversation.")
-        body = {"agentId": ident, "entryId": entry["id"], "requestId": card["requestId"],
-                "resolution": ("allow-once" if accept else "deny") if local else ("approved" if accept else "denied")}
-        return self.call("resolveLocalToolPermission" if local else "resolveAutoReviewApproval", body)
+        body = {"agentId": ident, "requestId": card["requestId"], "resolution": 1 if accept else 2}
+        if local:
+            body["entryId"] = entry["id"]
+        else:
+            body["approvalPlatform"] = "desktop"
+        receipt = self.account("ResolveGrokBotLocalToolPermission" if local else "ResolveGrokBotAutoReviewApproval", body)
+        if isinstance(receipt, dict) and receipt.get("refusal") is not None:
+            raise GrokError("Grok Bot refused this approval. Refresh the conversation before trying again.", "rejected")
+        return receipt
+
+
+# aiserver.v1 GrokBotService enums, indexed by number. Connect JSON answers with the
+# full value name (GROK_BOT_SEND_STATUS_NOT_FOUND) and omits the zero value.
+SURFACE_DESKTOP, INITIATOR_USER, SEND_CHAT = 1, 1, 1
+DELIVERY = ("UNSPECIFIED", "ACCEPTED_BOX", "ACCEPTED_TEMPORAL", "DUPLICATE", "REFUSED")
+SEND_STATUS = ("UNSPECIFIED", "NOT_FOUND", "ACCEPTED", "REJECTED", "PENDING", "UNKNOWN_DURABILITY")
+
+
+def enum(value, prefix, names):
+    """A Connect JSON enum value (its full name or its number) as its short name."""
+    if value is None:
+        return names[0]
+    if isinstance(value, str) and value.startswith(prefix) and value[len(prefix):] in names:
+        return value[len(prefix):]
+    if isinstance(value, int) and not isinstance(value, bool) and 0 <= value < len(names):
+        return names[value]
+    return None
+
+
+def delivered(receipt):
+    """Accept a SendGrokBotUserMessage receipt, or raise with what is known about delivery."""
+    delivery = enum(receipt.get("delivery"), "GROK_BOT_USER_MESSAGE_DELIVERY_", DELIVERY) if isinstance(receipt, dict) else None
+    if delivery in ("ACCEPTED_BOX", "ACCEPTED_TEMPORAL", "DUPLICATE"):
+        return None
+    if delivery == "REFUSED":
+        refused = receipt.get("refusal") if isinstance(receipt.get("refusal"), dict) else {}
+        # The service's refusal is written for people (the desktop app shows it as is).
+        detail = " ".join(re.sub(r"[\x00-\x1f\x7f]", " ", str(refused.get(key) or "")).strip()[:200]
+                          for key in ("message", "failureCode") if refused.get(key))
+        raise GrokError("Grok Bot refused the request" + (": " + detail if detail else "") + ". Nothing was sent.", "rejected")
+    raise GrokError("Delivery is unknown. Resume this session to inspect the existing turn; do not resend.", "unknown")
+
+
+def timezone_name():
+    """The IANA zone the desktop app reports as x-cursor-timezone, when it can be read."""
+    name = os.environ.get("TZ", "").lstrip(":")
+    if not name and sys.platform != "win32":
+        try:
+            target = os.path.realpath("/etc/localtime")
+            name = target.split("/zoneinfo/", 1)[1] if "/zoneinfo/" in target else ""
+        except OSError:
+            name = ""
+    return name if re.fullmatch(r"[A-Za-z_]+(?:/[A-Za-z0-9_+-]+){1,2}", name) else None
 
 
 def entry_text(entry):

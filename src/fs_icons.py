@@ -17,8 +17,7 @@ from pathlib import Path
 
 WHITE, BLACK = (255, 255, 255), (0, 0, 0)
 FOLDER_BLUE = (92, 172, 238)      # the macOS folder blue, softened for a dark screen
-STAR_GOLD = (250, 204, 72)       # GitHub's star
-STAR_SHADE = (230, 174, 54)      # its lower half, a little deeper
+STRIPE = (246, 247, 250)         # the white band across a GitHub repository's folder
 PAGE = (232, 230, 224)            # off-white paper, easier on the eyes than pure white
 PAGE_EDGE = (206, 204, 198)
 FOLD = (172, 171, 166)
@@ -458,29 +457,28 @@ _EMBLEMS = {
     "folder-movies": ("........", "...e....", "...ee...", "...eee..", "...ee...", "...e...."),
     "folder-library": ("........", "........", ".eeeeee.", "..e..e..", "..e..e..", ".eeeeee."),
     "folder-public": ("........", "........", "...ee...", "........", "..eeee..", "..eeee.."),
-    # GitHub's star, gold and centred on the body: a point, the arms, then two legs in deeper gold.
-    "folder-github": ("........", "........", "...ss...", ".ssssss.", "..SSSS..", "..S..S.."),
+    # A GitHub repository: a white band across the folder, one pixel row under its top edge.
+    "folder-github": ("........", "........", "wwwwwwww", "........", "........", "........"),
 }
 
 
 def _folder_colors(base):
     return {"t": _mix(base, WHITE, 0.30), "1": _mix(base, WHITE, 0.14), "2": _mix(base, WHITE, 0.05),
             "3": base, "4": _mix(base, BLACK, 0.07), "5": _mix(base, BLACK, 0.15),
-            "e": _mix(base, BLACK, 0.40), "s": STAR_GOLD, "S": STAR_SHADE}
+            "e": _mix(base, BLACK, 0.40), "w": STRIPE}
 
 
 def _folder(kind, size, accent):
     base = accent or FOLDER_BLUE
     if size == "mini":
-        if kind == "folder-github":
-            return [[("▙", base, None, False), ("★", STAR_GOLD, None, True)]]
+        # Two cells have no room for the band; the Kind column names a GitHub repository.
         return [[("▙", base, None, False), ("▄", base, None, False)]]
     grid = _FOLDER[size]
     if kind in _EMBLEMS:
         if size == "large":
             grid = _overlay(grid, _EMBLEMS[kind])
-        elif kind == "folder-github":   # the star still shows at 4x4: a point, the arms, two legs
-            grid = _overlay(grid, ("....", ".ss.", "ssss", "S..S"))
+        elif kind == "folder-github":   # the same band, on the small folder's third row
+            grid = _overlay(grid, ("....", "....", "wwww", "...."))
         else:   # too small to tell emblems apart: a mark says "special"
             grid = _overlay(grid, ("....", "....", ".ee.", "...."))
     return _render(grid, _folder_colors(base))

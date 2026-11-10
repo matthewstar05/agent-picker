@@ -54,6 +54,15 @@ APP = Path("/Applications/Grok Bot.app")
 # reaches back past the send while the bot is idle, was never delivered.
 ARRIVAL_GRACE = 90
 
+# Watching a turn reads only the transcript tail each poll, quickly while entries keep
+# arriving and at --poll pace once it has been quiet for a while. The bot's roster row
+# (its idle state, 40 KB for the whole roster) is read only to confirm a final reply,
+# to rule a lost prompt undelivered, and every few polls to notice a deleted bot.
+FAST_POLL = 0.5
+QUIET_POLLS = 20        # about 10 s without a new entry before slowing to --poll
+CONFIRM_POLL = 0.25     # the second idle check after the final reply
+ROSTER_EVERY = 8
+
 # Reverse-engineering requests get REA's local CLI; Grok Bot cannot attach a local MCP server.
 REVERSE = re.compile(r"\brevers(?:e|ing)[- ]?engineer|\bdecompil|\bdisassembl|\bREA\b", re.I)
 REA_HINT = ("For this reverse-engineering task, use the REA CLI on that machine (`rea --help`, `rea <command> --json`) "
@@ -388,7 +397,7 @@ class Conversation:
                 # A new bot posts a greeting turn of its own; let a short turn like that finish.
                 deadline = time.monotonic() + 30
                 while remote and (remote.get("isRunningTurn") or remote.get("isRunning")) and time.monotonic() < deadline:
-                    self.wait(1)
+                    self.wait(FAST_POLL)
                     remote = self.gateway.agent(self.session["id"])
                 if not remote:
                     raise GrokError("This bot no longer exists. Start a new CLI session.")
@@ -451,9 +460,9 @@ class Conversation:
         grace period has passed, the bot is idle, the transcript reaches back past the
         send, and no entry carries this request's nonce or marker.
         """
-        started = pending.get("started")
-        if pending.get("delivery") != "unknown" or not started or time.time() - started < ARRIVAL_GRACE:
+        if not self.may_be_lost(pending):
             return False
+        started = pending["started"]
         if not remote or remote.get("isRunningTurn") or remote.get("isRunning") or remote.get("isComposingMessage"):
             return False
         nonce = pending["nonce"]
@@ -461,6 +470,12 @@ class Conversation:
             return False
         stamps = [e["timestampMs"] for e in entries if isinstance(e.get("timestampMs"), (int, float))]
         return len(entries) < TRANSCRIPT_TAIL or bool(stamps and min(stamps) < started * 1000)
+
+    @staticmethod
+    def may_be_lost(pending):
+        """A lost receipt old enough that the transcript can prove it never arrived."""
+        started = pending.get("started")
+        return pending.get("delivery") == "unknown" and bool(started) and time.time() - started >= ARRIVAL_GRACE
 
     def undelivered(self, pending):
         """Close a request that never reached Grok Bot. It is recorded, never resent."""
@@ -496,11 +511,16 @@ class Conversation:
         pending = self.session["pending"]
         deadline = time.monotonic() + self.timeout
         shown = set(pending.get("shown", []))
-        done, final_text, settled = False, "", 0
+        done, final_text, settled, polls, quiet, seen = False, "", 0, 0, 0, None
         while time.monotonic() < deadline:
             entries = self.watch_read(self.gateway.transcript, deadline)
+            polls += 1
+            latest = [(e.get("id"), e.get("seq"), e.get("updatedAt")) for e in entries[-3:]]
+            quiet, seen = (quiet + 1 if latest == seen else 0), latest
             accepted = next((e for e in entries if e.get("clientNonce") == pending["nonce"]
                              and e.get("role") == "user"), None)
+            if accepted and (pending.get("root"), pending.get("delivery")) != (accepted.get("id"), "accepted"):
+                quiet = 0
             if accepted:
                 pending["root"] = accepted.get("id")
                 pending["request_id"] = accepted.get("requestId")
@@ -545,15 +565,18 @@ class Conversation:
                     self.output.event({"type": "tool_call", "subtype": "started" if kind == "tool-call" else "completed",
                                        "label": str(label), "entry_id": ident})
                 shown.add(ident)
-            pending["shown"] = list(shown)
-            store.save(self.session)
-            remote = self.watch_read(self.gateway.agent, deadline)
-            if remote is None:
-                raise GrokError("The bot disappeared while this request was running.")
-            if not accepted and self.never_arrived(pending, entries, remote):
-                self.undelivered(pending)
-                raise GrokError("Grok Bot never received this request, so nothing ran. Send it again once Grok Bot accepts prompts.")
-            idle = remote.get("isRunningTurn") is False and not remote.get("isRunning") and not remote.get("isComposingMessage")
+            if quiet == 0 or polls == 1 or done:
+                pending["shown"] = list(shown)
+                store.save(self.session)
+            idle = False
+            if done or (not accepted and self.may_be_lost(pending)) or polls % ROSTER_EVERY == 0:
+                remote = self.watch_read(self.gateway.agent, deadline)
+                if remote is None:
+                    raise GrokError("The bot disappeared while this request was running.")
+                if not accepted and self.never_arrived(pending, entries, remote):
+                    self.undelivered(pending)
+                    raise GrokError("Grok Bot never received this request, so nothing ran. Send it again once Grok Bot accepts prompts.")
+                idle = remote.get("isRunningTurn") is False and not remote.get("isRunning") and not remote.get("isComposingMessage")
             settled = settled + 1 if done and idle else 0
             if settled >= 2:
                 route = self.routed(pending)
@@ -566,7 +589,7 @@ class Conversation:
                 if report:
                     self.output.result(self.session)
                 return
-            self.wait(self.poll)
+            self.wait(min(self.poll, CONFIRM_POLL if settled else FAST_POLL if quiet < QUIET_POLLS else self.poll))
         raise GrokError("Still waiting for a correlated final reply. The request is saved; use grokbot --continue to keep watching.")
 
     def routed(self, pending):
@@ -832,6 +855,8 @@ def main(argv=None):
         parser().error("--output-format requires --print")
     gateway, conversation = Gateway(), None
     output = Output(args.output_format, interactive=not args.printing and sys.stdin.isatty(), verbose=args.verbose)
+    if command not in ("usage", "ls", "machines"):
+        gateway.warm()      # EnsureSandBox overlaps the machine lookup and the user's typing
     try:
         if command == "usage":
             usage()

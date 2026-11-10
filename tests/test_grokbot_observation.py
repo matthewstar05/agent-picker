@@ -33,18 +33,17 @@ class ObservationTests(unittest.TestCase):
         return c
 
     def test_417_is_retried_only_for_reads(self):
-        error = urllib.error.HTTPError("https://box.cursorvm.com/api/x", 417, "", {}, None)
-        with patch("urllib.request.OpenerDirector.open", side_effect=error):
+        with patch.object(gateway, "exchange", return_value=(417, b"")):
             with self.assertRaises(gateway.GrokError) as caught:
                 gateway.post("https://box.cursorvm.com/api/x", {}, {})
         self.assertTrue(caught.exception.transient)
         server = Server(getAgentTranscriptTail=[caught.exception])
         self.assertEqual(gateway.Gateway(token="test", request=server, sleep=lambda _: None).transcript(BOT), [])
         self.assertEqual(server.calls.count("getAgentTranscriptTail"), 2)
-        server = Server(sendPrompt=[caught.exception])
+        server = Server(SendGrokBotUserMessage=[caught.exception])
         with self.assertRaises(gateway.GrokError):
             gateway.Gateway(token="test", request=server).send(BOT, "Task", "nonce")
-        self.assertEqual(server.calls.count("sendPrompt"), 1)
+        self.assertEqual(server.calls.count("SendGrokBotUserMessage"), 1)
 
     def test_exhausted_gateway_retries_keep_observing_without_replay(self):
         for method in ("transcript", "agent"):

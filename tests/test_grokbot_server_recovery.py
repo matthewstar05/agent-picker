@@ -17,8 +17,7 @@ from test_grokbot_retry import Server
 
 
 def internal_error():
-    error = urllib.error.HTTPError("https://box.cursorvm.com/api/read", 500, "", {}, None)
-    with patch("urllib.request.OpenerDirector.open", side_effect=error):
+    with patch.object(gateway, "exchange", return_value=(500, b"")):
         try:
             gateway.post("https://box.cursorvm.com/api/read", {}, {})
         except gateway.GrokError as exc:
@@ -62,19 +61,18 @@ class GatewayRecoveryTests(unittest.TestCase):
                 self.assertEqual(server.calls.count(method), 1)
 
     def test_prompt_failure_keeps_unknown_delivery_and_recoverability(self):
-        server = Server(sendPrompt=[internal_error()])
+        server = Server(SendGrokBotUserMessage=[internal_error()])
         client = gateway.Gateway(token="test", request=server)
         with self.assertRaises(gateway.GrokError) as caught:
             client.send("bot", "task", "nonce")
         self.assertEqual(caught.exception.delivery, "unknown")
         self.assertTrue(caught.exception.transient)
-        self.assertEqual(server.calls.count("sendPrompt"), 1)
+        self.assertEqual(server.calls.count("SendGrokBotUserMessage"), 1)
 
     def test_timeout_and_sandbox_417_do_not_claim_a_prompt_was_rejected(self):
         for code in (408, 417):
             with self.subTest(code=code):
-                error = urllib.error.HTTPError("https://box.cursorvm.com/api/sendPrompt", code, "", {}, None)
-                with patch("urllib.request.OpenerDirector.open", side_effect=error):
+                with patch.object(gateway, "exchange", return_value=(code, b"")):
                     with self.assertRaises(gateway.GrokError) as caught:
                         gateway.post("https://box.cursorvm.com/api/sendPrompt", {}, {})
                 self.assertEqual(caught.exception.delivery, "unknown")
@@ -82,15 +80,14 @@ class GatewayRecoveryTests(unittest.TestCase):
     def test_auth_and_invalid_requests_are_not_retried(self):
         for code in (400, 401, 403, 404, 422):
             with self.subTest(code=code):
-                error = urllib.error.HTTPError("https://box.cursorvm.com/api/read", code, "", {}, None)
-                with patch("urllib.request.OpenerDirector.open", side_effect=error):
+                with patch.object(gateway, "exchange", return_value=(code, b"")):
                     with self.assertRaises(gateway.GrokError) as caught:
                         gateway.post("https://box.cursorvm.com/api/read", {}, {})
                 self.assertFalse(caught.exception.transient)
 
 
 def gateway_error(code, body):
-    return urllib.error.HTTPError("https://box.cursorvm.com/api/sendPrompt", code, "", {}, io.BytesIO(body))
+    return code, body
 
 
 REFUSAL = b'{"error":"A Sand box session may not make this request on this endpoint."}'
@@ -98,7 +95,7 @@ REFUSAL = b'{"error":"A Sand box session may not make this request on this endpo
 
 class RefusalTests(unittest.TestCase):
     def test_explicit_gateway_refusal_is_a_known_unsent_prompt(self):
-        with patch("urllib.request.OpenerDirector.open", side_effect=gateway_error(502, REFUSAL)):
+        with patch.object(gateway, "exchange", return_value=gateway_error(502, REFUSAL)):
             with self.assertRaises(gateway.GrokError) as caught:
                 gateway.post("https://box.cursorvm.com/api/sendPrompt", {}, {})
         self.assertEqual(caught.exception.delivery, "rejected")
@@ -109,7 +106,7 @@ class RefusalTests(unittest.TestCase):
     def test_other_error_bodies_stay_unknown_and_unechoed(self):
         for body in (b'{"error":"token abc123 expired upstream"}', b"<html>Bad Gateway</html>", b""):
             with self.subTest(body=body):
-                with patch("urllib.request.OpenerDirector.open", side_effect=gateway_error(502, body)):
+                with patch.object(gateway, "exchange", return_value=gateway_error(502, body)):
                     with self.assertRaises(gateway.GrokError) as caught:
                         gateway.post("https://box.cursorvm.com/api/sendPrompt", {}, {})
                 self.assertEqual(caught.exception.delivery, "unknown")
@@ -117,11 +114,11 @@ class RefusalTests(unittest.TestCase):
 
     def test_refused_send_is_not_wrapped_as_unknown_delivery(self):
         refused = gateway.GrokError("Grok Bot refused the request (HTTP 502): no. Nothing was sent.", "rejected")
-        server = Server(sendPrompt=[refused])
+        server = Server(SendGrokBotUserMessage=[refused])
         with self.assertRaises(gateway.GrokError) as caught:
             gateway.Gateway(token="test", request=server).send("bot", "task", "nonce")
         self.assertEqual(caught.exception.delivery, "rejected")
-        self.assertEqual(server.calls.count("sendPrompt"), 1)
+        self.assertEqual(server.calls.count("SendGrokBotUserMessage"), 1)
 
 
 class DeliveryRecoveryTests(unittest.TestCase):
