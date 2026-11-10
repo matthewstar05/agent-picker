@@ -23,7 +23,7 @@ A card appears once its provider is open in this tab, or wider with universal
 display. Off cards still show while Tab is held, except for a CLI hidden on the
 Visibility page.
 
-Keys: t theme selector, → next theme, T / ← previous, r refresh now, a toggle animation,
+Keys: t theme selector, → next theme, T / ← previous, r refresh now,
 hold Tab to see every connected provider until it's let go, s settings,
 u or Esc back to the agents, q quit.
 """
@@ -93,7 +93,7 @@ THEME = themes.track(preferences.register(preferences.Setting(
     hint="Colors for the usage panel. t opens the selector; T cycles backward.")))
 ANIMATE = preferences.register(preferences.Setting(
     "usage.animate", "Usage panel", "Animation", [True, False], _legacy("animate", "1") == "1",
-    hint="Off redraws once a second and uses almost no CPU. a toggles it there too.",
+    hint="Change animation here. Off redraws once a second and uses almost no CPU.",
     names={True: "on", False: "off"}))
 FRAME_RATE = preferences.register(preferences.Setting(
     "usage.fps", "Usage panel", "Animation frame rate", [15, 30, 60], 60,
@@ -1473,8 +1473,6 @@ def handle(view, key, providers, releases=False):
         view.toast_until = time.time() + 2.5
     elif key == "r":
         force_all(providers)
-    elif key == "a":
-        preferences.cycle(ANIMATE.key)
     elif key == "s":
         return "settings"
     elif key in ("u", "U", "esc", "\x7f", "\b"):

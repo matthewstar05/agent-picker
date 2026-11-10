@@ -96,7 +96,7 @@ Press `\` in the agent selector or usage panel, or run `schedule`. Tab switches 
 
 Use ↑↓ to highlight a schedule and Enter to inspect it. `n` creates one, `e` edits it, `p` pauses or resumes it, `d` opens a removal confirmation with Keep selected, and `l` reads its latest run log. `\` or Esc returns to the selector; `q` exits. The scheduler uses the selector's gradients, moving glow, animated selection borders, and the usage panel's selected color theme.
 
-`t` / `T` cycles the shared color theme, and `a` toggles the shared animation setting. With animations off, the open menu redraws once a second. The background dispatcher has no animations.
+`t` / `T` cycles the shared color theme. Change animation through `s` → Usage panel → Animation. With animations off, the open menu redraws once a second. The background dispatcher has no animations.
 
 In a new schedule, choose a prompt, working directory, date, time, and frequency, then select **Save schedule**. Enter opens each field. The prompt editor supports multiline paste, Ctrl+N for a newline, Ctrl+U to clear, Enter to accept, and Esc to cancel the field. Esc in the form discards the unsaved draft. The calendar uses ←→ for days, ↑↓ for weeks, and `[` / `]` for months; you can also type `YYYY-MM-DD`. The time picker accepts `14:30`, `1430`, or `2:30 PM`; ↑↓ adjusts five minutes and ←→ adjusts an hour. Clear the existing time with Ctrl+U before typing a replacement. Under `s` settings, **Scheduler > Time display** switches military time and AM/PM.
 
@@ -328,7 +328,7 @@ By default each bar depletes: it starts full, empties as the limit is used, and 
 
 Filled-bar gradients and light pulses move left in depleting mode and right in filling mode. Background and border waves keep their usual direction.
 
-Keys: `t` opens the theme selector, `→` next theme, `T` or `←` previous theme, `r` refresh now, `a` toggle animation (off redraws once a second), hold Tab to see every connected provider (each installed provider with a usage reader) until Tab is let go, `s` settings, `u` or Esc back to the picker, `q` quit.
+Keys: `t` opens the theme selector, `→` next theme, `T` or `←` previous theme, `r` refresh now, hold Tab to see every connected provider (each installed provider with a usage reader) until Tab is let go, `s` settings, `u` or Esc back to the picker, `q` quit.
 
 Holding Tab relies on key release events. On the usage screen the panel turns on the kitty keyboard protocol, which Ghostty, kitty, WezTerm, and Herdr support, and the peek ends the moment Tab is released. Where releases never arrive (other terminals), the peek follows key repeat instead: it opens on the press and closes about a quarter second after the repeats stop, so a quick tap shows it for just over half a second.
 

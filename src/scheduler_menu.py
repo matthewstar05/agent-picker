@@ -293,9 +293,6 @@ class Menu:
             elif key in ("t", "T"):
                 import usage_panel
                 preferences.cycle(usage_panel.THEME.key, -1 if key == "T" else 1)
-            elif key == "a":
-                import usage_panel
-                preferences.cycle(usage_panel.ANIMATE.key)
             elif key == "b":
                 scheduler.install_service()
                 self.loaded, self.notice = True, "Background dispatcher enabled."
