@@ -14,7 +14,7 @@ import themes
 import usage_panel as panel
 
 BUILTIN_NAMES = ["brand", "aurora", "sunset", "vapor", "ocean", "matrix", "ember",
-                 "sakura", "glacier", "mono", "rainbow"]
+                 "sakura", "glacier", "mono", "rainbow", "latte", "solar", "galaxy", "rose"]
 
 
 class ThemeTests(unittest.TestCase):
@@ -182,8 +182,8 @@ class ThemeTests(unittest.TestCase):
         self.write([{"name": "custom", "stops": ["#ff0000", "#0000ff"]}])
         self.later()
         view = panel.View([a for a in panel.ap.AGENTS if a["name"] in panel.ap.FETCHERS])
-        preferences.put(panel.THEME.key, "rainbow")
-        self.assertEqual(view.theme, BUILTIN_NAMES.index("rainbow"))    # the view rereads the files
+        preferences.put(panel.THEME.key, BUILTIN_NAMES[-1])
+        self.assertEqual(view.theme, len(BUILTIN_NAMES) - 1)    # the view rereads the files
         panel.handle(view, "t", {})
         self.assertEqual(preferences.get(panel.THEME.key), "custom")
         self.assertEqual(view.theme, len(BUILTIN_NAMES))

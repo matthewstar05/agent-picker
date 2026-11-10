@@ -6,6 +6,7 @@ local config (see --picker-doctor) adds more: an entry with a built-in's name
 replaces it in place, and new names follow the built-ins in file order. Each
 entry is {"name": ..., "stops": ...}, where stops is null (each agent in its own
 colors, like brand), "rainbow", or 1 to 8 colors as [r, g, b] or "#rrggbb".
+An optional file_color sets file-browser labels using the same color syntax.
 Both files are reread when they change, so a running screen picks up an edit
 within about a second. Loading never raises: a bad entry is skipped, and a file
 that can't be read keeps what it loaded last, with the reason in problems().
@@ -63,16 +64,22 @@ def _theme(entry):
         return None, "it needs a name"
     if "stops" not in entry:
         return None, f"{name} needs stops"
+    theme = {"name": name}
+    if "file_color" in entry:
+        color = _color(entry["file_color"])
+        if color is None:
+            return None, f'{name}: file_color must be [r, g, b] with 0-255 values or "#rrggbb"'
+        theme["file_color"] = color
     stops = entry["stops"]
     if stops is None or stops == "rainbow":
-        return {"name": name, "stops": stops}, None
+        return dict(theme, stops=stops), None
     if not isinstance(stops, list) or not 1 <= len(stops) <= MAX_STOPS:
         return None, f'{name}: stops must be null, "rainbow", or a list of 1 to {MAX_STOPS} colors'
     colors = [_color(c) for c in stops]
     if None in colors:
         bad = json.dumps(stops[colors.index(None)])
         return None, f'{name}: {bad} is not [r, g, b] with 0-255 values or "#rrggbb"'
-    return {"name": name, "stops": colors}, None
+    return dict(theme, stops=colors), None
 
 
 def _read(path, last, required):

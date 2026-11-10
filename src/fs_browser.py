@@ -256,6 +256,16 @@ def theme_style(name):
     return {"gradient": stops, "color": ap.grad({"gradient": stops}, 0.3), "glow": 1.0}
 
 
+def filename_color(name, selected=False, hidden=False):
+    """An optional theme color for file labels, with selection and hidden states."""
+    color = themes.get(name).get("file_color")
+    if color is None:
+        return WHITE if selected else SOFT if hidden else TEXT
+    if selected:
+        return ap.mix(color, WHITE, 0.18)
+    return ap.mix(color, DARK, 0.35) if hidden else color
+
+
 def highlight_style(name, kind):
     style = theme_style(name)
     if style is None:
@@ -1207,7 +1217,7 @@ class App:
         side = 1 if g.lids else 0
         iw, ih = g.tile_w - 2 * side, g.tile_h - 2 * side
         inner = [[BLANK] * iw for _ in range(ih)]
-        name_color = WHITE if lit else SOFT if entry.hidden else TEXT
+        name_color = filename_color(self.theme(), bool(lit), entry.hidden)
         try:
             icon = self.entry_icon(entry, g.size, accent)
         except Exception:
@@ -1272,7 +1282,7 @@ class App:
                 put(cells, 1, self.entry_icon(entry, "mini", self.accent(0.3))[0])
             except Exception:
                 pass
-            main = WHITE if selected else SOFT if entry.hidden else TEXT
+            main = filename_color(self.theme(), selected, entry.hidden)
             put(cells, 5, filename_cells(entry, name_w, main, selected)[0])
             side = TEXT if selected else SOFT
             for key, at, width in columns[1:]:
@@ -1331,8 +1341,9 @@ class App:
         put(top, 2, cells_of(" ", TEXT))
         put(top, 3, [("✦", title_color(themed, 0, tick) if themed else star, None, False)])
         put(top, 4, cells_of(" ", TEXT))
-        flow = cells_of(title, TEXT, None, True)
-        if themed:
+        file_color = themes.get(theme).get("file_color") if self.screen == "preview" else None
+        flow = cells_of(title, file_color or TEXT, None, True)
+        if themed and file_color is None:
             flow = [(c[0], title_color(themed, k, tick), None, True) for k, c in enumerate(flow)]
         put(top, 5, flow + [BLANK])
         if tag and cols >= 6 + text_width(title) + text_width(tag) + 3:
@@ -1467,8 +1478,8 @@ class App:
             e = self.entries[i]
             cells = [BLANK] * cols
             put(cells, 0, cells_of("❯ " if i == self.index else "  ",
-                                   WHITE if i == self.index else TEXT, None, i == self.index))
-            put(cells, 2, filename_cells(e, cols - 2, WHITE if i == self.index else TEXT,
+                                   filename_color(self.theme(), i == self.index, e.hidden), None, i == self.index))
+            put(cells, 2, filename_cells(e, cols - 2, filename_color(self.theme(), i == self.index, e.hidden),
                                          i == self.index)[0])
             if i == self.index:
                 light([cells], self.lit_for(e, t))
@@ -1603,7 +1614,7 @@ class App:
         entry = p.entry
         if cols < 24 or rows < 4:
             line = fit(clean(entry.name) + " · esc back", cols)
-            return [[(1, paint(cells_of(line, TEXT)))]]
+            return [[(1, paint(cells_of(line, filename_color(self.theme()))))]]
         W, H = cols - 2, rows - 2
         key = ("preview", cols, rows, p.mode, p.top, p.left, p.wrap, p.loading, id(p.image), self.theme())
         if getattr(self, "previewed", (None,))[0] != key:
@@ -1681,7 +1692,7 @@ class App:
             icon = self.entry_icon(e, "large", self.accent(0.4))
         except Exception:
             icon = [[BLANK] * 8 for _ in range(3)]
-        facts = [(clean(e.name), WHITE, True), (e.kind_text(), TEXT, False)]
+        facts = [(clean(e.name), filename_color(self.theme(), selected=True), True), (e.kind_text(), TEXT, False)]
         if not e.is_dir:
             facts.append((f"{human_size(e.size)} ({e.size:,} bytes)", TEXT, False))
         facts += [(f"Modified  {when(e.mtime, 40)}", SOFT, False), (f"Created   {when(e.ctime, 40)}", SOFT, False),

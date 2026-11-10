@@ -9,5 +9,9 @@
   {"name": "sakura", "stops": [[255, 190, 215], [240, 130, 175], [255, 225, 238]]},
   {"name": "glacier", "stops": [[200, 235, 255], [120, 180, 255], [235, 245, 255]]},
   {"name": "mono", "stops": [[110, 110, 120], [200, 200, 210], [250, 250, 255]]},
-  {"name": "rainbow", "stops": "rainbow"}
+  {"name": "rainbow", "stops": "rainbow"},
+  {"name": "latte", "stops": ["#a66b46", "#c99565", "#f2dfb8"]},
+  {"name": "solar", "stops": ["#e5f5ff", "#fffdf2", "#ffdf70"]},
+  {"name": "galaxy", "stops": ["#5265c7", "#9063d4", "#cf8ee8", "#9cdbf5"], "file_color": "#e8bf68"},
+  {"name": "rose", "stops": ["#235c42", "#88443c", "#ff394f"]}
 ]

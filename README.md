@@ -338,7 +338,8 @@ Brand uses an animated gray outer border and each provider's own title, count, s
 
 Every screen uses one shared theme list: the usage panel (`t` and `T`, or Settings, Usage panel, Theme), the fs file browser's theme menu, and anything added later. A theme you add once shows up in all of them.
 
-- Built-in themes live in `themes.json` in the checkout: brand, aurora, sunset, vapor, ocean, matrix, ember, sakura, glacier, mono and rainbow.
+- Built-in themes live in `themes.json` in the checkout: brand, aurora, sunset, vapor, ocean, matrix, ember, sakura, glacier, mono, rainbow, latte, solar, galaxy and rose.
+- Latte blends roast, caramel and cream. Solar blends near-white starlight, pale blue and yellow. Galaxy blends deep blue, nebula violet and icy cyan, with gold filenames in fs. Rose blends dark green, mahogany and bright red.
 - Your own themes go in `themes.json` next to your local config: `~/.config/agent-picker/themes.json` on macOS and `%APPDATA%\agent-picker\themes.json` on Windows. `agent --picker-doctor` prints both paths and any problems with them.
 
 The file holds a list of themes, or `{"themes": [...]}`. Each theme has a `name` and `stops`:
@@ -346,6 +347,8 @@ The file holds a list of themes, or `{"themes": [...]}`. Each theme has a `name`
 - `null`: each item keeps its own brand colors, like `brand` (providers in the usage panel, file kinds in fs).
 - `"rainbow"`: the animated rainbow.
 - A list of 1 to 8 colors, each `[r, g, b]` (0 to 255) or `"#rrggbb"`. The screens blend smoothly between them.
+
+An optional `file_color` (a single RGB or hex color) sets fs filenames, including preview titles. Selected names brighten and hidden names dim. Without it, filenames keep their usual colors.
 
 ```json
 [
