@@ -46,6 +46,7 @@ class UsageBorderTests(unittest.TestCase):
         self.addCleanup(present.stop)
         now = time.time()
         panel.preferences.put(panel.CURSOR_GROK_TRANSIENT.key, True)
+        panel.preferences.put(panel.CURSOR_MODEL_BARS.key, "available")
         panel.USAGE.update({a["name"]: {"windows": [{"label": "5h", "pct": 15, "resets": now + 10800},
                                                     {"label": "wk", "pct": 6, "resets": now + 400000}],
                                         "fetched": now} for a in panel.ap.AGENTS})

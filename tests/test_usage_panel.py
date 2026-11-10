@@ -31,6 +31,7 @@ class UsagePanelTests(unittest.TestCase):
         # These fixtures exercise the original two-window layout. Permanent
         # Grok Bot placeholders have their own coverage in test_grokbot.
         preferences.put(panel.CURSOR_GROK_TRANSIENT.key, True)
+        preferences.put(panel.CURSOR_MODEL_BARS.key, "available")
         self.saved = dict(panel.USAGE), dict(panel.WORKING), panel.HERDR_OK
         panel.USAGE.clear()
         panel.USAGE.update({

@@ -460,7 +460,7 @@ class GrokBotUsageTests(unittest.TestCase):
             preferences.cycle(panel.CURSOR_GROK_TRANSIENT.key)
             self.assertEqual([w["label"] for w in ap.display_windows("Cursor", reading)], ["cr", "ex"])
             preferences.cycle(panel.CURSOR_GROK_TRANSIENT.key)
-            self.assertEqual(ap.display_windows("Cursor", None)[0]["label"], "gb")
+            self.assertEqual([w["label"] for w in ap.display_windows("Cursor", None)], ["cr", "ex", "gb"])
 
     def test_grok_pool_does_not_change_star_cursor_capacity(self):
         import star_meter

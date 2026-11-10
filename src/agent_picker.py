@@ -505,6 +505,11 @@ BARS = preferences.Setting(
     hint="Depleting bars start full and empty as a limit is used; filling bars grow toward 100%.",
     names={"left": "depleting", "used": "filling"})
 
+CURSOR_MODEL_BARS = preferences.Setting(
+    "usage.cursor_model_bars", "Usage panel", "Cursor model bars", ["always", "available"], "always",
+    hint="Keep Cursor's cr and ex rows visible with a dash when a reading is unavailable, or show only available readings.",
+    names={"always": "always visible", "available": "when available"})
+
 CURSOR_GROK_TRANSIENT = preferences.Setting(
     "usage.cursor_grok_transient", "Usage panel", "Transient Grok Bot bar", [False, True], False,
     hint="Off keeps Cursor's Grok Bot bar visible even when its reading is unavailable. On shows it only with a reading.",
@@ -513,9 +518,15 @@ CURSOR_GROK_TRANSIENT = preferences.Setting(
 
 def display_windows(name, entry):
     windows = list((entry or {}).get("windows", []))[:3]
-    if name == "Cursor" and preferences.get(CURSOR_GROK_TRANSIENT.key) is not True:
-        if not any(w.get("label") == "gb" for w in windows):
-            windows.append({"label": "gb", "pct": None, "resets": None})
+    if name == "Cursor":
+        required = ["cr", "ex"] if preferences.get(CURSOR_MODEL_BARS.key) != "available" else []
+        if preferences.get(CURSOR_GROK_TRANSIENT.key) is not True:
+            required.append("gb")
+        for label in required:
+            if not any(w.get("label") == label for w in windows):
+                windows.append({"label": label, "pct": None, "resets": None})
+        order = {"cr": 0, "ex": 1, "gb": 2}
+        windows.sort(key=lambda w: order.get(w.get("label"), 3))
     return windows
 
 

@@ -101,6 +101,7 @@ FRAME_RATE = preferences.register(preferences.Setting(
     names={15: "15 fps", 30: "30 fps", 60: "60 fps"}))
 
 BARS = preferences.register(ap.BARS)
+CURSOR_MODEL_BARS = preferences.register(ap.CURSOR_MODEL_BARS)
 CURSOR_GROK_TRANSIENT = preferences.register(ap.CURSOR_GROK_TRANSIENT)
 depleting = ap.depleting
 
@@ -892,7 +893,8 @@ def card(view, i, cw, t, now, rows=3):
     # still reuse their cached contents between countdown updates.
     step = t if working and view.anim else 0.0
     key = (i, name, cw, rows, view.theme, view.anim, depleting(), int(now), entry and entry["fetched"], fetching,
-           int(t * 3) % 3 if fetching else 0, working, len(HISTORY.get(name) or ()), step, panes, held, driving, pools)
+           int(t * 3) % 3 if fetching else 0, working, len(HISTORY.get(name) or ()), step, panes, held, driving, pools,
+           preferences.get(CURSOR_MODEL_BARS.key), preferences.get(CURSOR_GROK_TRANSIENT.key))
     if CARDS.get(i, (None,))[0] != key:
         CARDS[i] = (key, _card(view, i, cw, step, now, entry, fetching, working,
                              dots=key[10], rows=rows, panes=panes, held=held))
@@ -973,14 +975,12 @@ def _card(view, i, cw, t, now, entry, fetching, working, dots=None, rows=3, pane
 
     if name == STAR:
         lines += star_lines(cw, t, now, live, view.anim, st if themed else None, rainbow)
-    elif not entry:
+    elif not entry and not ap.display_windows(name, entry):
         if name not in ap.FETCHERS:
             msg = "no usage reader for this CLI yet"
         else:
             msg = ("reading limits" + "·" * (1 + dots)) if fetching else f"no data · is {name} signed in?"
         lines.append(Line().put("   ").put(clip(msg, cw - 4), SOFT).pad(cw))
-        if any(w.get("label") == "gb" for w in ap.display_windows(name, entry)):
-            lines.append(Line().put("   gb  ", LABEL).put("unavailable", SOFT).pad(cw))
     else:
         for k, w in enumerate(ap.display_windows(name, entry)):
             w = dict(w)
@@ -1009,7 +1009,8 @@ def _card(view, i, cw, t, now, entry, fetching, working, dots=None, rows=3, pane
             if tail_w and tail:
                 line.put("  " + tail, CONCERN if concerning(w, now) else (TEXT if live else SOFT))
             lines.append(line.pad(cw))
-        credits = ap.credits_text(entry["windows"][0]) if len(entry["windows"]) == 1 else None
+        raw_windows = (entry or {}).get("windows", [])
+        credits = ap.credits_text(raw_windows[0]) if len(raw_windows) == 1 else None
         if credits:
             # a lone limit's spare row, lined up with the start of its bar
             lines.append(Line().put("      ").put(clip(credits, cw - 7), SOFT).pad(cw))
