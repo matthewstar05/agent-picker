@@ -308,10 +308,10 @@ def ring(style, t, bw, height, boost=0.0, solid=None):
 
 
 def glow(style, x, y, width, t, boost=0.0):
-    """agent_picker.lit's rolling background, brighter with boost."""
-    hue = ap.grad(style, x / max(1, width) * 0.9 - y * 0.04 - t * 0.12)
-    strength = style.get("glow", 1.0) * (0.13 + 0.17 * boost
-                                         + (0.17 + 0.2 * boost) * ap.wave(x - y * 2, t, 22.0, 4.0) ** 3)
+    """A soft pastel background behind file icons, brighter with Shift held."""
+    hue = ap.mix(ap.grad(style, x / max(1, width) * 0.9 - y * 0.04 - t * 0.12), WHITE, 0.58)
+    strength = style.get("glow", 1.0) * (0.08 + 0.12 * boost
+                                         + (0.09 + 0.12 * boost) * ap.wave(x - y * 2, t, 22.0, 4.0) ** 3)
     return ap.tint(hue, min(0.8, strength))
 
 
