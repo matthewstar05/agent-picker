@@ -138,7 +138,7 @@ class PriorityTests(unittest.TestCase):
             (state / "usage.json").write_text(json.dumps({"Cursor": meter("Cursor", 20, 20, time.time()),
                                                          "Kiro": meter("Kiro", 20, 1, time.time())}))
             env = dict(os.environ, AGENT_PICKER_CONFIG=str(config), AGENT_PICKER_STATE_HOME=str(state),
-                       AGENT_PICKER_NO_PRETRUST="1")
+                       AGENT_PICKER_NO_PRETRUST="1", HERDR_ENV="0")
             cmd = [sys.executable, str(ROOT / "src/agent_picker.py")]
             info = subprocess.run(cmd + ["--picker-priority"], env=env, cwd=folder,
                                   capture_output=True, text=True, encoding="utf-8")

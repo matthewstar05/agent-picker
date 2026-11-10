@@ -51,6 +51,7 @@ import star_commands
 import star_engines
 import star_input
 import star_mesh
+import herdr_agent_context
 import star_meter
 import star_router
 
@@ -1120,6 +1121,7 @@ class Star:
         print(self.route_line(task, choice, note))
         session = self.convo.sessions.get(choice.provider)
         brief = self.member.brief() if self.member else ""
+        brief = "\n\n".join(part for part in (brief, herdr_agent_context.brief()) if part)
         text = (PLAN_NOTE + "\n\n" + prompt) if self.plan else prompt
         argv = engine.argv(self.convo.prompt_for(choice.provider, text, brief), choice.model, choice.effort,
                            session, plan=self.plan, images=images, tier=choice.tier,

@@ -4,7 +4,7 @@ A provider's setup follows the "System prompt" setting (m in the menu cycles it)
 Off and individual both open five agents that each work for the user directly,
 all on the model and effort the agent picker launches that provider with: the
 picker's defaults screen and herdr-ai's (→ on the row) edit the same setting.
-Off gives them no herdr-ai instructions at all. Individual, the default, tells
+Off gives them only the common pane position context. Individual, the default, tells
 them about each other: they share context through one notes file per tab and can
 read each other's panes, but nobody delegates.
 Orchestrator-crew is the lead and crew below, with models of its own: → on the
@@ -301,7 +301,9 @@ def prepare(agent, args):
         return prepare_plain(agent, args)
     solo = args[:1] == ["--picker-solo"]
     if solo and (agent["name"] == "Star" or not handoff.enabled()):
-        # StarCLI routes its own turns, and with handoff off a solo pane has no brief.
+        # StarCLI routes its own turns; with handoff off only pane context is needed.
+        if agent.get("_herdr_context"):
+            return instruct(copy.deepcopy(agent), list(args[1:]), "", opening=True, shared=False)
         return agent, list(args[1:])
     if not solo and len(args) < 2:
         raise ValueError(f"{args[0]} needs pane ids")
@@ -351,19 +353,25 @@ def prepare_peer(agent, args):
 
 
 def prepare_plain(agent, args):
-    """A peer with the system prompt off: the picker's model and no instructions.
+    """A peer with teamwork off: the picker's model and common pane context only.
     Only iMCP stays out, since five panes start at once."""
     agent = as_picked(agent, "plain")
     if agent["name"] == "Claude":
         agent["argv"] += ["--settings", claude_settings()]
     elif agent["name"] == "Codex":
         agent["argv"] += ["-c", "mcp_servers.iMCP.enabled=false"]
+    if agent.get("_herdr_context"):
+        return instruct(agent, list(args[1:]), "", opening=True, shared=False)
     return agent, list(args[1:])
 
 
 def instruct(agent, args, brief, opening, shared):
     """Give the agent its brief the way its CLI supports. shared: several panes of
     this tab start at once, so keep iMCP out."""
+    context = agent.get("_herdr_context") or ""
+    if context:
+        brief = "\n\n".join(part for part in (brief, context) if part)
+        opening = True  # flagless crew also need to learn the pane numbering
     name = agent["name"]
     if name == "Claude":
         agent["argv"] += ["--append-system-prompt", brief]
@@ -377,7 +385,11 @@ def instruct(agent, args, brief, opening, shared):
         agent["argv"] += ["--append-system-prompt", brief]
     elif opening:
         # No system prompt flag: the agent reads its brief as the opening prompt.
-        opening = brief + "\n\nThese are your standing instructions for this session. Reply only: ready."
+        if context and args and all(not arg.startswith("-") for arg in args):
+            opening = brief + "\n\nUser request:\n" + " ".join(args)
+            args = []
+        else:
+            opening = brief + "\n\nThese are your standing instructions for this session. Reply only: ready."
         args += ["-i", opening] if name == "Antigravity" else [opening]
     return agent, args
 

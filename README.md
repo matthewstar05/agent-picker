@@ -158,7 +158,9 @@ How those five agents work is the **System prompt** setting: **off**, **individu
 
 **Off** and **individual** both run five independent agents. Each works for you directly, nobody delegates, and every one runs the model and effort the agent picker launches that provider with. The two stay in sync: change a provider's model in `agent` (→ on its row) or in herdr-ai's setup menu (→ on its row, with off or individual selected) and both use it. Quitting one reopens the selector, as in Standard, and all five appear in the Agents sidebar.
 
-With **off**, herdr-ai adds no instructions at all: no appended system prompt, developer instructions, or opening prompt. The agents start exactly as the picker would start them. Only the iMCP server stays out of Claude and Codex, since five panes connect at once.
+Every Herdr agent learns the same position names, regardless of provider: **agent 1, 2, 3** across the top from left to right, then **agent 4, 5** across the bottom from left to right. The tall right-hand agent is **agent 3**. The terminal/file browser and usage panel are not numbered. Launch context includes the saved tab's actual pane IDs, so "look at agent 2" means that pane, even after switching providers. Star includes this context in its routed turns too. Existing native conversations need the context sent once or a new launch to learn it.
+
+With **off**, herdr-ai omits teamwork and handoff instructions; the position names above still apply. Only the iMCP server stays out of Claude and Codex, since five panes connect at once.
 
 With **individual**, the agents share context through one notes file per tab in the local state directory (`herdr-ai-shared/<tab>.md`). Each reads it before a task, appends a line when it starts (the task and the files it is touching) and when it finishes or learns something the others need, and checks a peer's pane with `herdr agent read` before editing a file that peer has claimed. They do not prompt each other. With handoff on, an agent near its limit hands off only its own pane.
 

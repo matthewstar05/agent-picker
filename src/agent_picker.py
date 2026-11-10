@@ -1540,10 +1540,14 @@ def main():
                 and AGENTS[index]["name"] != "Star" else [])
         os.execv(sys.executable, [sys.executable, str(Path(__file__).resolve()),
                                   "--picker-return", "--picker-launch", AGENTS[index]["name"], *solo, *args])
-    agent = AGENTS[index]
+    import herdr_agent_context
+    agent = herdr_agent_context.annotate(AGENTS[index])
     if args[:1] in (["--picker-lead"], ["--picker-crew"], ["--picker-peer"], ["--picker-plain"], ["--picker-solo"]):
         import team
         agent, args = team.prepare(agent, args)
+    elif agent.get("_herdr_context"):
+        import team
+        agent, args = team.instruct(agent, args, "", opening=True, shared=False)
     argv = resolve_argv(agent)
     if not argv:
         raise RuntimeError(f"{agent['name']} is not installed. Run --picker-doctor.")

@@ -107,7 +107,7 @@ class AgyPromptTests(unittest.TestCase):
                             encoding="utf-8")
             fake.chmod(0o755)
         env = dict(os.environ, AGENT_PICKER_STATE_HOME=str(self.home / "state"),
-                   AGENT_PICKER_NO_PRETRUST="1", HERDR_TAB_ID="test:tab")
+                   AGENT_PICKER_NO_PRETRUST="1", HERDR_TAB_ID="test:tab", HERDR_ENV="0")
         for agy_on in (True, False):
             for herdr_on in (True, False):
                 with self.subTest(agy=agy_on, herdr=herdr_on):

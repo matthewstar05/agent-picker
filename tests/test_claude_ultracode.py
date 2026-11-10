@@ -161,7 +161,7 @@ class UltracodeTests(unittest.TestCase):
                           "Path(sys.argv[1]).write_text(json.dumps(sys.argv[2:]))\n")
         self.config.write_text(json.dumps({"agents": {"Claude": {
             "argv": [sys.executable, str(script), str(output), "--model", "m"], "defaults": {"ultracode": True}}}}))
-        env = dict(os.environ, AGENT_PICKER_NO_PRETRUST="1")
+        env = dict(os.environ, AGENT_PICKER_NO_PRETRUST="1", HERDR_ENV="0")
         result = subprocess.run([sys.executable, str(ROOT / "src/agent_picker.py"), "--picker-launch", "Claude", "hi"],
                                 cwd=self.home, env=env, capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(result.returncode, 0, result.stderr)

@@ -175,7 +175,7 @@ class PickerTests(unittest.TestCase):
             config = folder / "config.json"
             config.write_text(json.dumps({"agents": {"Claude": {"argv": [sys.executable, str(script), str(output)]}}}))
             args = ["hello world", 'a "quoted" value', "unicode café", "--literal", "a&b", "$value"]
-            env = dict(os.environ, AGENT_PICKER_CONFIG=str(config), AGENT_PICKER_STATE_HOME=str(folder / "state"), AGENT_PICKER_NO_PRETRUST="1")
+            env = dict(os.environ, AGENT_PICKER_CONFIG=str(config), AGENT_PICKER_STATE_HOME=str(folder / "state"), AGENT_PICKER_NO_PRETRUST="1", HERDR_ENV="0")
             result = subprocess.run([sys.executable, str(ROOT / "src/agent_picker.py"), "--picker-launch", "Claude"] + args, cwd=folder, env=env, capture_output=True, text=True, encoding="utf-8")
             self.assertEqual(result.returncode, 7, result.stderr)
             data = json.loads(output.read_text())
