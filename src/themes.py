@@ -6,12 +6,14 @@ local config (see --picker-doctor) adds more: an entry with a built-in's name
 replaces it in place, and new names follow the built-ins in file order. Each
 entry is {"name": ..., "stops": ...}, where stops is null (each agent in its own
 colors, like brand), "rainbow", or 1 to 8 colors as [r, g, b] or "#rrggbb".
-An optional file_color sets file-browser labels using the same color syntax.
+Optional file_color and repo_color set file-browser labels using the same color
+syntax, or "rainbow" for a gradient across each name.
 Both files are reread when they change, so a running screen picks up an edit
 within about a second. Loading never raises: a bad entry is skipped, and a file
 that can't be read keeps what it loaded last, with the reason in problems().
 """
 
+from functools import lru_cache
 import json
 import re
 import time
@@ -54,6 +56,40 @@ def _color(value):
     return None
 
 
+# Text can sit over a working card's soft glow as well as the terminal background.
+# Keep palettes intact and lift only label colors that need more contrast.
+LABEL_BACKGROUND = (40, 40, 48)
+LABEL_CONTRAST = 7.0
+_LINEAR_RGB = tuple(v / 255 / 12.92 if v <= 10 else ((v / 255 + 0.055) / 1.055) ** 2.4
+                    for v in range(256))
+
+
+def _luminance(color):
+    return sum(weight * _LINEAR_RGB[channel]
+               for weight, channel in zip((0.2126, 0.7152, 0.0722), color))
+
+
+def label_color(color):
+    """Keep a label's hue while lifting it to 7:1 contrast on the panel's dark glow."""
+    return _label_color(tuple(color))
+
+
+@lru_cache(maxsize=8192)
+def _label_color(color):
+    target = LABEL_CONTRAST * (_luminance(LABEL_BACKGROUND) + 0.05) - 0.05
+    if _luminance(color) >= target:
+        return color
+    low, high, bright = 0.0, 1.0, (255, 255, 255)
+    for _ in range(10):
+        amount = (low + high) / 2
+        candidate = tuple(round(c + (255 - c) * amount) for c in color)
+        if _luminance(candidate) >= target:
+            bright, high = candidate, amount
+        else:
+            low = amount
+    return bright
+
+
 def _theme(entry):
     """(theme, None) for a usable file entry, or (None, why it was skipped)."""
     if not isinstance(entry, dict):
@@ -65,11 +101,14 @@ def _theme(entry):
     if "stops" not in entry:
         return None, f"{name} needs stops"
     theme = {"name": name}
-    if "file_color" in entry:
-        color = _color(entry["file_color"])
+    for key in ("file_color", "repo_color"):
+        if key not in entry:
+            continue
+        value = entry[key]
+        color = "rainbow" if value == "rainbow" else _color(value)
         if color is None:
-            return None, f'{name}: file_color must be [r, g, b] with 0-255 values or "#rrggbb"'
-        theme["file_color"] = color
+            return None, f'{name}: {key} must be [r, g, b] with 0-255 values, "#rrggbb", or "rainbow"'
+        theme[key] = color
     stops = entry["stops"]
     if stops is None or stops == "rainbow":
         return dict(theme, stops=stops), None

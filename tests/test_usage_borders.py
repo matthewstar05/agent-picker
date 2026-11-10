@@ -181,14 +181,18 @@ class UsageBorderTests(unittest.TestCase):
                 if theme["name"] == "rainbow":
                     expected = [(ch, panel.ap.rainbow_rgb(k / 11 - 1.5 * 0.24, 0.2))
                                 for k, ch in enumerate(agent["name"])]
-                    self.assertEqual(cells(themed[1])[4:4 + len(agent["name"])], expected)
-                    self.assertEqual(cells(row)[3:3 + len(agent["name"])], expected)
+                    self.assertEqual(cells(themed[1])[4:4 + len(agent["name"])],
+                                     [(ch, panel.themes.label_color(color)) for ch, color in expected])
+                    self.assertEqual(cells(row)[3:3 + len(agent["name"])],
+                                     [(ch, panel.themes.label_color(color)) for ch, color in expected])
                 else:
                     expected = [(ch, panel.mix(panel.ap.grad({"gradient": theme["stops"]},
                                                             k / 11 - 1.5 * 0.24), panel.WHITE, 0.2))
                                 for k, ch in enumerate(agent["name"])]
-                    self.assertEqual(cells(themed[1])[4:4 + len(agent["name"])], expected)
-                    self.assertEqual(cells(row)[3:3 + len(agent["name"])], expected)
+                    self.assertEqual(cells(themed[1])[4:4 + len(agent["name"])],
+                                     [(ch, panel.themes.label_color(color)) for ch, color in expected])
+                    self.assertEqual(cells(row)[3:3 + len(agent["name"])],
+                                     [(ch, panel.themes.label_color(color)) for ch, color in expected])
                 dot_color = panel.WHITE if theme["name"] == "rainbow" else expected[0][1]
                 self.assertEqual(cells(themed[1])[2][1], dot_color)
                 self.assertEqual(cells(row)[1][1], dot_color)

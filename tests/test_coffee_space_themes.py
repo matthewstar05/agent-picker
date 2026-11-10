@@ -140,9 +140,8 @@ class RenderedFilenameColorTests(Base):
         self._assert_frame_label_color(self, frame, "notes.md", fsb.ap.mix(self.GALAXY, fsb.WHITE, 0.18),
                                        occurrence=1)
 
-    def test_legacy_themes_keep_existing_filename_colors(self):
-        for selected, hidden, expected in ((True, False, fsb.WHITE),
-                                           (False, True, fsb.SOFT),
-                                           (False, False, fsb.TEXT)):
-            with self.subTest(selected=selected, hidden=hidden):
-                self.assertEqual(fsb.filename_color("vapor", selected, hidden), expected)
+    def test_brand_and_mono_allow_white_file_labels_while_vapor_is_tinted(self):
+        for name in ("brand", "mono"):
+            self.assertEqual(fsb.filename_color(name), fsb.WHITE)
+            self.assertEqual(fsb.filename_color(name, selected=True), fsb.WHITE)
+        self.assertNotEqual(fsb.filename_color("vapor"), fsb.WHITE)

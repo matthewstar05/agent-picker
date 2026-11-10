@@ -256,14 +256,35 @@ def theme_style(name):
     return {"gradient": stops, "color": ap.grad({"gradient": stops}, 0.3), "glow": 1.0}
 
 
-def filename_color(name, selected=False, hidden=False):
-    """An optional theme color for file labels, with selection and hidden states."""
-    color = themes.get(name).get("file_color")
+def filename_color(name, selected=False, hidden=False, kind=None, phase=0):
+    """A readable theme color for file labels, including repository folders."""
+    theme = themes.get(name)
+    color = theme.get("repo_color") if kind == "folder-github" else None
+    color = color or theme.get("file_color")
+    stops = themes.stops(name)
     if color is None:
-        return WHITE if selected else SOFT if hidden else TEXT
+        color = "rainbow" if stops == "rainbow" else (ap.grad({"gradient": stops}, 0.3) if stops else WHITE)
+    if color == "rainbow":
+        color = ap.rainbow_rgb(phase + (0.15 if kind == "folder-github" else 0), 0.55)
+    elif kind == "folder-github" and not theme.get("repo_color"):
+        color = ap.mix(color, (255, 225, 200), 0.18)
+    color = themes.label_color(color)
     if selected:
         return ap.mix(color, WHITE, 0.18)
     return ap.mix(color, DARK, 0.35) if hidden else color
+
+
+def label_cells(name, text, selected=False, hidden=False, kind=None, bold=False, offset=0):
+    """Paint each character for rainbow themes while preserving wide cell handling."""
+    theme = themes.get(name)
+    color = theme.get("repo_color") if kind == "folder-github" else None
+    color = color or theme.get("file_color")
+    rainbow = color == "rainbow" or (color is None and themes.stops(name) == "rainbow")
+    if not rainbow:
+        return cells_of(text, filename_color(name, selected, hidden, kind), None, bold)
+    cells = cells_of(text, None, None, bold)
+    return [(ch, filename_color(name, selected, hidden, kind, (offset + i) / 12), bg, weight)
+            for i, (ch, _, bg, weight) in enumerate(cells)]
 
 
 def highlight_style(name, kind):
@@ -852,13 +873,15 @@ def tile_name(name, width, lines):
     return [head.rstrip(" "), middle(rest, width)]
 
 
-def filename_cells(entry, width, color, bold=False, lines=1):
+def filename_cells(entry, width, color, bold=False, lines=1, theme=None, selected=False):
     """A GitHub marker belongs to the label, leaving the folder icon plain."""
     width = max(0, width)
     marker = cells_of("★ ", WHITE, None, bold)[:width] if entry.kind == "folder-github" else []
     room = width - len(marker)
     names = tile_name(entry.name, room, lines) if room else [""]
-    return [(marker if i == 0 else []) + cells_of(name, color, None, bold)
+    return [(marker if i == 0 else []) + (label_cells(theme, name, selected, entry.hidden, entry.kind, bold,
+                                                        sum(len(n) for n in names[:i]))
+                                            if theme is not None else cells_of(name, color, None, bold))
             for i, name in enumerate(names)]
 
 
@@ -1217,7 +1240,7 @@ class App:
         side = 1 if g.lids else 0
         iw, ih = g.tile_w - 2 * side, g.tile_h - 2 * side
         inner = [[BLANK] * iw for _ in range(ih)]
-        name_color = filename_color(self.theme(), bool(lit), entry.hidden)
+        name_color = filename_color(self.theme(), bool(lit), entry.hidden, entry.kind)
         try:
             icon = self.entry_icon(entry, g.size, accent)
         except Exception:
@@ -1226,12 +1249,12 @@ class App:
             icon = [[dim_cell(c, 0.45) if c[1] or c[2] else c for c in row] for row in icon]
         if g.inline:
             put(inner[0], 1, icon[0])
-            put(inner[0], 4, filename_cells(entry, iw - 5, name_color, bool(lit))[0])
+            put(inner[0], 4, filename_cells(entry, iw - 5, name_color, bool(lit), theme=self.theme(), selected=bool(lit))[0])
         else:
             x = (iw - len(icon[0])) // 2
             for y, row in enumerate(icon):
                 put(inner[y], x, row)
-            names = filename_cells(entry, iw, name_color, bool(lit), g.lines)
+            names = filename_cells(entry, iw, name_color, bool(lit), g.lines, self.theme(), bool(lit))
             # A one-line name takes the last row, leaving a row between it and the icon,
             # so the icon and name sit evenly inside the highlight's ring.
             first = len(icon) + g.lines - len(names)
@@ -1282,8 +1305,8 @@ class App:
                 put(cells, 1, self.entry_icon(entry, "mini", self.accent(0.3))[0])
             except Exception:
                 pass
-            main = filename_color(self.theme(), selected, entry.hidden)
-            put(cells, 5, filename_cells(entry, name_w, main, selected)[0])
+            main = filename_color(self.theme(), selected, entry.hidden, entry.kind)
+            put(cells, 5, filename_cells(entry, name_w, main, selected, theme=self.theme(), selected=selected)[0])
             side = TEXT if selected else SOFT
             for key, at, width in columns[1:]:
                 if key == "date":
@@ -1341,10 +1364,13 @@ class App:
         put(top, 2, cells_of(" ", TEXT))
         put(top, 3, [("✦", title_color(themed, 0, tick) if themed else star, None, False)])
         put(top, 4, cells_of(" ", TEXT))
-        file_color = themes.get(theme).get("file_color") if self.screen == "preview" else None
-        flow = cells_of(title, file_color or TEXT, None, True)
-        if themed and file_color is None:
-            flow = [(c[0], title_color(themed, k, tick), None, True) for k, c in enumerate(flow)]
+        if self.screen == "preview" and self.preview:
+            entry = self.preview.entry
+            flow = label_cells(theme, title, kind=entry.kind, bold=True)
+        else:
+            flow = cells_of(title, TEXT, None, True)
+            if themed:
+                flow = [(c[0], title_color(themed, k, tick), None, True) for k, c in enumerate(flow)]
         put(top, 5, flow + [BLANK])
         if tag and cols >= 6 + text_width(title) + text_width(tag) + 3:
             words = cells_of(tag, TEXT, None, True)
@@ -1478,9 +1504,9 @@ class App:
             e = self.entries[i]
             cells = [BLANK] * cols
             put(cells, 0, cells_of("❯ " if i == self.index else "  ",
-                                   filename_color(self.theme(), i == self.index, e.hidden), None, i == self.index))
-            put(cells, 2, filename_cells(e, cols - 2, filename_color(self.theme(), i == self.index, e.hidden),
-                                         i == self.index)[0])
+                                   filename_color(self.theme(), i == self.index, e.hidden, e.kind), None, i == self.index))
+            put(cells, 2, filename_cells(e, cols - 2, filename_color(self.theme(), i == self.index, e.hidden, e.kind),
+                                         i == self.index, theme=self.theme(), selected=i == self.index)[0])
             if i == self.index:
                 light([cells], self.lit_for(e, t))
             self.hits.append((1, len(out) + 1, cols, 1, i))
@@ -1614,7 +1640,7 @@ class App:
         entry = p.entry
         if cols < 24 or rows < 4:
             line = fit(clean(entry.name) + " · esc back", cols)
-            return [[(1, paint(cells_of(line, filename_color(self.theme()))))]]
+            return [[(1, paint(label_cells(self.theme(), line, hidden=entry.hidden, kind=entry.kind)))]]
         W, H = cols - 2, rows - 2
         key = ("preview", cols, rows, p.mode, p.top, p.left, p.wrap, p.loading, id(p.image), self.theme())
         if getattr(self, "previewed", (None,))[0] != key:
@@ -1692,7 +1718,7 @@ class App:
             icon = self.entry_icon(e, "large", self.accent(0.4))
         except Exception:
             icon = [[BLANK] * 8 for _ in range(3)]
-        facts = [(clean(e.name), filename_color(self.theme(), selected=True), True), (e.kind_text(), TEXT, False)]
+        facts = [(clean(e.name), filename_color(self.theme(), selected=True, kind=e.kind), True), (e.kind_text(), TEXT, False)]
         if not e.is_dir:
             facts.append((f"{human_size(e.size)} ({e.size:,} bytes)", TEXT, False))
         facts += [(f"Modified  {when(e.mtime, 40)}", SOFT, False), (f"Created   {when(e.ctime, 40)}", SOFT, False),
@@ -1713,7 +1739,9 @@ class App:
                 put(rows[top + k], x, row)
         for k, (text, color, bold) in enumerate(facts):
             if top + k < H:
-                put(rows[top + k], x + 12, cells_of(fit(text, max(4, W - x - 14)), color, None, bold))
+                label = fit(text, max(4, W - x - 14))
+                cells = label_cells(self.theme(), label, selected=True, kind=e.kind, bold=bold) if k == 0 else cells_of(label, color, None, bold)
+                put(rows[top + k], x + 12, cells)
         return rows
 
     # -- actions --

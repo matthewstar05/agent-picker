@@ -23,7 +23,7 @@ A card appears once its provider is open in this tab, or wider with universal
 display. Off cards still show while Tab is held, except for a CLI hidden on the
 Visibility page.
 
-Keys: t / → next theme, T / ← previous, r refresh now, a toggle animation,
+Keys: t theme selector, → next theme, T / ← previous, r refresh now, a toggle animation,
 hold Tab to see every connected provider until it's let go, s settings,
 u or Esc back to the agents, q quit.
 """
@@ -90,7 +90,7 @@ def _legacy(name, default):
 
 THEME = themes.track(preferences.register(preferences.Setting(
     "usage.theme", "Usage panel", "Theme", themes.names(), _legacy("theme", "brand"),
-    hint="Colors for the usage panel. t and T switch it there too.")))
+    hint="Colors for the usage panel. t opens the selector; T cycles backward.")))
 ANIMATE = preferences.register(preferences.Setting(
     "usage.animate", "Usage panel", "Animation", [True, False], _legacy("animate", "1") == "1",
     hint="Off redraws once a second and uses almost no CPU. a toggles it there too.",
@@ -667,6 +667,7 @@ class View:
         self.installed = agents   # every listed profile, in picker order
         self.pinned = pinned      # draw every listed profile, even ones not beside this pane
         self.toast_until = 0
+        self.theme_menu = None
         self.peek_until = 0       # while Tab is held: every connected provider gets a card
         for agent in agents:
             card_setting(agent["name"])
@@ -695,7 +696,7 @@ class View:
     @property
     def theme(self):
         themes.reload()     # rate limited; picks up a theme added to either file
-        return theme_index(preferences.get(THEME.key))
+        return theme_index(self.theme_menu.value if self.theme_menu else preferences.get(THEME.key))
 
     @property
     def anim(self):
@@ -821,12 +822,12 @@ def put_name(line, agent, t, bold=True, panes=None, style=None):
     suffix = f" ({panes})" if panes is not None and panes > 1 else ""
     if style is not None:
         for k, ch in enumerate(name + suffix):
-            line.put(ch, title_color(style, k, t), bold=bold and k < len(name))
+            line.put(ch, themes.label_color(title_color(style, k, t)), bold=bold and k < len(name))
     elif agent.get("pastel") == "rainbow":
         for k, ch in enumerate(name + suffix):
-            line.put(ch, ap.rainbow_rgb(k / 11 - t * 0.24, 0.2), bold=bold and k < len(name))
+            line.put(ch, themes.label_color(ap.rainbow_rgb(k / 11 - t * 0.24, 0.2)), bold=bold and k < len(name))
     else:
-        color = agent.get("pastel") or agent["color"]
+        color = themes.label_color(agent.get("pastel") or agent["color"])
         line.put(name, color, bold=bold).put(suffix, color)
 
 
@@ -1147,10 +1148,11 @@ def plan(n, width, height, heights=None):
     return None
 
 
-def overlay(cells, col, text, color, bold=False, style=None, t=0.0):
+def overlay(cells, col, text, color, bold=False, style=None, t=0.0, readable=False):
     for k, ch in enumerate(text):
         if 0 <= col + k < len(cells):
             shade = title_color(style, k, t) if style is not None else color
+            shade = themes.label_color(shade) if readable else shade
             cells[col + k] = f"{ap.fg(shade)}{BOLD if bold else ''}{ch}{RESET}"
 
 
@@ -1196,9 +1198,99 @@ def empty_state(width, height):
     return out
 
 
+class ThemeMenu:
+    """Preview themes without changing the saved preference until applied."""
+    def __init__(self, current):
+        themes.reload()
+        self.items = themes.names()
+        self.original = current
+        self.index = self.items.index(current) if current in self.items else 0
+        self.columns = 1
+
+    @property
+    def value(self):
+        return self.items[self.index]
+
+    def handle(self, key):
+        if key.startswith("release:"):
+            return None
+        if key in ("esc", "q", "t", "\x7f", "\b"):
+            return "cancel"
+        if key in ("\r", "\n", " ", "shift-enter"):
+            return "apply"
+        if key in ("left", "h"):
+            delta = -1
+        elif key in ("right", "l", "\t"):
+            delta = 1
+        elif key in ("up", "k"):
+            delta = -self.columns
+        elif key in ("down", "j"):
+            delta = self.columns
+        else:
+            return None
+        self.index = (self.index + delta) % len(self.items)
+        return None
+
+
+def theme_panel(menu, cols, rows, t):
+    """A scrollable grid when space permits, otherwise a compact list."""
+    if cols <= 0 or rows <= 0:
+        return []
+    grid = cols >= 60 and rows >= 12
+    menu.columns = min(4, cols // 25) if grid else 1
+    width = max(1, cols // menu.columns)
+    chrome = 2 if rows >= 3 else 0
+    available = max(1, (rows - chrome) // (3 if grid else 1))
+    selected_row = menu.index // menu.columns
+    total_rows = math.ceil(len(menu.items) / menu.columns)
+    first = max(0, min(selected_row - available + 1, total_rows - available))
+    out = [clip(" themes · preview · enter apply · esc cancel", cols)] if chrome else []
+    for row in range(first, min(total_rows, first + available)):
+        parts = [[], [], []] if grid else [[]]
+        for col in range(menu.columns):
+            i = row * menu.columns + col
+            if i >= len(menu.items):
+                break
+            name = menu.items[i]
+            entry = THEMES[theme_index(name)]
+            selected, saved = i == menu.index, name == menu.original
+            marker = "❯" if selected else "•" if saved else " "
+            label = f"{marker} {name}" + (" ✓" if saved else "")
+            sample_width = min(5, max(0, width - 8))
+            label_width = max(0, width - sample_width - 1)
+            label = clip(label, label_width).ljust(label_width)
+            stops = entry["stops"]
+            style = BRAND_FRAME if stops is None else rainbow_reference() if stops == "rainbow" else {"gradient": stops}
+            color = themes.label_color(ap.grad(style, 0.35))
+            part = ap.fg(color) + (BOLD if selected else "") + label + RESET
+            for k in range(sample_width):
+                shade = ap.grad(style, k / max(1, sample_width - 1))
+                part += ap.fg(shade) + "▰" + RESET
+            if grid:
+                inner = width - 3
+                edge = WHITE if selected else SOFT
+                border = ap.fg(edge)
+                text = clip(f"{marker} {name}" + (" ✓" if saved else ""), inner).ljust(inner)
+                samples = "".join(ap.fg(ap.grad(style, k / max(1, inner))) + "▰" + RESET
+                                  for k in range(inner))
+                parts[0].append(border + "╭" + "─" * inner + "╮" + RESET + " ")
+                parts[1].append(border + "│" + RESET + ap.fg(color) + (BOLD if selected else "") + text + RESET + border + "│" + RESET + " ")
+                parts[2].append(border + "╰" + RESET + samples + border + "╯" + RESET + " ")
+            else:
+                parts[0].append(part + " ")
+        out.extend("".join(line) for line in parts)
+    if chrome:
+        while len(out) < rows - 1:
+            out.append("")
+        out.append(clip(" arrows preview · enter apply · esc cancel", cols))
+    return out[:rows]
+
+
 def render(view, cols, rows, t):
     """The frame's rows. A framed body row is (left edge, content, right edge), so
     the redraw can rewrite the animated border without resending the content."""
+    if view.theme_menu is not None:
+        return theme_panel(view.theme_menu, cols, rows, t)
     now = time.time()
     view.agents = view.present()   # one consistent list for the whole frame
     n = len(view.agents)
@@ -1221,11 +1313,11 @@ def render(view, cols, rows, t):
     overlay(top, 3, "✦", star, style=text_style, t=clock)
     titles = (" usage · every provider ", " usage · all ") if view.peeking() else ()
     title = next((h for h in titles if 4 + len(h) + 2 <= cols), " usage ")
-    overlay(top, 4, title, TEXT, bold=True, style=text_style, t=clock)
+    overlay(top, 4, title, TEXT, bold=True, style=text_style, t=clock, readable=True)
     th = THEMES[view.theme]["name"]
     tag = f" ◂ {th} ▸ "
     if now < view.toast_until and cols >= 5 + len(title) + len(tag) + 3:
-        overlay(top, cols - 2 - len(tag), tag, TEXT, bold=True, style=text_style, t=clock)
+        overlay(top, cols - 2 - len(tag), tag, TEXT, bold=True, style=text_style, t=clock, readable=True)
 
     with LOCK:
         active = [WORKING.get(a["name"], 0) > 0 for a in view.agents]
@@ -1347,13 +1439,26 @@ def handle(view, key, providers, releases=False):
     """Apply a key on the usage screen. Returns "agents", "settings", "quit", or None.
 
     releases: the terminal reports key releases, so Tab's comes as "release:\\t"."""
-    if key == "\t":
+    if view.theme_menu is not None:
+        if key in ("\x03", "\x04"):
+            return "quit"
+        result = view.theme_menu.handle(key)
+        if result == "apply":
+            preferences.put(THEME.key, view.theme_menu.value)
+            view.toast_until = time.time() + 2.5
+            view.theme_menu = None
+        elif result == "cancel":
+            view.theme_menu = None
+        return None
+    if key == "t":
+        view.theme_menu = ThemeMenu(preferences.get(THEME.key))
+    elif key == "\t":
         view.hold(releases)
     elif key == "release:\t":
         view.peek_until = 0
     elif key.startswith("release:"):
         pass
-    elif key in ("t", "right", "l", "T", "left", "h"):
+    elif key in ("right", "l", "T", "left", "h"):
         preferences.cycle(THEME.key, -1 if key in ("T", "left", "h") else 1)
         view.toast_until = time.time() + 2.5
     elif key == "r":

@@ -61,7 +61,8 @@ class ThemeTests(unittest.TestCase):
         self.assertEqual(themes.stops("aurora"), [(40, 230, 170), (60, 170, 255), (170, 110, 255)])
         self.assertEqual(themes.problems(), [])
         self.assertEqual(themes.sources(), [(themes.BUILTIN, True), (self.local, False)])
-        self.assertEqual(json.loads((ROOT / "themes.json").read_text())[0], {"name": "brand", "stops": None})
+        brand = json.loads((ROOT / "themes.json").read_text())[0]
+        self.assertEqual((brand["name"], brand["stops"]), ("brand", None))
 
     def test_unknown_names_resolve_to_the_first_theme(self):
         self.assertEqual(themes.index("no-such-theme"), 0)
@@ -185,12 +186,14 @@ class ThemeTests(unittest.TestCase):
         preferences.put(panel.THEME.key, BUILTIN_NAMES[-1])
         self.assertEqual(view.theme, len(BUILTIN_NAMES) - 1)    # the view rereads the files
         panel.handle(view, "t", {})
+        panel.handle(view, "right", {})
+        panel.handle(view, "\r", {})
         self.assertEqual(preferences.get(panel.THEME.key), "custom")
         self.assertEqual(view.theme, len(BUILTIN_NAMES))
         self.assertEqual(view.frame_style(), {"gradient": [(255, 0, 0), (0, 0, 255)]})
         lines = panel.render(view, 80, 20, 1.5)
         self.assertLessEqual(len(lines), 20)
-        panel.handle(view, "t", {})
+        panel.handle(view, "right", {})
         self.assertEqual(preferences.get(panel.THEME.key), "brand")
         panel.handle(view, "T", {})
         self.assertEqual(preferences.get(panel.THEME.key), "custom")

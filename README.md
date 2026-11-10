@@ -328,7 +328,7 @@ By default each bar depletes: it starts full, empties as the limit is used, and 
 
 Filled-bar gradients and light pulses move left in depleting mode and right in filling mode. Background and border waves keep their usual direction.
 
-Keys: `t` or `→` next theme, `T` or `←` previous theme, `r` refresh now, `a` toggle animation (off redraws once a second), hold Tab to see every connected provider (each installed provider with a usage reader) until Tab is let go, `s` settings, `u` or Esc back to the picker, `q` quit.
+Keys: `t` opens the theme selector, `→` next theme, `T` or `←` previous theme, `r` refresh now, `a` toggle animation (off redraws once a second), hold Tab to see every connected provider (each installed provider with a usage reader) until Tab is let go, `s` settings, `u` or Esc back to the picker, `q` quit.
 
 Holding Tab relies on key release events. On the usage screen the panel turns on the kitty keyboard protocol, which Ghostty, kitty, WezTerm, and Herdr support, and the peek ends the moment Tab is released. Where releases never arrive (other terminals), the peek follows key repeat instead: it opens on the press and closes about a quarter second after the repeats stop, so a quick tap shows it for just over half a second.
 
@@ -336,7 +336,7 @@ Brand uses an animated gray outer border and each provider's own title, count, s
 
 ## Themes
 
-Every screen uses one shared theme list: the usage panel (`t` and `T`, or Settings, Usage panel, Theme), the fs file browser's theme menu, and anything added later. A theme you add once shows up in all of them.
+Every screen uses one shared theme list: the usage panel (`t` opens the selector, or Settings, Usage panel, Theme), the fs file browser's theme menu, and anything added later. A theme you add once shows up in all of them.
 
 - Built-in themes live in `themes.json` in the checkout: brand, aurora, sunset, vapor, ocean, matrix, ember, sakura, glacier, mono, rainbow, latte, solar, galaxy and rose.
 - Latte blends roast, caramel and cream. Solar blends near-white starlight, pale blue and yellow. Galaxy blends deep blue, nebula violet and icy cyan, with gold filenames in fs. Rose blends dark green, mahogany and bright red.
@@ -348,7 +348,11 @@ The file holds a list of themes, or `{"themes": [...]}`. Each theme has a `name`
 - `"rainbow"`: the animated rainbow.
 - A list of 1 to 8 colors, each `[r, g, b]` (0 to 255) or `"#rrggbb"`. The screens blend smoothly between them.
 
-An optional `file_color` (a single RGB or hex color) sets fs filenames, including preview titles. Selected names brighten and hidden names dim. Without it, filenames keep their usual colors.
+In usage, `t` opens a theme selector with palette tiles in roomy panes and a scrolling list in smaller ones. Arrow keys preview, Enter applies, and Esc cancels. `T` and the left/right arrows still cycle themes outside the selector. Provider names and the usage title brighten where needed for readable contrast; borders, bars, glow, and working text keep their original palette.
+
+Every built-in theme also colors fs filenames and preview titles. Brand and Mono use white. Rainbow paints a gradient across each name. GitHub repository folder names use a nearby shade, or a shifted rainbow gradient.
+
+Optional `file_color` and `repo_color` values (a single RGB or hex color, or `"rainbow"`) customize those labels. Selected names brighten and hidden names dim. Without overrides, fs derives label colors from the theme gradient.
 
 ```json
 [

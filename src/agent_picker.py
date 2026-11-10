@@ -1285,6 +1285,10 @@ def choose(screen=None, only=None):
                     # Restore the terminal before handing it to the provider's
                     # real sign-in, then reopen setup. Never collect credentials.
                     return action
+            elif screen == "usage" and usage.theme_menu is not None:
+                action = usage_panel.handle(usage, key, providers, getattr(terminal, "releases", False))
+                if action == "quit":
+                    return None
             elif key == "c" and screen in ("agents", "usage", "settings"):
                 go("connections")
             elif screen == "scheduler":

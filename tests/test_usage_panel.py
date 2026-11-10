@@ -342,6 +342,10 @@ class UsagePanelTests(unittest.TestCase):
     def test_usage_keys_switch_screens_and_themes(self):
         view = self.view()
         self.assertEqual(panel.handle(view, "t", []), None)
+        self.assertEqual(preferences.get(panel.THEME.key), "brand")
+        panel.handle(view, "right", [])
+        self.assertEqual(view.theme_menu.value, panel.THEMES[1]["name"])
+        panel.handle(view, "\r", [])
         self.assertEqual(preferences.get(panel.THEME.key), panel.THEMES[1]["name"])
         panel.handle(view, "left", [])
         self.assertEqual(preferences.get(panel.THEME.key), "brand")
@@ -601,14 +605,13 @@ class SettingsTests(unittest.TestCase):
 
     def test_settings_list_every_registered_setting_and_persist(self):
         keys = [s.key for s in preferences.SETTINGS]
-        self.assertEqual(keys[:4], ["start", "visibility", "usage.theme", "usage.animate"])
+        self.assertEqual(keys[:2], ["start", "visibility"])
+        self.assertLess(keys.index("usage.theme"), keys.index("usage.animate"))
         menu = preferences.Menu()
         self.assertEqual(preferences.get("start"), "agents")
         menu.handle("right")
         self.assertEqual(preferences.get("start"), "usage")
-        menu.handle("down")
-        menu.handle("down")
-        menu.handle("down")
+        menu.index = next(i for i, setting in enumerate(menu.items) if setting.key == "usage.animate")
         menu.handle("right")
         self.assertIs(preferences.get("usage.animate"), not panel.ANIMATE.default)
         self.assertEqual(menu.handle("esc"), "close")
