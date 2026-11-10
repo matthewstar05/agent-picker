@@ -1,17 +1,17 @@
 [
   {"name": "brand", "stops": null, "file_color": "#ffffff", "repo_color": "#dedee8"},
-  {"name": "aurora", "stops": [[40, 230, 170], [60, 170, 255], [170, 110, 255]], "file_color": "#91dfca", "repo_color": "#b1caff"},
-  {"name": "sunset", "stops": [[255, 200, 90], [255, 120, 90], [230, 70, 150]], "file_color": "#ffc28c", "repo_color": "#f3a6ca"},
-  {"name": "vapor", "stops": [[255, 110, 200], [160, 100, 255], [80, 220, 255]], "file_color": "#d3afff", "repo_color": "#f6b0df"},
-  {"name": "ocean", "stops": [[30, 90, 200], [40, 180, 230], [120, 240, 230]], "file_color": "#9bd6ee", "repo_color": "#a8bee9"},
-  {"name": "matrix", "stops": [[20, 120, 40], [60, 220, 90], [180, 255, 170]], "file_color": "#a8dfa7", "repo_color": "#c9edb1"},
-  {"name": "ember", "stops": [[200, 40, 30], [255, 120, 30], [255, 210, 80]], "file_color": "#f5bc85", "repo_color": "#f3a399"},
-  {"name": "sakura", "stops": [[255, 190, 215], [240, 130, 175], [255, 225, 238]], "file_color": "#f7c4da", "repo_color": "#e4b8e8"},
-  {"name": "glacier", "stops": [[200, 235, 255], [120, 180, 255], [235, 245, 255]], "file_color": "#c7e3fa", "repo_color": "#b7d0ff"},
-  {"name": "mono", "stops": [[110, 110, 120], [200, 200, 210], [250, 250, 255]], "file_color": "#ffffff", "repo_color": "#dedee8"},
   {"name": "rainbow", "stops": "rainbow", "file_color": "rainbow", "repo_color": "rainbow"},
+  {"name": "rose", "stops": ["#235c42", "#88443c", "#ff394f"], "file_color": "#d8b5a7", "repo_color": "#f0b4bc"},
+  {"name": "ember", "stops": [[200, 40, 30], [255, 120, 30], [255, 210, 80]], "file_color": "#f5bc85", "repo_color": "#f3a399"},
+  {"name": "sunset", "stops": [[255, 200, 90], [255, 120, 90], [230, 70, 150]], "file_color": "#ffc28c", "repo_color": "#f3a6ca"},
   {"name": "latte", "stops": ["#a66b46", "#c99565", "#f2dfb8"], "file_color": "#e8ccaa", "repo_color": "#f2dcbf"},
-  {"name": "solar", "stops": ["#e5f5ff", "#fffdf2", "#ffdf70"], "file_color": "#f5edc5", "repo_color": "#cfe7fa"},
+  {"name": "solar", "stops": ["#c4e6ff", "#fffdf2", "#ffdf70"], "file_color": "#f5edc5", "repo_color": "#cfe7fa"},
+  {"name": "matrix", "stops": [[20, 120, 40], [60, 220, 90], [180, 255, 170]], "file_color": "#a8dfa7", "repo_color": "#c9edb1"},
+  {"name": "aurora", "stops": [[40, 230, 170], [60, 170, 255], [170, 110, 255]], "file_color": "#91dfca", "repo_color": "#b1caff"},
+  {"name": "ocean", "stops": [[30, 90, 200], [40, 180, 230], [120, 240, 230]], "file_color": "#9bd6ee", "repo_color": "#a8bee9"},
+  {"name": "glacier", "stops": [[200, 235, 255], [120, 180, 255], [235, 245, 255]], "file_color": "#c7e3fa", "repo_color": "#b7d0ff"},
   {"name": "galaxy", "stops": ["#5265c7", "#9063d4", "#cf8ee8", "#9cdbf5"], "file_color": "#e8bf68", "repo_color": "#f2c58e"},
-  {"name": "rose", "stops": ["#235c42", "#88443c", "#ff394f"], "file_color": "#d8b5a7", "repo_color": "#f0b4bc"}
+  {"name": "vapor", "stops": [[255, 110, 200], [160, 100, 255], [80, 220, 255]], "file_color": "#d3afff", "repo_color": "#f6b0df"},
+  {"name": "sakura", "stops": [[255, 190, 215], [240, 130, 175], [255, 225, 238]], "file_color": "#f7c4da", "repo_color": "#e4b8e8"},
+  {"name": "mono", "stops": [[110, 110, 120], [200, 200, 210], [250, 250, 255]], "file_color": "#ffffff", "repo_color": "#dedee8"}
 ]

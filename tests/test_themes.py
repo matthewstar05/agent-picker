@@ -13,8 +13,8 @@ import preferences
 import themes
 import usage_panel as panel
 
-BUILTIN_NAMES = ["brand", "aurora", "sunset", "vapor", "ocean", "matrix", "ember",
-                 "sakura", "glacier", "mono", "rainbow", "latte", "solar", "galaxy", "rose"]
+BUILTIN_NAMES = ["brand", "rainbow", "rose", "ember", "sunset", "latte", "solar",
+                 "matrix", "aurora", "ocean", "glacier", "galaxy", "vapor", "sakura", "mono"]
 
 
 class ThemeTests(unittest.TestCase):

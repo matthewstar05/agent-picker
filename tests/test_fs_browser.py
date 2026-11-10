@@ -492,7 +492,7 @@ class ScreenTests(Base):
         self.assertEqual(app.screen, "themes")
         app.handle("down")
         app.handle("down")
-        self.assertEqual(app.theme(), "aurora")
+        self.assertEqual(app.theme(), "rainbow")
         self.draw(app, 120, 16)
         app.handle("esc")
         self.assertEqual(app.screen, "browse")
@@ -501,8 +501,8 @@ class ScreenTests(Base):
         app.handle("down")
         app.handle("down")
         app.handle("\r")
-        self.assertEqual(preferences.get(fsb.THEME.key), "aurora")
-        self.assertEqual(app.theme(), "aurora")
+        self.assertEqual(preferences.get(fsb.THEME.key), "rainbow")
+        self.assertEqual(app.theme(), "rainbow")
 
     def test_the_default_theme_follows_the_usage_panel(self):
         app = self.app()

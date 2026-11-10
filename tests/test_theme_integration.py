@@ -59,7 +59,7 @@ class ThemeIntegrationTests(unittest.TestCase):
                     patch.object(preferences, '_values', {}), \
                     patch('sys.stdout', io.StringIO()):
                 self.assertIsNone(picker.choose(screen='usage', only=['Claude']))
-                self.assertEqual(preferences.get(panel.THEME.key), 'aurora')
+                self.assertEqual(preferences.get(panel.THEME.key), 'rainbow')
 
     def test_interrupt_still_quits_from_theme_selector(self):
         view = panel.View([], pinned=True)
