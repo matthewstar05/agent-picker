@@ -757,7 +757,9 @@ class HerdrAiTests(unittest.TestCase):
         panes, runs = entry["panes"], self.fake.runs()
         self.assertEqual(entry["mode"], "off")
         for role in herdr_ai.PEERS:
-            self.assertTrue(runs[panes[role]][0].endswith("--picker-return --picker-launch Claude --picker-plain"), role)
+            tail = " --picker-bottom" if role in herdr_ai.BOTTOM else ""
+            self.assertTrue(runs[panes[role]][0].endswith("--picker-return --picker-launch Claude --picker-plain" + tail),
+                            role)
         self.assertTrue(runs[panes["usage"]][0].endswith("--picker-only Claude"))
         self.fake.start_agents()
         _, jobs = self.handoff(panes["crew1"], ("Codex", "ok"))

@@ -73,6 +73,21 @@ class TeamTests(unittest.TestCase):
         self.assertEqual(provider_defaults.current(claude)["effort"], "medium")
         self.assertIn("--settings", claude["argv"])   # iMCP still stays out
 
+    def test_bottom_panes_run_the_team_bottom_model(self):
+        rows = [{"id": "grok-4.7-fast", "variants": {"high": "grok-4.7-high-fast"}}]
+        with patch.object(model_catalog, "load_rows", return_value=rows), \
+             tempfile.TemporaryDirectory() as folder, patch.object(team, "SHARED", Path(folder)):
+            for args in (["--picker-plain", "--picker-bottom", "--extra"],
+                         ["--picker-peer", "w:p2", "--picker-bottom", "--extra"]):
+                cursor, rest = team.prepare(self.agents["Cursor"], args)
+                self.assertIn("grok-4.7-high-fast", cursor["argv"], args)
+                self.assertNotIn("--picker-bottom", rest, args)
+            top, _ = team.prepare(self.agents["Cursor"], ["--picker-plain"])
+            self.assertEqual(provider_defaults.current(top), provider_defaults.current(self.agents["Cursor"]))
+            claude, rest = team.prepare(self.agents["Claude"], ["--picker-plain", "--picker-bottom"])
+            self.assertEqual(provider_defaults.current(claude), provider_defaults.current(self.agents["Claude"]))
+            self.assertEqual(rest, [])
+
     def test_m_cycles_off_individual_orchestrator(self):
         for current, following in (("off", "individual"), ("individual", "orchestrator"), ("orchestrator", "off")):
             with patch.object(team, "mode", return_value=current):

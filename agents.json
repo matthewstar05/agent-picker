@@ -318,6 +318,10 @@
       "crew": {
         "model": "grok-4.7",
         "effort": "high"
+      },
+      "bottom": {
+        "model": "grok-4.7-fast",
+        "effort": "high"
       }
     },
     "argv": [

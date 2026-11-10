@@ -334,20 +334,27 @@ def prepare(agent, args):
     return instruct(agent, args, brief, opening=lead or solo, shared=not solo)
 
 
-def as_picked(agent, label):
-    """A copy of agent as the picker launches it, its model and effort included."""
+def as_picked(agent, label, args):
+    """A copy of agent as the picker launches it, its model and effort included, and
+    args without --picker-bottom. That flag marks a bottom-row pane, which runs the
+    provider's team "bottom" model instead when it has one."""
     agent = copy.deepcopy(agent)
+    bottom = "--picker-bottom" in args
+    config = (agent.get("team") or {}).get("bottom") if bottom else None
+    if config and provider_defaults.current(agent) is not None:
+        provider_defaults.apply(agent, {"model": config["model"],
+                                        "effort": config.get("effort", "provider default")})
     agent["detail"] = label + " · " + agent.get("detail", "")
-    return agent
+    return agent, [a for a in args if a != "--picker-bottom"]
 
 
 def prepare_peer(agent, args):
     """An individual peer: the picker's model, told who its peers are."""
     if len(args) < 2:
         raise ValueError("--picker-peer needs its pane id")
+    agent, args = as_picked(agent, "peer", args)
     me, (extra, args) = args[1], options(list(args[2:]), ("--picker-peers", "--picker-usage-pane"))
     peers = [p for p in (extra.get("--picker-peers") or me).split(",") if p]
-    agent = as_picked(agent, "peer")
     brief = peer_brief(agent, me, peers, extra.get("--picker-usage-pane"))
     return instruct(agent, args, brief, opening=True, shared=True)
 
@@ -355,7 +362,7 @@ def prepare_peer(agent, args):
 def prepare_plain(agent, args):
     """A peer with teamwork off: the picker's model and common pane context only.
     Only iMCP stays out, since five panes start at once."""
-    agent = as_picked(agent, "plain")
+    agent, args = as_picked(agent, "plain", args)
     if agent["name"] == "Claude":
         agent["argv"] += ["--settings", claude_settings()]
     elif agent["name"] == "Codex":

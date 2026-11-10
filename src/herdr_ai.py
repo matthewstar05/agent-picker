@@ -124,6 +124,7 @@ PANES = {
 # A team's panes: the lead, four crew, usage for that provider, and the terminal.
 CREW = ("crew1", "crew2", "crew3", "crew4")
 PEERS = ("lead", *CREW)   # an individual layout keeps the team's roles, so refresh and handoff work alike
+BOTTOM = ("crew3", "crew4")   # off and individual peers there run the provider's team "bottom" model, if it has one
 OFF, INDIVIDUAL, ORCHESTRATOR = "off", "individual", "orchestrator"   # the system prompt modes (team.MODE)
 SEPARATE = (OFF, INDIVIDUAL)   # modes whose five agents work alone, with no lead
 STAR = "Star"   # the Star mesh setup: StarCLIs in the lead and crew panes
@@ -351,6 +352,8 @@ def layout_commands(team, panes, lead=None, gemini=False, mode=None, providers=N
                 launch = ["--picker-return", "--picker-launch", providers.get(role, team)]
                 commands[role] = launch + (["--picker-plain"] if mode == OFF else
                                            ["--picker-peer", panes[role], "--picker-peers", peers] + usage)
+                if role in BOTTOM:
+                    commands[role].append("--picker-bottom")
         return commands
     if team == STAR:
         # Star CLIs that know each other (star_mesh): the lead delegates to the crew,
