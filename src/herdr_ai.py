@@ -533,8 +533,21 @@ def refresh_line(pane, details, info, role, commands, cwd):
         except ValueError as exc:
             reason = str(exc)
     if details.get("cwd") and os.path.realpath(details["cwd"]) != os.path.realpath(cwd):
+        # A pane can switch providers through the selector after the layout was
+        # saved. A fresh conversation must use that live provider too, rather
+        # than restoring the slot's original provider or its priority choice.
+        fresh = list(commands[role])
+        if name:
+            if "--picker-launch" in fresh:
+                fresh[fresh.index("--picker-launch") + 1] = name
+            else:
+                fresh = [arg for arg in fresh if arg != "--picker-launch-priority"]
+                fresh += ["--picker-launch", name]
+        elif busy(info):
+            print(f"herdr-ai: kept {role} ({pane}) unchanged: live provider unavailable")
+            return None
         print(f"herdr-ai: started {role} ({pane}) fresh: {reason}")
-        return picker_command(commands[role])
+        return picker_command(fresh)
     print(f"herdr-ai: kept {role} ({pane}) unchanged: {reason}")
     return None
 

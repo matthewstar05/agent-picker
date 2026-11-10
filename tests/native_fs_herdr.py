@@ -1,10 +1,11 @@
 """Opt-in Unix smoke: python3 tests/native_fs_herdr.py [--keep] [--shot DIR].
 
 Requires an existing Herdr-managed caller. Uses one owned named server with fake
-Claude panes and private config, state and Claude config. herdr-ai lays out a
+Claude/Codex panes and private config, state and Claude config. herdr-ai lays out a
 five-agent Claude tab with the system prompt off; the bottom-left pane must
-become the fs file browser in icon view. Tab+Enter then 1 must assign only
-the top-left agent without browsing into the folder, and Shift+Enter must
+become the fs file browser in icon view. Switch the top-left pane to Codex, then
+Tab+Enter and 1 must assign only that pane while keeping Codex and without
+browsing into the folder. Shift+Enter must
 restart every agent pane in that folder. Never starts a vendor CLI. Herdr's
 plugin registry is left alone (a wrapper turns `herdr plugin` into a no-op).
 """
@@ -48,19 +49,22 @@ def main(argv):
     (root / "state").mkdir()
     (root / "state" / "preferences.json").write_text(json.dumps(
         {"fs.start": "herdr", "usage.keep_awake": False, "herdr_ai.system_prompt": "off"}))
-    fake = root / "fake-claude"
-    fake.write_text(f"#!{sys.executable}\n" + f'''
+    fakes = {}
+    for provider in ("Claude", "Codex"):
+        fake = root / provider.lower()
+        fake.write_text(f"#!{sys.executable}\n" + f'''
 import json, os, time
 with open({str(root / "launches.jsonl")!r}, "a") as log:
-    log.write(json.dumps({{"cwd": os.getcwd(), "pane": os.environ.get("HERDR_PANE_ID")}}) + "\\n")
-print("fake claude in", os.getcwd(), flush=True)
+    log.write(json.dumps({{"cwd": os.getcwd(), "pane": os.environ.get("HERDR_PANE_ID"), "provider": {provider!r}}}) + "\\n")
+print("fake {provider.lower()} in", os.getcwd(), flush=True)
 while True:
     time.sleep(1)
 ''')
-    fake.chmod(0o755)
+        fake.chmod(0o755)
+        fakes[provider] = fake
     profiles = json.loads((ROOT / "agents.json").read_text())
     (root / "picker.json").write_text(json.dumps({"agents": {
-        a["name"]: {"command": str(fake if a["name"] == "Claude" else root / "not-installed")} for a in profiles}}))
+        a["name"]: {"command": str(fakes.get(a["name"], root / "not-installed"))} for a in profiles}}))
     prefix = [real, "--session", name]
 
     def cli(*args):
@@ -113,6 +117,19 @@ while True:
         wait(lambda: len(launches()) >= 5, what="five fake Claude panes")
         first = screen(terminal)
         assert "work" in first.splitlines()[0], first
+        entries = json.loads((root / "state" / "herdr-ai-tabs.json").read_text())
+        layout = next(entry for entry in entries.values() if entry["panes"]["terminal"] == terminal)
+        target = layout["panes"]["crew1"]
+        # Stop only this fixture's owned pane, then open a different provider.
+        info = cli("pane", "process-info", "--pane", target)["process_info"]
+        group = info["foreground_process_group_id"]
+        assert group != info["shell_pid"] and group != os.getpgrp(), info
+        os.killpg(group, signal.SIGTERM)
+        wait(lambda: not foreground(target), what="the fixture pane's shell")
+        cli("pane", "run", target, shlex.join([sys.executable, str(ROOT / "src/agent_picker.py"),
+                                               "--picker-return", "--picker-launch", "Codex", "--picker-plain"]))
+        wait(lambda: any(l["pane"] == target and l["provider"] == "Codex" for l in launches()),
+             what="the switched fake Codex")
         before = len(launches())
         assert all(Path(l["cwd"]).resolve() == work for l in launches()), launches()
         shots = argv[argv.index("--shot") + 1] if "--shot" in argv else None
@@ -128,6 +145,7 @@ while True:
         layout = next(entry for entry in entries.values() if entry["panes"]["terminal"] == terminal)
         assigned = launches()[before:]
         assert len(assigned) == 1 and assigned[0]["pane"] == layout["panes"]["crew1"], assigned
+        assert assigned[0]["provider"] == "Codex", assigned
         assert Path(assigned[0]["cwd"]).resolve() == project, assigned
         assigned_screen = screen(terminal)
         assert "work" in assigned_screen.splitlines()[0], assigned_screen

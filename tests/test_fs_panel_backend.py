@@ -2,6 +2,7 @@
 import contextlib
 import io
 import os
+import shlex
 import sys
 import tempfile
 import unittest
@@ -84,6 +85,57 @@ class AssignPanelTests(unittest.TestCase):
                 self.assertIn("not moved", err.getvalue())
                 self.assertFalse([call for call in self.fake.calls if call[:2] in (["pane", "send-text"], ["pane", "send-keys"])])
                 self.fake.panes[self.panes["crew1"]]["agent_status"] = "idle"
+
+    def test_switched_codex_with_stale_session_starts_codex_in_the_new_folder(self):
+        target = self.panes["crew1"]
+        wrapper = [sys.executable, str(herdr_ai.ENTRY), "--picker-return", "--picker-launch", "Codex"]
+        self.fake.start_agent(target, wrapper, "Codex")
+        # Herdr can retain the previous provider's session until Codex reports one.
+        self.fake.panes[target]["agent_session"] = {"agent": "agy", "kind": "id", "value": "stale-agy"}
+        self.assertEqual(self.assign(1), 0)
+        runs = self.fake.runs()
+        self.assertEqual(set(runs), {target})
+        args = shlex.split(runs[target][-1])
+        self.assertEqual(args[args.index("--picker-launch") + 1], "Codex")
+        self.assertIn("--picker-return", args)
+        self.assertIn("--picker-plain", args)
+        self.assertNotIn("stale-agy", args)
+        self.assertIn(herdr_ai.cd_command(self.cwd), runs[target][0])
+
+    def test_standard_slots_keep_the_open_provider_when_starting_fresh(self):
+        self.entry["team"] = None
+        for number, role in enumerate(herdr_ai.PANEL_ROLES["Standard"], 1):
+            with self.subTest(role=role):
+                target = self.panes["crew1"]
+                self.entry["panes"] = {role: target}
+                self.fake.calls.clear()
+                wrapper = [sys.executable, str(herdr_ai.ENTRY), "--picker-return", "--picker-launch", "Codex"]
+                self.fake.start_agent(target, wrapper, "Codex")
+                self.fake.panes[target].pop("agent_session")
+                self.assertEqual(self.assign(number), 0)
+                runs = self.fake.runs()
+                self.assertEqual(set(runs), {target})
+                args = shlex.split(runs[target][-1])
+                self.assertEqual(args[args.index("--picker-launch") + 1], "Codex")
+                self.assertNotIn("--picker-launch-priority", args)
+
+    def test_process_detected_switched_provider_is_used_without_herdr_metadata(self):
+        target = self.panes["crew1"]
+        wrapper = [sys.executable, str(herdr_ai.ENTRY), "--picker-return", "--picker-launch", "Kiro"]
+        self.fake.start_agent(target, wrapper, "Kiro")
+        self.fake.panes[target].pop("agent")
+        self.fake.panes[target].pop("agent_session")
+        self.assertEqual(self.assign(1), 0)
+        args = shlex.split(self.fake.runs()[target][-1])
+        self.assertEqual(args[args.index("--picker-launch") + 1], "Kiro")
+
+    def test_unknown_live_program_is_not_replaced_with_the_default_provider(self):
+        target = self.panes["crew1"]
+        self.fake.panes[target] = {"argv": ["npm", "run", "dev"], "cwd": self.state_dir.name}
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(self.assign(1), 1)
+        self.assertFalse(self.fake.runs())
+        self.assertFalse(self.stop_calls)
 
     def test_missing_panel_identity_and_no_layout_return_errors_without_mutation(self):
         del self.entry["panes"]["crew4"]
