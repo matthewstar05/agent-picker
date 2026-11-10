@@ -11,7 +11,7 @@ The picker preserves the original animated gradients, usage meters, remembered s
 - At least one provider CLI installed and signed in on that computer.
 - Windows 10/11 or macOS and an interactive terminal. Windows Terminal is recommended on Windows.
 
-The installer installs this picker and its bundled Grok Bot terminal client, without installing vendor CLIs or account credentials. Providers missing from PATH are disabled in the menu. Credentials and usage caches remain local.
+The CLI installer lets you toggle the usage panel, file browser, StarCLI, Grok Bot CLI, scheduler, and Herdr helpers. It installs selected command shortcuts without installing vendor CLIs or account credentials. Providers missing from PATH are disabled in the menu. Credentials and usage caches remain local.
 
 ## Setup
 
@@ -26,10 +26,14 @@ For a macOS Git checkout:
 ```sh
 git clone https://github.com/matthewstar05/agent-picker.git ~/Desktop/Projects/agent-picker
 cd ~/Desktop/Projects/agent-picker
-python3 scripts/install-macos.py
+python3 scripts/install.py
 ```
 
-Open a new terminal, then run `agent --picker-doctor` and `agent`. The installer backs up the existing `~/.local/bin/agent-picker` and changed shell profiles, replaces the launcher with a checkout-linked wrapper, does the same for `herdr-ai`, `agent-route`, `herdr-reset`, `herdr-fs`, `starcli`, `schedule`, `grokbot` and `grok` in `~/.local/bin`, and adds managed `agent`, `usage`, `star`, `schedule`, `grok` and `fs` aliases to `.zshrc` and `.bashrc`. On this Mac, it replaces the original alias and preserves Kiro's post integration at the bottom of `.zshrc`. Do not move or delete the checkout after installation; rerun the installer if you relocate it or your Python executable.
+The installer opens a component checklist: type a number to toggle an option, or several numbers separated by spaces, then Enter to install. Every selected alias gets a real launcher, including `agent`, `usage`, `fs`, `star`/`starcli`, and `grok`/`grokbot`/`grokbotcli`. On Windows use `py -3 scripts\install.py`, or double-click **Install agent-picker.cmd**.
+
+For a scripted install, use `python3 scripts/install.py --components usage,fs`, `--all`, or `--without starcli,grokbotcli`. Run the installer again to change the shortcuts; only deselected launchers managed by this checkout are removed, with backups. See the [install guide](docs/INSTALL.md) for all options and aliases.
+
+Open a new terminal, or run the activation command the installer prints, then run `agent --picker-doctor` and `agent`. Shell PATH is configured automatically. Existing provider installs, settings and credentials are preserved. Keep the checkout in place and rerun the installer if you relocate it or Python.
 
 ## Commands
 

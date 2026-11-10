@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Link the command to this Git checkout; back up files before changing them."""
+"""Install selected per-user commands, with backups and shell integration."""
 
+import os
 import re
 import shlex
 import shutil
@@ -11,6 +12,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 from platform_runtime import state_dir
+from install_common import COMMANDS, MANAGED_MARKER, parse_options, selected_commands
 
 START = "# >>> agent-picker managed >>>"
 END = "# <<< agent-picker managed <<<"
@@ -20,63 +22,75 @@ def backup(path):
     if path.exists() or path.is_symlink():
         target = state_dir() / "backups" / datetime.now().strftime("%Y%m%d-%H%M%S-%f")
         target.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(path, target / path.name)
+        shutil.copy2(path, target / path.name, follow_symlinks=False)
         print(f"Backup: {target / path.name}")
 
 
-def install_herdr_ai(bindir):
-    """herdr-ai, agent-route, herdr-reset, the fs file browser and StarCLI live in this checkout too; herdr-ai replaces the old standalone bash script."""
+def owned(path):
+    if not path.is_file():
+        return False
+    text = path.read_text(encoding="utf-8", errors="ignore")
+    return MANAGED_MARKER in text.splitlines() and any(
+        shlex.quote(str(ROOT / "src" / script)) in text for script, _ in COMMANDS.values())
+
+
+def install_commands(bindir, commands):
     bindir.mkdir(parents=True, exist_ok=True)
-    for name, script in (("herdr-ai", "herdr_ai.py"), ("agent-route", "agent_route.py"),
-                         ("herdr-reset", "herdr_reset.py"), ("starcli", "starcli.py"),
-                         ("schedule", "prompt_scheduler.py"), ("grokbot", "grokbot.py"),
-                         ("grok", "grokbot.py"), ("herdr-fs", "fs_browser.py")):
+    for name, (script, extra) in commands.items():
         wrapper = bindir / name
-        content = "#!/bin/sh\n# agent-picker managed launcher\nexec " + shlex.quote(sys.executable) + " " + shlex.quote(str(ROOT / "src" / script)) + ' "$@"\n'
-        if not wrapper.exists() or wrapper.read_text(errors="ignore") != content:
+        argv = [sys.executable, str(ROOT / "src" / script), *extra]
+        content = "#!/bin/sh\n" + MANAGED_MARKER + "\nexec " + shlex.join(argv) + ' "$@"\n'
+        if not wrapper.is_file() or wrapper.read_text(encoding="utf-8", errors="ignore") != content:
             backup(wrapper)
             if wrapper.is_symlink():
                 wrapper.unlink()
-            wrapper.write_text(content)
-            wrapper.chmod(0o755)
-    if not shutil.which("herdr"):
-        print("herdr is not installed; herdr-ai needs it: curl -fsSL https://herdr.dev/install.sh | sh")
-
-
-def main():
-    install_herdr_ai(Path.home() / ".local/bin")
-    bindir = Path.home() / ".local/bin"
-    bindir.mkdir(parents=True, exist_ok=True)
-    wrapper = bindir / "agent-picker"
-    content = "#!/bin/sh\n# agent-picker managed launcher\nexec " + shlex.quote(sys.executable) + " " + shlex.quote(str(ROOT / "src/agent_picker.py")) + ' "$@"\n'
-    if not wrapper.exists() or wrapper.read_text() != content:
-        backup(wrapper)
-        if wrapper.is_symlink():
-            wrapper.unlink()
-        wrapper.write_text(content)
+            wrapper.write_text(content, encoding="utf-8")
         wrapper.chmod(0o755)
-    # usage used to have its own launcher; it is now the same command as agent.
+    for name in set(COMMANDS) - set(commands):
+        wrapper = bindir / name
+        if owned(wrapper):
+            backup(wrapper)
+            wrapper.unlink()
     old_usage = bindir / "usage-panel"
-    if old_usage.is_file() and "# agent-picker managed launcher" in old_usage.read_text(errors="ignore"):
+    if owned(old_usage):
         backup(old_usage)
         old_usage.unlink()
-    alias = shlex.quote(str(wrapper))
-    block = (START + "\n" + 'export PATH="$HOME/.local/bin:$PATH"\n'
-             + "alias agent=" + alias + "\n" + "alias usage=" + shlex.quote(str(wrapper) + " --picker-usage") + "\n"
-             + "alias star=" + shlex.quote(str(bindir / "starcli")) + "\n"
-             + "alias schedule=" + shlex.quote(str(bindir / "schedule")) + "\n"
-             + "alias grok=" + shlex.quote(str(bindir / "grokbot")) + "\n"
-             + "alias fs=" + shlex.quote(str(bindir / "herdr-fs")) + "\n" + END + "\n")
-    for rc in (Path.home() / ".zshrc", Path.home() / ".bashrc"):
-        original = rc.read_text() if rc.exists() else ""
+
+
+def profile_block(bindir, commands):
+    lines = [START, "export PATH=" + shlex.quote(str(bindir)) + ':"$PATH"']
+    # Retain aliases for shells upgrading from earlier installations. Real
+    # launchers also make these names available to subprocesses and other shells.
+    aliases = {"agent": [str(bindir / "agent-picker")],
+               "usage": [str(bindir / "agent-picker"), "--picker-usage"],
+               "star": [str(bindir / "starcli")],
+               "schedule": [str(bindir / "schedule")],
+               "grok": [str(bindir / "grokbot")],
+               "fs": [str(bindir / "herdr-fs")]}
+    lines.extend("alias " + name + "=" + shlex.quote(shlex.join(argv))
+                 for name, argv in aliases.items() if name in commands)
+    return "\n".join(lines + [END, ""])
+
+
+def install_profiles(bindir, commands):
+    block = profile_block(bindir, commands)
+    home = Path.home()
+    profiles = [home / ".zshrc", home / ".bashrc", home / ".profile"]
+    # Bash reads only its first existing login profile. Creating .bash_profile
+    # would silently suppress an existing .bash_login or .profile.
+    login = next((home / name for name in (".bash_profile", ".bash_login")
+                  if (home / name).exists()), None)
+    if login is not None:
+        profiles.append(login)
+    for rc in profiles:
+        original = rc.read_text(encoding="utf-8") if rc.exists() else ""
         text = re.sub(re.escape(START) + r".*?" + re.escape(END) + r"\n?", "", original, flags=re.S)
         text = re.sub(r'^alias agent=[\"\']agent-picker[\"\']\s*\n', "", text, flags=re.M)
-        # Migrate the earlier gbot management-CLI alias without touching a custom command.
-        old_grok = "alias grok=" + shlex.quote(str(bindir / "gbot"))
-        text = "\n".join(line for line in text.split("\n")
-                         if line not in (old_grok, "alias grok='" + str(bindir / "gbot") + "'",
-                                         'alias grok="' + str(bindir / "gbot") + '"'))
-        # Keep Kiro's post integration at the bottom of the profile.
+        if "grok" in commands:
+            old_grok = "alias grok=" + shlex.quote(str(bindir / "gbot"))
+            text = "\n".join(line for line in text.split("\n")
+                             if line not in (old_grok, "alias grok='" + str(bindir / "gbot") + "'",
+                                             'alias grok="' + str(bindir / "gbot") + '"'))
         marker = "# Kiro CLI post block. Keep at the bottom of this file."
         index = text.find(marker)
         if index >= 0:
@@ -85,10 +99,32 @@ def main():
             text = text.rstrip() + "\n\n" + block
         if text != original:
             backup(rc)
-            rc.write_text(text)
-    print("Installed. Open a new terminal, then run agent --picker-doctor. usage opens the usage panel; star opens StarCLI; schedule opens the scheduler; grok opens Grok Bot; fs opens the file browser.")
-    print(f"Updates are read directly from: {ROOT}")
+            rc.write_text(text, encoding="utf-8")
+
+
+def main(argv=None):
+    args = parse_options(argv)
+    bindir = (args.prefix or Path.home() / ".local/bin").expanduser().absolute()
+    commands = selected_commands(args.components)
+    install_commands(bindir, commands)
+    if not args.no_path:
+        install_profiles(bindir, commands)
+    os.environ["PATH"] = str(bindir) + os.pathsep + os.environ.get("PATH", "")
+    print("Installed commands: " + ", ".join(commands))
+    print(f"Launchers: {bindir}")
+    if args.no_path:
+        print("PATH unchanged. To use commands in this shell, run:")
+        print("  export PATH=" + shlex.quote(str(bindir)) + ':"$PATH"')
+    else:
+        print("Open a new terminal, or activate commands in this shell now:")
+        print("  . " + shlex.quote(str(Path.home() / ".zshrc" if os.environ.get("SHELL", "").endswith("zsh")
+                                     else Path.home() / ".bashrc")))
+    print("Then run agent --picker-doctor; agent --picker-connect opens provider setup.")
+    if "herdr-ai" in commands and not shutil.which("herdr"):
+        print("Herdr commands require the separately installed Herdr terminal.")
+    print(f"Keep this checkout in place: {ROOT}")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

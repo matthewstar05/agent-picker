@@ -16,15 +16,26 @@ def main():
         env = dict(os.environ, HOME=str(home), USERPROFILE=str(home),
                    LOCALAPPDATA=str(home / "AppData/Local"), APPDATA=str(home / "AppData/Roaming"),
                    AGENT_PICKER_STATE_HOME=str(home / "state"), AGENT_PICKER_CONFIG=str(home / "config.json"),
-                   AGENT_PICKER_NO_PRETRUST="1")
+                   AGENT_PICKER_NO_PRETRUST="1", HERDR_ENV="0")
         if sys.platform == "win32":
             bindir = home / "commands"
-            subprocess.run([sys.executable, str(ROOT / "scripts/install-windows.py"), "--no-path", "--prefix", str(bindir)],
+            subprocess.run([sys.executable, str(ROOT / "scripts/install.py"), "--all", "--no-path", "--prefix", str(bindir)],
                            env=env, check=True, timeout=180)
             launcher = bindir / "agent.cmd"
         else:
-            subprocess.run([sys.executable, str(ROOT / "scripts/install-macos.py")], env=env, check=True, timeout=30)
+            subprocess.run([sys.executable, str(ROOT / "scripts/install.py"), "--all"], env=env, check=True, timeout=30)
             launcher = home / ".local/bin/agent-picker"
+        sys.path.insert(0, str(ROOT / "scripts"))
+        from install_common import COMMANDS
+        commands_dir = launcher.parent
+        suffix = ".cmd" if sys.platform == "win32" else ""
+        for name in COMMANDS:
+            assert (commands_dir / (name + suffix)).is_file(), name
+        # Help exits before any provider login, agent task or Herdr mutation.
+        for name in ("fs", "herdr-fs", "star", "starcli", "grok", "grokbot", "grokbotcli",
+                     "schedule", "herdr-ai", "agent-route", "herdr-reset"):
+            subprocess.run([str(commands_dir / (name + suffix)), "--help"], env=env,
+                           stdout=subprocess.DEVNULL, check=True, timeout=30)
         subprocess.run([str(launcher), "--picker-doctor"], env=env, check=True, timeout=30)
         marker = home / "received.json"
         fake = home / "fake provider.py"

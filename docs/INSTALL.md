@@ -1,66 +1,136 @@
 # Install agent-picker on Windows or macOS
 
-Download the source ZIP from the release and extract it to a permanent folder.
-The picker runs from that folder. It does not contain anyone else's account,
-credentials, preferences, or provider installations.
+Install Python 3.9 or later, then extract the release ZIP or clone this repository
+to a permanent folder. Run the installer from that folder:
 
-## Windows 10 or 11
+```sh
+# macOS
+python3 scripts/install.py
+```
 
-1. Install Python 3.9 or later from https://www.python.org/downloads/windows/.
-   Include the Python launcher when the Python installer offers it.
-2. Extract the release ZIP. Double-click **Install agent-picker.cmd** inside it.
-   The installer creates a private Python environment in that folder, adds the
-   small timezone packages Windows needs, and creates commands in
-   `%LOCALAPPDATA%\agent-picker\bin`. Administrator access is unnecessary.
-3. Close and reopen your terminal. Windows Terminal is recommended for the
-   animated colors and Unicode characters. Run `agent --picker-connect`.
-4. Select a provider and press **o** for its official installation guide. Install
-   a CLI that supports your operating system. Press **l** to sign in where that
-   provider offers a CLI login, or sign in through its own app. Press **v** to
-   check that its executable runs, then **r** to refresh and Escape to return.
+```powershell
+# Windows PowerShell or Command Prompt
+py -3 scripts\install.py
+```
 
-The picker never signs you in or buys an account automatically. Usage readings
-can be unavailable when a provider does not expose its account limits. The CLI
-check verifies the executable; it does not spend AI quota or verify a paid plan.
+The installer opens a terminal checklist. Type a component number to toggle it,
+several numbers separated by spaces to toggle them together, `all` or `none` to
+change every option, and Enter to install. `q` cancels before changing files.
+The core `agent` and `agent-picker` commands are always installed.
 
-If `agent` is not found, run
-`%LOCALAPPDATA%\agent-picker\bin\agent.cmd --picker-doctor` and reopen your
-terminal. The installer changes only your user PATH, never the system PATH.
+| Option | Commands installed |
+| --- | --- |
+| Usage panel (`usage`) | `usage` |
+| File browser (`fs`) | `fs`, `herdr-fs` |
+| StarCLI (`starcli`) | `star`, `starcli` |
+| Grok Bot CLI (`grokbotcli`) | `grok`, `grokbot`, `grokbotcli` |
+| Prompt scheduler (`schedule`) | `schedule` |
+| Herdr helpers (`herdr`) | `herdr-ai`, `agent-route`, `herdr-reset` |
 
-## macOS, Apple Silicon or Intel
+Every selected name gets a real launcher, so short commands work in shells and
+subprocesses without creating aliases by hand. These options control installed
+command shortcuts. The full source remains in the checkout, and the picker's
+built-in screens remain accessible. Selecting Herdr helpers does not install
+Herdr itself. StarCLI and Grok Bot CLI need their own connected providers before
+they can run tasks.
 
-1. Install Python 3.9 or later from https://www.python.org/downloads/macos/ if
-   `python3 --version` is unavailable.
-2. Extract the ZIP to a permanent folder. In Terminal, change to that folder
-   and run `python3 scripts/install-macos.py`.
-3. Open a new Terminal window and run `agent --picker-connect`. Use **o** for a
-   provider's installation guide, **l** to sign in, **v** to check its executable,
-   and **r** to refresh. Escape returns to the selector.
+The double-click entry points, **Install agent-picker.cmd** on Windows and
+**Install agent-picker.command** on macOS, open the same checklist. The original
+`scripts/install-windows.py` and `scripts/install-macos.py` entry points accept
+the same options.
 
-The macOS installer backs up changed launchers and shell profiles before adding
-its managed aliases. It preserves the current provider flags and preferences.
+## Scripted installs and reconfiguration
+
+Use explicit selections to skip the checklist. On Windows replace `python3` with
+`py -3` in these commands:
+
+```sh
+# Only the picker, usage panel and file browser
+python3 scripts/install.py --components usage,fs
+
+# Every bundled command
+python3 scripts/install.py --all
+
+# Everything except StarCLI and Grok Bot CLI
+python3 scripts/install.py --without starcli,grokbotcli
+
+# Only the core picker commands
+python3 scripts/install.py --components none
+
+# Show components without installing anything
+python3 scripts/install.py --list-components
+```
+
+`--yes` accepts all default components without prompting. A noninteractive run
+with no selection also installs all components for compatibility with existing
+scripts. `--prefix DIR` chooses the launcher directory. `--no-path` skips shell
+profile and user PATH changes, useful for isolated installs or managed setups.
+
+Run the same command again to change the selected shortcuts. Deselected
+launchers are removed only when marked as managed by this checkout; backups are
+kept first. Custom commands and launchers belonging to other checkouts are left
+in place. Existing provider installs, account credentials, models, flags,
+preferences, and scheduled jobs are preserved. Turning off the scheduler shortcut
+does not disable schedules that were already saved.
+
+## Activate and check the commands
+
+The installer prints the installed command names and their directory. Open a new
+terminal, or use the activation command it prints to enable them in the current
+one. Python cannot change the environment of the shell that launched it.
+
+Then run:
+
+```text
+agent --picker-doctor
+agent --picker-connect
+```
+
+In Connections, select a provider and press **o** for its installation guide,
+**l** to sign in where supported, **v** to check its executable, and **r** to
+refresh. Escape returns to the selector. The picker does not install vendor CLIs,
+sign in, or buy accounts. Missing providers remain disabled. Connections is also
+available with **c** in the selector or usage screen.
+
+Usage readings can be unavailable when a provider does not expose account limits.
+The executable check does not spend AI quota or verify a paid plan.
+
+## Platform setup
+
+On **Windows 10/11**, install Python from
+https://www.python.org/downloads/windows/ and include the Python launcher.
+Windows Terminal is recommended for animated colors and Unicode. The installer
+creates a private Python environment in the checkout and installs the timezone
+packages Windows needs. Launchers go in `%LOCALAPPDATA%\agent-picker\bin` by
+default. Only your user PATH is changed; administrator access is unnecessary.
+If `agent` cannot be found, run that directory's `agent.cmd --picker-doctor`
+and activate PATH using the command printed by the installer.
+
+On **macOS**, install Python from https://www.python.org/downloads/macos/ if
+`python3 --version` is unavailable. No third-party Python packages are needed.
+Launchers go in `~/.local/bin` by default. The installer backs up changed
+launchers and shell profiles, then adds a managed PATH and alias block to
+`.zshrc`, `.bashrc`, `.profile`, and an existing `.bash_profile` or `.bash_login`.
+Existing profile content and Kiro's final integration block are preserved. New bash and zsh sessions
+pick up the selected commands automatically.
+
+Keep the checkout in place. Rerun the installer if it or its Python executable
+moves. Herdr and provider CLIs are separate products with their own platform
+requirements. A provider requiring WSL must run in that environment.
 
 ## Everyday use
 
 - `agent`: selector. **c** opens Connections, **s** settings, **u** usage.
-- `usage`: usage screen. **c** also opens Connections here.
-- `agent --picker-doctor`: executable paths and local configuration paths.
-- `schedule`: scheduled prompts. The dispatcher runs while logged in and awake.
-  Its first saved schedule enables a macOS LaunchAgent or a Windows user-login
-  startup entry. Logging out stops dispatch; missed runs coalesce after login.
-- `star`: the bundled StarCLI. Connect at least one supported provider first.
-- `grok`: bundled Grok Bot client. Sign in to Cursor and Grok Bot on this
-  computer, then enable its local connection in Grok Bot. Windows reads the
-  existing signed-in Cursor desktop profile; macOS uses its Keychain item.
-  `CURSOR_ACCESS_TOKEN` can override discovery. Never share this token.
-- `fs`: a Finder-style file browser in the terminal, with icon and details
-  views; `fs DIR` opens that folder. herdr-ai shows it in icon view in each
-  tab's bottom-left pane.
-
-Herdr and provider CLIs are separate products. Only installed providers appear
-in the selector. Follow each vendor's platform requirements; a provider that
-requires WSL needs that environment, rather than a native Windows executable.
-Herdr features require the separately installed Herdr terminal.
+- `usage`: usage screen, when selected during installation.
+- `fs DIR`: file browser with icon and details views.
+- `star` or `starcli`: StarCLI, using connected providers.
+- `grok`, `grokbot`, or `grokbotcli`: Grok Bot terminal client. Sign in to Cursor
+  and Grok Bot on this computer, then enable its local connection in Grok Bot.
+  Windows reads the signed-in Cursor desktop profile; macOS uses its Keychain
+  item. `CURSOR_ACCESS_TOKEN` can override discovery. Keep tokens private.
+- `schedule`: scheduled prompts. Saving the first schedule enables a macOS
+  LaunchAgent or Windows user-login startup entry. Dispatch runs while logged
+  in and awake; missed runs coalesce after login.
 
 ## Data, updates and removal
 
@@ -71,13 +141,14 @@ Windows stores state in `%LOCALAPPDATA%\agent-picker` and configuration in
 Credentials remain in the provider's existing account store.
 
 A Git clone supports `agent --picker-update` with fast-forward updates only.
-For an extracted release ZIP, extract a newer release to a permanent folder and
-run its installer. Existing state and configuration remain in place.
+After installer changes, rerun the installer with your desired components.
+For a release ZIP, extract a newer release to a permanent folder and run its
+installer. State and configuration remain in place.
 
-To remove commands on Windows, remove the `agent-picker\bin` entry from your
-user PATH and delete that bin folder. If schedules were enabled, also remove
-`agent-picker-scheduler.cmd` from `shell:startup`, then log out to stop its
-running dispatcher. Keep your state folder if you want to retain schedules and
-preferences. On macOS remove the managed blocks from `.zshrc` and `.bashrc`, the
-managed launchers from `~/.local/bin`, and the scheduler LaunchAgent if enabled.
-Do not delete provider CLI installations or account stores.
+To remove optional commands, rerun with `--components none`. To remove all
+commands on Windows, remove the installed bin directory from your user PATH
+and delete its managed launchers. On macOS remove the managed profile blocks
+and managed launchers from the install directory. If schedules were enabled,
+also remove `agent-picker-scheduler.cmd` from Windows `shell:startup`, or the
+scheduler LaunchAgent on macOS. Keep your state folder to retain preferences
+and schedules. Do not delete provider installations or account stores.
