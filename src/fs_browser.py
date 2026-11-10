@@ -1024,6 +1024,8 @@ class App:
             q = self.query.casefold()
             shown = [e for e in shown if q in e.name.casefold()]
         self.entries = arrange(shown, self.sort, preferences.get(FOLDERS_FIRST.key))
+        folders = (e for e in self.entries if e.kind == "home" or e.kind.startswith("folder"))
+        self.folder_ordinals = {e.path: i for i, e in enumerate(folders)}
         names = [e.name for e in self.entries]
         self.index = names.index(current) if current in names else min(self.index, max(0, len(names) - 1))
         if current not in names and self.query:
@@ -1111,6 +1113,15 @@ class App:
         style = theme_style(self.theme())
         return None if style is None else ap.grad(style, x_frac * 0.85)
 
+    def entry_icon(self, entry, size, accent):
+        gradient = None
+        if self.theme() == "rainbow" and (entry.kind == "home" or entry.kind.startswith("folder")):
+            # The same pastel stops as Rainbow usage bars, one adjoining pair per folder.
+            palette = next(a["bar_gradient"] for a in ap.AGENTS if a["name"] == "Antigravity")
+            index = self.folder_ordinals.get(entry.path, 0) % len(palette)
+            gradient = (palette[index], palette[(index + 1) % len(palette)])
+        return fs_icons.icon(entry.kind, size, accent, entry.is_link, folder_gradient=gradient)
+
     def content(self, W, H, t):
         """(rows of static cells W x H, animated regions, hit boxes relative to the content)."""
         rows = [[BLANK] * W for _ in range(H)]
@@ -1176,7 +1187,7 @@ class App:
         inner = [[BLANK] * iw for _ in range(ih)]
         name_color = WHITE if lit else SOFT if entry.hidden else TEXT
         try:
-            icon = fs_icons.icon(entry.kind, g.size, accent, entry.is_link)
+            icon = self.entry_icon(entry, g.size, accent)
         except Exception:
             icon = [[BLANK] * ICON_SIZE[g.size][0] for _ in range(ICON_SIZE[g.size][1])]
         if entry.hidden and not lit:
@@ -1236,7 +1247,7 @@ class App:
         def line(entry, selected):
             cells = [BLANK] * inner
             try:
-                put(cells, 1, fs_icons.icon(entry.kind, "mini", self.accent(0.3), entry.is_link)[0])
+                put(cells, 1, self.entry_icon(entry, "mini", self.accent(0.3))[0])
             except Exception:
                 pass
             main = WHITE if selected else SOFT if entry.hidden else TEXT
@@ -1645,7 +1656,7 @@ class App:
         """Finder's Get Info, short: the icon, then what the file is."""
         e = self.preview.entry
         try:
-            icon = fs_icons.icon(e.kind, "large", self.accent(0.4), e.is_link)
+            icon = self.entry_icon(e, "large", self.accent(0.4))
         except Exception:
             icon = [[BLANK] * 8 for _ in range(3)]
         facts = [(clean(e.name), WHITE, True), (e.kind_text(), TEXT, False)]

@@ -465,17 +465,29 @@ def _folder_colors(base):
             "e": _mix(base, BLACK, 0.40)}
 
 
-def _folder(kind, size, accent):
-    base = accent or FOLDER_BLUE
+def _diagonal(grid, stops, palette):
+    """Tint each half-cell pixel from top left to bottom right, retaining the shape."""
+    height, width = len(grid), len(grid[0])
+    def pixel(x, y):
+        amount = (x / max(1, width - 1) + y / max(1, height - 1)) / 2
+        base = _mix(stops[0], stops[1], amount)
+        return palette(base).get(grid[y][x])
+    return [[_half(pixel(x, y), pixel(x, y + 1)) for x in range(width)]
+            for y in range(0, height, 2)]
+
+
+def _folder(kind, size, accent, gradient=None):
+    base = _mix(accent or FOLDER_BLUE, WHITE, 0.25)
     if size == "mini":
-        return [[("▙", base, None, False), ("▄", base, None, False)]]
+        colors = gradient or (base, base)
+        return [[("▙", colors[0], None, False), ("▄", colors[1], None, False)]]
     grid = _FOLDER[size]
     if kind in _EMBLEMS:
         if size == "large":
             grid = _overlay(grid, _EMBLEMS[kind])
         else:   # too small to tell emblems apart: a mark says "special"
             grid = _overlay(grid, ("....", "....", ".ee.", "...."))
-    return _render(grid, _folder_colors(base))
+    return _diagonal(grid, gradient, _folder_colors) if gradient else _render(grid, _folder_colors(base))
 
 
 _HOUSE = {
@@ -492,12 +504,14 @@ _HOUSE = {
 }
 
 
-def _house(size, accent):
-    base = accent or FOLDER_BLUE
+def _house(size, accent, gradient=None):
+    base = _mix(accent or FOLDER_BLUE, WHITE, 0.25)
     if size == "mini":
-        return [[("▟", base, None, False), ("▙", base, None, False)]]
-    colors = {"r": _mix(base, BLACK, 0.12), "w": _mix(base, WHITE, 0.28), "d": _mix(base, BLACK, 0.45)}
-    return _render(_HOUSE[size], colors)
+        colors = gradient or (base, base)
+        return [[("▟", colors[0], None, False), ("▙", colors[1], None, False)]]
+    def palette(tint):
+        return {"r": _mix(tint, BLACK, 0.12), "w": _mix(tint, WHITE, 0.28), "d": _mix(tint, BLACK, 0.45)}
+    return _diagonal(_HOUSE[size], gradient, palette) if gradient else _render(_HOUSE[size], palette(base))
 
 
 _PAGE = {
@@ -694,11 +708,11 @@ def _with_badge(rows, size):
 
 
 @functools.lru_cache(maxsize=4096)
-def _icon(kind, size, accent, link, tag):
+def _icon(kind, size, accent, link, tag, folder_gradient):
     if kind == "home":
-        rows = _house(size, accent)
+        rows = _house(size, accent, folder_gradient)
     elif kind.startswith("folder"):
-        rows = _folder(kind, size, accent)
+        rows = _folder(kind, size, accent, folder_gradient)
     elif kind in _ART:
         rows = _ART[kind](size)
     else:
@@ -708,17 +722,19 @@ def _icon(kind, size, accent, link, tag):
     return tuple(tuple(row) for row in rows)
 
 
-def icon(kind, size="large", accent=None, link=False, tag=None):
+def icon(kind, size="large", accent=None, link=False, tag=None, folder_gradient=None):
     """The kind's icon as rows of (ch, fg, bg, bold) cells, exactly SIZES[size].
 
     accent tints folders and a document's tag or band (a theme color); pages and
     pictures keep their natural colors. link adds the alias badge. tag replaces
-    the text on a large document. Outside the shape, cells are transparent."""
+    the text on a large document. folder_gradient supplies two pastel endpoints
+    for a diagonal folder tint. Outside the shape, cells are transparent."""
     kind = kind if kind in KINDS else "file"
     size = size if size in SIZES else "large"
     accent = None if accent is None else tuple(int(c) for c in tuple(accent)[:3])
     tag = None if tag is None else str(tag)
-    return [list(row) for row in _icon(kind, size, accent, bool(link), tag)]
+    folder_gradient = tuple(tuple(int(c) for c in rgb) for rgb in folder_gradient) if folder_gradient else None
+    return [list(row) for row in _icon(kind, size, accent, bool(link), tag, folder_gradient)]
 
 
 # ---- preview -----------------------------------------------------------------
