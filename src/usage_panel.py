@@ -713,8 +713,12 @@ class View:
             reference = rainbow_reference()
             return dict(reference, gradient=reference["bar_gradient"])
         theme = {"gradient": stops}
-        return {"gradient": stops, "glow": 1.0,
-                "color": ap.grad(theme, i / max(1, len(self.agents)) * 0.85)}
+        style = {"gradient": stops, "glow": 1.0,
+                 "color": ap.grad(theme, i / max(1, len(self.agents)) * 0.85)}
+        if THEMES[self.theme]["name"] == "rose":
+            # Give limit fills the titles' soft, readable pastel treatment.
+            style["bar_gradient"] = [themes.label_color(mix(c, WHITE, 0.2)) for c in stops]
+        return style
 
     def frame_style(self):
         stops = THEMES[self.theme]["stops"]
@@ -833,6 +837,8 @@ def put_name(line, agent, t, bold=True, panes=None, style=None):
 
 def draw_bar(line, w, bar, st, t, live, stale, now, offset, pulses=1):
     """pulses: how many bright waves run along the bar, one per working instance."""
+    if st.get("bar_gradient"):
+        st = dict(st, gradient=st["bar_gradient"])
     pct = min(100.0, w["pct"])
     concern = concerning(w, now)
     frac, _ = pace(w, now)
