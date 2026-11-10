@@ -65,7 +65,7 @@ class AssignPanelTests(unittest.TestCase):
         self.assertEqual(result, 0)
         runs = self.fake.runs()
         self.assertEqual(set(runs), {target})
-        self.assertIn("cd " + self.cwd, runs[target][0])
+        self.assertIn(herdr_ai.cd_command(self.cwd), runs[target][0])
         self.assertIn("--picker-launch Claude", runs[target][1])
         self.assertFalse(other_agents & set(runs))
         self.assertNotIn(self.panes["usage"], runs)

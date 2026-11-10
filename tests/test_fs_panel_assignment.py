@@ -125,6 +125,7 @@ class PanelAssignmentTests(fixtures.Base):
         held = Mock(return_value=True)
         app.terminal.tab_pressed = held
         preferences.put(fsb.ANIMATE.key, False)
+        app.last_frame = 9   # the patched clock starts here, not at the real monotonic time
         for now in (10, 50):
             with patch.object(fsb.time, "monotonic", return_value=now):
                 self.draw(app)
