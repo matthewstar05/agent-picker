@@ -1262,19 +1262,29 @@ def theme_panel(menu, cols, rows, t):
             stops = entry["stops"]
             style = BRAND_FRAME if stops is None else rainbow_reference() if stops == "rainbow" else {"gradient": stops}
             color = themes.label_color(ap.grad(style, 0.35))
-            part = ap.fg(color) + (BOLD if selected else "") + label + RESET
+
+            def shade(pos):
+                return ap.rainbow_rgb(pos, 0.25) if stops == "rainbow" else ap.grad(style, pos)
+
+            def painted_label(text):
+                weight = BOLD if selected else ""
+                if stops != "rainbow":
+                    return ap.fg(color) + weight + text + RESET
+                return "".join(ap.fg(shade((k - 2) / max(1, len(name) - 1))) + weight + ch + RESET
+                               for k, ch in enumerate(text))
+
+            part = painted_label(label)
             for k in range(sample_width):
-                shade = ap.grad(style, k / max(1, sample_width - 1))
-                part += ap.fg(shade) + "▰" + RESET
+                part += ap.fg(shade(k / max(1, sample_width - 1))) + "▰" + RESET
             if grid:
                 inner = width - 3
                 edge = WHITE if selected else SOFT
                 border = ap.fg(edge)
                 text = clip(f"{marker} {name}" + (" ✓" if saved else ""), inner).ljust(inner)
-                samples = "".join(ap.fg(ap.grad(style, k / max(1, inner))) + "▰" + RESET
+                samples = "".join(ap.fg(shade(k / max(1, inner))) + "▰" + RESET
                                   for k in range(inner))
                 parts[0].append(border + "╭" + "─" * inner + "╮" + RESET + " ")
-                parts[1].append(border + "│" + RESET + ap.fg(color) + (BOLD if selected else "") + text + RESET + border + "│" + RESET + " ")
+                parts[1].append(border + "│" + RESET + painted_label(text) + border + "│" + RESET + " ")
                 parts[2].append(border + "╰" + RESET + samples + border + "╯" + RESET + " ")
             else:
                 parts[0].append(part + " ")

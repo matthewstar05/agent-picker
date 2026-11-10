@@ -265,7 +265,7 @@ def filename_color(name, selected=False, hidden=False, kind=None, phase=0):
     if color is None:
         color = "rainbow" if stops == "rainbow" else (ap.grad({"gradient": stops}, 0.3) if stops else WHITE)
     if color == "rainbow":
-        color = ap.rainbow_rgb(phase + (0.15 if kind == "folder-github" else 0), 0.55)
+        color = ap.rainbow_rgb(phase + (0.15 if kind == "folder-github" else 0), 0.25)
     elif kind == "folder-github" and not theme.get("repo_color"):
         color = ap.mix(color, (255, 225, 200), 0.18)
     color = themes.label_color(color)
@@ -1569,6 +1569,9 @@ class App:
                 colors = [fs_icons.color(k) for k in ("folder", "python", "javascript", "markdown", "image",
                                                        "rust", "json", "shell")]
                 return [colors[k * len(colors) // width] for k in range(width)]
+            if style.get("gradient") == "rainbow":
+                return [ap.rainbow_rgb(k / width - (t * 0.1 if moving else 0), 0.25)
+                        for k in range(width)]
             return [ap.grad(style, k / width - (t * 0.1 if moving else 0)) for k in range(width)]
 
         def body(bw):
@@ -1579,10 +1582,12 @@ class App:
                 chosen = i == menu.index
                 line = ap.Line()
                 label = "match usage panel" if value == "usage" else value
-                if chosen:
-                    line.put(" ❯ ", WHITE).put(label, (245, 245, 245), bold=True)
+                line.put(" ❯ " if chosen else " • " if value == current else "   ", WHITE if chosen else LABEL)
+                if value == "rainbow":
+                    for k, ch in enumerate(label):
+                        line.put(ch, ap.rainbow_rgb(k / max(1, len(label) - 1), 0.25), bold=chosen)
                 else:
-                    line.put(" • " if value == current else "   ", LABEL).put(label, (205, 205, 212))
+                    line.put(label, (245, 245, 245) if chosen else (205, 205, 212), bold=chosen)
                 if value == "usage":
                     line.put(f"  {name}", SOFT)
                 width = min(16, max(4, bw - len(line.cells) - 6))
