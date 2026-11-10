@@ -966,6 +966,8 @@ def main(argv=None, herdr=None, cwd=None):
         return 0
     if argv[:1] == ["--usage"]:
         return usage_main(argv[1:])
+    if argv[:1] == ["--assign-panel"]:
+        return assign_panel_main(argv[1:], herdr, cwd)
     if argv[:1] == ["--handoff"]:
         return handoff_main(argv[1:], herdr)
     if argv[:1] == ["--handoff-run"]:
@@ -1133,6 +1135,55 @@ def route_main(argv, herdr=None, cwd=None):
     if entry and entry.get("auto_label", True):
         follow_directory(herdr, entry, Path(cwd).name or "home")
         save_state(state)
+    return 0
+
+
+# Visual, row-major positions for the five agent panes in either layout.
+PANEL_ROLES = {
+    "Standard": ("agy", "codex", "claude", "picker", "cursor"),
+    "team": ("crew1", "crew2", "lead", "crew3", "crew4"),
+}
+
+
+def assign_panel_main(argv, herdr=None, cwd=None):
+    """Move one numbered agent pane to cwd, preserving its conversation when safe."""
+    if len(argv) != 1 or argv[0] not in ("1", "2", "3", "4", "5"):
+        print("Usage: herdr-ai --assign-panel 1..5", file=sys.stderr)
+        return 2
+    if not inside_herdr():
+        print("herdr-ai: --assign-panel must run inside herdr", file=sys.stderr)
+        return 2
+
+    herdr = Herdr(herdr or require_herdr("herdr-ai --assign-panel"), "herdr-ai")
+    cwd = cwd or os.getcwd()
+    state, key = load_state(), tab_key(os.environ["HERDR_TAB_ID"])
+    entry = state.get(key)
+    if not entry:
+        print(NO_LAYOUT, file=sys.stderr)
+        return 3
+    recorded = recorded_panes(herdr, state, key)
+    if not recorded:
+        print(NO_LAYOUT, file=sys.stderr)
+        return 3
+
+    role = PANEL_ROLES["team" if entry.get("team") else "Standard"][int(argv[0]) - 1]
+    pane = recorded.get(role)
+    if not pane:
+        print(f"herdr-ai: panel {argv[0]} ({role}) is not present in this layout", file=sys.stderr)
+        return 3
+    commands = entry_commands(entry, recorded)
+    command = commands.get(role)
+    if not command:
+        print(f"herdr-ai: panel {argv[0]} ({role}) has no restart command", file=sys.stderr)
+        return 3
+
+    moved = route(herdr, cwd, {role: pane}, everything=False,
+                  commands={role: command}, preserve_context=True)
+    if not moved:
+        print(f"herdr-ai: panel {argv[0]} ({role}) was not moved; it may be working, blocked, or unsafe to resume",
+              file=sys.stderr)
+        return 1
+    print(f"herdr-ai: panel {argv[0]} ({role}) restarted in {cwd}")
     return 0
 
 

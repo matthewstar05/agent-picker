@@ -5,7 +5,8 @@ Icons in a grid or a details list. Arrow keys move, Enter opens a folder or
 previews a file, and Shift+Enter moves every herdr-ai agent on this tab into the
 selected folder (it runs herdr-ai's refresh there; a file means its folder). The
 selected item glows in the theme's gradient the way a working agent's card does,
-and brightens while Shift is held. Themes are the usage panel's list
+and brightens while Shift or Tab is held. Tab+Enter assigns only one panel
+using a 1-5 menu, without opening the selected folder. Themes are the usage panel's list
 (themes.json), so a theme added there shows up here too.
 
 herdr-ai runs it in every setup's bottom-left pane in icon view (--herdr). There
@@ -18,6 +19,7 @@ Usage: fs [DIR|FILE] [--icons|--details] [--hidden] [--sort name|kind|date|size]
        folder with the file selected. The options apply to this run only.
 
 Keys:  ←↑↓→ move     ⏎ open or preview    ⇧⏎ move this tab's agents here
+       tab+⏎ assign one panel (1-5), staying here
        esc, ⌫ or - back to the enclosing folder   [ ] back, forward   ~ home
        . hidden files   v icons or details   , sort   / filter   space Quick Look
        o open in app   y copy path   e edit   ! shell here   p pin for herdr-ai's pane
@@ -922,6 +924,7 @@ class Confirm:
 
 
 HELP = [("←↑↓→", "move"), ("⏎", "open a folder, preview a file"),
+        ("Tab+⏎", "assign one panel (1-5), staying here"),
         ("⇧⏎", "move this tab's agents here (herdr-ai)"), ("esc  ⌫", "back to the enclosing folder"),
         ("[  ]", "back, forward"), ("~", "home folder"), ("v", "icons or details"),
         (",", "sort by name, kind, date, size"), (".", "show or hide hidden files"), ("/", "filter by name"),
@@ -990,6 +993,10 @@ class App:
         self.bare_shift = False        # the terminal reports Shift on its own, so its release is seen
         self.shift_until = 0.0
         self.polling_shift = False
+        self.polling_tab = False
+        self.tab_until = 0.0
+        self.tab_releases = False
+        self.assignment_target = None
         self.boost = 0.0
         self.last_frame = time.monotonic()
         self.ncols, self.hits, self.page = 1, [], 1
@@ -1048,6 +1055,23 @@ class App:
         if self.bare_shift:
             return held
         return held and time.monotonic() < self.shift_until
+
+    def tab_held(self):
+        visibility = getattr(self, "visibility", None)
+        if not self.focused or (visibility is not None and not visibility.visible):
+            return False
+        reader = getattr(self.terminal, "tab_pressed", None)
+        actual = reader() if reader else None
+        self.polling_tab = actual is not None
+        if actual is not None:
+            return actual
+        held = bool(getattr(self.terminal, "tab", False))
+        reports_releases = self.tab_releases or bool(getattr(self.terminal, "releases", False))
+        return held if reports_releases else time.monotonic() < self.tab_until
+
+    def assignment_chord(self, key):
+        return key in ("\r", "\n", "shift-enter") and (
+            self.tab_held() or (self.focused and time.monotonic() < self.tab_until))
 
     def stamp_of(self, path):
         try:
@@ -1138,7 +1162,8 @@ class App:
     def boost_now(self):
         now = time.monotonic()
         dt, self.last_frame = now - self.last_frame, now
-        target = 1.0 if self.shift_held() or self.routing else 0.0
+        shift, tab = self.shift_held(), self.tab_held()
+        target = 1.0 if shift or tab or self.routing else 0.0
         self.boost += (target - self.boost) * min(1.0, dt * 14)
         if abs(self.boost - target) < 0.01:
             self.boost = target
@@ -1410,9 +1435,13 @@ class App:
             return f" / {self.query or ''}▏ ", WHITE
         if self.routing:
             spin = SPIN[int((now - self.routing['started']) * 10) % len(SPIN)]
-            return f" {spin} moving agents to {self.routing['target'].name or self.routing['target']}… ", WHITE
+            who = f"panel {self.routing['panel']}" if self.routing.get("panel") else "agents"
+            return f" {spin} moving {who} to {self.routing['target'].name or self.routing['target']}… ", WHITE
         if self.toast and self.toast[2] > now:
             return f" {self.toast[0]} ", self.toast[1]
+        if self.tab_held() and self.screen == "browse":
+            target = self.route_target()
+            return f" Tab+⏎ assigns one panel to {target.name or target} · stay here ", WHITE
         if self.shift_held() and self.screen == "browse":
             target = self.route_target()
             what = "this tab's agents" if inside_herdr() else "herdr-ai"
@@ -1424,7 +1453,7 @@ class App:
         return f" {n} item{'s' * (n != 1)}" + (f" · {free} available " if free else " "), SOFT
 
     def hints(self):
-        route = "⇧⏎ move agents" if inside_herdr() else "⇧⏎ herdr-ai"
+        route = "Tab+⏎ assign · ⇧⏎ move all" if inside_herdr() else "⇧⏎ herdr-ai"
         if self.typing:
             return [" type to filter · ⏎ keep · esc clear ", " ⏎ keep · esc clear ", ""]
         return [f" ⏎ open · esc back · {route} · v view · t theme · s settings · ? keys · ⇧Q quit ",
@@ -1518,6 +1547,8 @@ class App:
     # -- panels over the browser --
 
     def overlay_lines(self, cols, rows, t):
+        if self.screen == "assign":
+            return self.assignment_panel(cols, rows, t)
         if self.screen == "themes" and self.theme_menu:
             return self.theme_panel(cols, rows, t)
         if self.screen == "settings" and self.settings:
@@ -1618,6 +1649,20 @@ class App:
 
         plain = [(f"{key}  {what}", False) for key, what in HELP]
         return ap.panel("fs keys", body, [" any key closes ", ""], cols, rows, t, plain)
+
+    def assignment_panel(self, cols, rows, t):
+        lines = ["Top:     1 left    2 middle    3 right",
+                 "Bottom:  4 left    5 right",
+                 "Assign one agent; keep browsing here."]
+        target = clean(show_path(self.assignment_target))
+
+        def body(bw):
+            return [ap.note(ap.clip(target, bw), bw, WHITE), ("gap", "", 0)] + [
+                ap.note(ap.clip(line, bw), bw, TEXT) for line in lines]
+
+        plain = [(target, True)] + [(line, False) for line in lines]
+        return ap.panel("assign directory", body, [" 1-5 assign · esc cancel ", " 1-5 · esc cancel ", ""],
+                        cols, rows, t, plain)
 
     def confirm_panel(self, cols, rows, t):
         c = self.confirm
@@ -1755,10 +1800,25 @@ class App:
         entry = self.selected()
         return entry.path if entry and entry.is_dir else self.cwd
 
-    def route(self):
+    def choose_panel(self):
+        if self.routing:
+            self.say("agents are still moving", WARN)
+        elif not inside_herdr():
+            self.say("panel assignment needs an existing herdr-ai tab", WARN, 6)
+        else:
+            self.assignment_target, self.screen = self.route_target(), "assign"
+        self.tab_until = 0.0
+        self.static = None
+
+    def assign_panel(self, panel):
+        target = self.assignment_target
+        self.assignment_target, self.screen = None, "browse"
+        self.route(panel=panel, target=target)
+
+    def route(self, panel=None, target=None):
         """Shift+Enter: herdr-ai's refresh in the selected folder, so every agent on this tab
         restarts there (idle ones keep their conversations when the provider allows)."""
-        target = self.route_target()
+        target = target if target is not None else self.route_target()
         self.sweep_at = time.monotonic()
         if not inside_herdr():
             self.confirm, self.screen = Confirm("herdr", target), "confirm"
@@ -1766,12 +1826,13 @@ class App:
         if self.routing:
             self.say("agents are still moving", WARN)
             return
-        job = {"target": target, "started": time.monotonic(), "result": None}
+        job = {"target": target, "started": time.monotonic(), "result": None, "panel": panel}
         self.routing = job
 
         def run():
             try:
-                out = subprocess.run([sys.executable, str(HERDR_AI), "--refresh"], cwd=str(target),
+                args = ["--assign-panel", str(panel)] if panel is not None else ["--refresh"]
+                out = subprocess.run([sys.executable, str(HERDR_AI), *args], cwd=str(target),
                                      stdin=subprocess.DEVNULL, capture_output=True, text=True,
                                      encoding="utf-8", errors="replace", timeout=180)
                 job["result"] = (out.returncode, (out.stdout or "") + (out.stderr or ""))
@@ -1789,12 +1850,15 @@ class App:
         code, output = job["result"]
         target = job["target"]
         lines = [l.strip() for l in output.splitlines() if l.strip()]
-        if code == 3:
+        if code == 3 and job.get("panel") is None:
             self.confirm, self.screen = Confirm("layout", target), "confirm"
             return
         if code:
             last = lines[-1] if lines else f"herdr-ai exited with {code}"
             self.say(last.replace("herdr-ai: ", "", 1), HOT, 8)
+            return
+        if job.get("panel") is not None:
+            self.say(f"✓ panel {job['panel']} assigned to {target.name or target}", OK, 6)
             return
         self.say(summarize(lines, target), OK, 6)
         if target != self.cwd:
@@ -2011,6 +2075,15 @@ class App:
         if key == "release:shift":
             self.bare_shift = True
             return None
+        if key == "release:\t":
+            self.tab_releases = True
+            self.terminal.tab = False
+            self.tab_until = 0.0
+            return None
+        if key == "\t" and self.screen in ("browse", "preview") and not self.typing:
+            self.terminal.tab = True
+            self.tab_until = time.monotonic() + 0.6
+            return None
         if key.startswith("release:"):
             return None
         if key in ("focus-in", "focus-out"):
@@ -2019,6 +2092,9 @@ class App:
                 self.terminal.shift = False
                 self.shift_until = 0.0
                 self.polling_shift = False
+                self.terminal.tab = False
+                self.tab_until = 0.0
+                self.polling_tab = False
             self.static = None
             return None
         if getattr(self.terminal, "shift", False):
@@ -2029,6 +2105,19 @@ class App:
         if key == "Q" and not self.typing:   # the only way out; q, Esc and Ctrl+C never quit
             return "quit"
         screen = self.screen
+        if screen == "assign":
+            if key in ("1", "2", "3", "4", "5"):
+                self.assign_panel(int(key))
+            elif key in ("esc", "q", "\x03"):
+                self.assignment_target, self.screen = None, "browse"
+            return None
+        if screen in ("browse", "preview") and not self.typing and self.assignment_chord(key):
+            if screen == "preview":
+                self.close_preview()
+            self.choose_panel()
+            return None
+        if key not in ("\r", "\n", "shift-enter"):
+            self.tab_until = 0.0
         if screen == "preview":
             return self.handle_preview(key)
         if screen == "themes":
@@ -2218,6 +2307,8 @@ class App:
             return 1 / 30
         if self.focused and self.polling_shift:
             return 0.05  # bare Shift may arrive without a terminal key event
+        if self.focused and self.polling_tab:
+            return 0.05  # bare Tab may arrive without a terminal key event
         return 1.0
 
     def run(self):

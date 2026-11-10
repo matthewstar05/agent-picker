@@ -3,7 +3,8 @@
 Requires an existing Herdr-managed caller. Uses one owned named server with fake
 Claude panes and private config, state and Claude config. herdr-ai lays out a
 five-agent Claude tab with the system prompt off; the bottom-left pane must
-become the fs file browser in icon view, and Shift+Enter on a folder must
+become the fs file browser in icon view. Tab+Enter then 1 must assign only
+the top-left agent without browsing into the folder, and Shift+Enter must
 restart every agent pane in that folder. Never starts a vendor CLI. Herdr's
 plugin registry is left alone (a wrapper turns `herdr plugin` into a no-op).
 """
@@ -51,7 +52,7 @@ def main(argv):
     fake.write_text(f"#!{sys.executable}\n" + f'''
 import json, os, time
 with open({str(root / "launches.jsonl")!r}, "a") as log:
-    log.write(json.dumps({{"cwd": os.getcwd()}}) + "\\n")
+    log.write(json.dumps({{"cwd": os.getcwd(), "pane": os.environ.get("HERDR_PANE_ID")}}) + "\\n")
 print("fake claude in", os.getcwd(), flush=True)
 while True:
     time.sleep(1)
@@ -117,9 +118,24 @@ while True:
         shots = argv[argv.index("--shot") + 1] if "--shot" in argv else None
         if shots:
             Path(shots, "native-before.ansi").write_text(screen(terminal, ansi=True))
-        # project sorts first (folders on top), so it is selected: Shift+Enter moves the agents there.
+        # Feed kitty Tab press + Enter, then release. No physical keyboard state required.
+        cli("pane", "send-text", terminal, "\x1b[9u\x1b[13u\x1b[9;1:3u")
+        wait(lambda: "assign directory" in screen(terminal), what="the panel assignment menu")
+        cli("pane", "send-keys", terminal, "1")
+        wait(lambda: len(launches()) == before + 1, seconds=60, what="only the selected agent to restart")
+        wait(lambda: "panel 1 assigned" in screen(terminal), what="the assignment report")
+        entries = json.loads((root / "state" / "herdr-ai-tabs.json").read_text())
+        layout = next(entry for entry in entries.values() if entry["panes"]["terminal"] == terminal)
+        assigned = launches()[before:]
+        assert len(assigned) == 1 and assigned[0]["pane"] == layout["panes"]["crew1"], assigned
+        assert Path(assigned[0]["cwd"]).resolve() == project, assigned
+        assigned_screen = screen(terminal)
+        assert "work" in assigned_screen.splitlines()[0], assigned_screen
+        assert "notes.md" in assigned_screen, assigned_screen
+        before = len(launches())
+        # project stays selected: Shift+Enter now moves all agents and follows them.
         cli("pane", "send-keys", terminal, "shift+enter")
-        wait(lambda: len(launches()) >= before + 5, seconds=60, what="the agents to restart")
+        wait(lambda: len(launches()) >= before + 4, seconds=60, what="the agents to restart")
         moved = launches()[before:]
         assert all(Path(l["cwd"]).resolve() == project for l in moved), moved
         wait(lambda: "now in project" in screen(terminal), what="the browser's report")

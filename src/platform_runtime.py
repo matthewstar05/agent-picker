@@ -43,6 +43,25 @@ def _shift_reader():
     return None
 
 
+def _tab_reader():
+    """A local Tab key-state query, unavailable in remote terminal sessions."""
+    if os.environ.get("SSH_CONNECTION") or os.environ.get("SSH_TTY"):
+        return None
+    import ctypes
+    try:
+        if sys.platform == "darwin":
+            state = ctypes.CDLL("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics").CGEventSourceKeyState
+            state.argtypes, state.restype = [ctypes.c_int, ctypes.c_uint16], ctypes.c_bool
+            return lambda: bool(state(0, 48))  # kVK_Tab
+        if sys.platform == "win32":
+            state = ctypes.WinDLL("user32", use_last_error=True).GetAsyncKeyState
+            state.argtypes, state.restype = [ctypes.c_int], ctypes.c_short
+            return lambda: bool(state(0x09) & 0x8000)  # VK_TAB, currently down
+    except (OSError, AttributeError):
+        pass
+    return None
+
+
 class Terminal:
     # Opt-in decoding for screens that need more than menu keys (the file
     # browser): Shift+Enter, the Shift key itself, shifted symbols, focus and
@@ -51,6 +70,8 @@ class Terminal:
     # Whether Shift is held as the terminal last reported it, None until a key
     # event says. Only tracked while extended.
     shift = None
+    # Whether Tab is held as the terminal last reported it, None until known.
+    tab = None
 
     def __init__(self, raw=False):
         self.raw = raw
@@ -67,6 +88,20 @@ class Terminal:
             return self._shift_reader()
         except OSError:
             self._shift_reader = None
+            return None
+
+    def tab_pressed(self):
+        """Current local Tab state, or None when only terminal events are available."""
+        if not self.extended:
+            return None
+        if not hasattr(self, "_tab_reader"):
+            self._tab_reader = _tab_reader()
+        if self._tab_reader is None:
+            return None
+        try:
+            return self._tab_reader()
+        except OSError:
+            self._tab_reader = None
             return None
 
     def __enter__(self):
@@ -261,6 +296,8 @@ class Terminal:
         "release:shift" as it does under the kitty protocol, and every other
         record, releases included, updates self.shift."""
         if self.extended:
+            if virtual == 9:
+                self.tab = bool(down)
             if virtual in (0x10, 0xa0, 0xa1):   # VK_SHIFT, VK_LSHIFT, VK_RSHIFT
                 return b"\x1b[57441u" if down else b"\x1b[57441;1:3u"
             self.shift = bool(control & 0x10)
@@ -288,7 +325,10 @@ class Terminal:
                     self._pending = byte + self._pending
                     break
                 ch += byte
-            return ch.decode(errors="ignore")
+            key = ch.decode(errors="ignore")
+            if self.extended and key == "\t":
+                self.tab = True
+            return key
         # Long enough that an arrow split by a slow link (SSH, a busy machine)
         # is not read as Esc, which quits; short enough that Esc still feels instant.
         if not self.wait(0.1):
@@ -337,6 +377,12 @@ class Terminal:
         text = seq.decode(errors="ignore")
         key, event = decode_key(prefix, text, self.extended)
         if self.extended:
+            if key == "\t":
+                self.tab = event != 3
+            elif prefix == b"[" and text.endswith("u"):
+                code = text[:-1].split(";")[0].split(":")[0]
+                if code.isdigit() and int(code) == 9:
+                    self.tab = event != 3
             if key == "shift":
                 self.shift = event != 3
             else:
