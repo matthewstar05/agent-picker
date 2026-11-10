@@ -18,6 +18,7 @@ import agent_picker
 import provider_defaults
 import settings
 import star_engines
+import system_prompts
 
 
 class AgyPromptTests(unittest.TestCase):
@@ -58,30 +59,30 @@ class AgyPromptTests(unittest.TestCase):
 
     def test_on_does_not_install_or_change_custom_agent(self):
         argv = ["/vendor/agy", "--agent", "mine", "--model", "unchanged"]
-        self.assertEqual(agy_prompts.prepare(self.agent, argv), argv)
+        self.assertEqual(system_prompts.prepare(self.agent, argv), argv)
         self.assertFalse((self.home / ".gemini").exists())
 
     def test_off_registers_once_and_preserves_herdr_opening(self):
         provider_defaults.apply(self.agent, {"system_prompts": False})
         argv = self.agent["argv"] + ["-i", "Herdr standing instructions"]
         original = copy.deepcopy(self.agent)
-        prepared = agy_prompts.prepare(self.agent, argv)
+        prepared = system_prompts.prepare(self.agent, argv)
         self.assertEqual(prepared[3:], argv[1:])
         self.assertEqual(prepared[1:3], ["--agent", agy_prompts.NAME])
-        self.assertEqual(agy_prompts.prepare(self.agent, prepared), prepared)
+        self.assertEqual(system_prompts.prepare(self.agent, prepared), prepared)
         self.assertEqual(self.agent, original)
         profile = self.home / ".gemini/config/agents" / (agy_prompts.NAME + ".md")
         self.assertEqual(profile.read_text(), agy_prompts.PROFILE)
         profile.write_text("user-owned file")
         with self.assertRaisesRegex(RuntimeError, "conflicts"):
-            agy_prompts.prepare(self.agent, argv)
+            system_prompts.prepare(self.agent, argv)
         self.assertEqual(profile.read_text(), "user-owned file")
 
     def test_off_rejects_explicit_custom_agent(self):
         provider_defaults.apply(self.agent, {"system_prompts": False})
         for option in (["--agent", "mine"], ["--agent=mine"]):
             with self.assertRaisesRegex(ValueError, "cannot be combined"):
-                agy_prompts.prepare(self.agent, self.agent["argv"] + option)
+                system_prompts.prepare(self.agent, self.agent["argv"] + option)
         self.assertFalse((self.home / ".gemini").exists())
 
     def test_star_headless_and_native_use_the_same_setting(self):

@@ -1,4 +1,4 @@
-"""agy's native prompt layer, independent of herdr-ai's opening instructions."""
+"""agy's native prompt layer for system_prompts: a managed custom agent without prompt sections."""
 
 import os
 from pathlib import Path
@@ -59,10 +59,10 @@ def install():
     return NAME
 
 
-def prepare(agent, argv):
+def disable(agent, argv):
     """Apply only agy's layer. Preserve models, permissions and Herdr briefs."""
-    if agent["name"] != "Antigravity" or provider_defaults.current(agent)["system_prompts"]:
-        return list(argv)
+    if agent.get("native_gemini"):
+        return list(argv)   # the scheduler's native gemini fallback has no agy profiles
     selected = provider_defaults.option(argv, ("--agent",))
     if selected and selected != NAME:
         raise ValueError("agy System Prompts Off cannot be combined with --agent " + selected +

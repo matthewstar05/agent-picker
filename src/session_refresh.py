@@ -38,7 +38,7 @@ FLAGS = {
                "--disable-slash-commands", "--verbose", "--strict-mcp-config"},
     "Codex": {"--dangerously-bypass-approvals-and-sandbox", "--dangerously-bypass-hook-trust",
               "--approve-for-me", "--search", "--no-alt-screen", "--no-daemon", "--strict-config"},
-    "Cursor": {"--yolo", "--trust", "--force"},
+    "Cursor": {"--yolo", "--trust", "--force", "--exclude-workspace-context"},
     "Kiro": {"--trust-all-tools", "--tui", "--legacy-ui", "--classic",
              "--v2", "--v3", "--require-mcp-startup"},
     "Antigravity": {"--dangerously-skip-permissions", "--sandbox", "--remote-control"},

@@ -271,9 +271,8 @@ def command(job):
         # exec accepts the profile's model, effort, sandbox and config flags.
         # It cannot ask an unattended user for approval, and never adds bypass.
         return [argv[0], "exec", *argv[1:], "--skip-git-repo-check", "--", job["prompt"]]
-    if job["provider"] == "Gemini" and not agent.get("native_gemini"):
-        import agy_prompts
-        argv = agy_prompts.prepare(agent, argv)
+    import system_prompts
+    argv = system_prompts.prepare(agent, argv)
     return [*argv, "-p", job["prompt"]]
 
 

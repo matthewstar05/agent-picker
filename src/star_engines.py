@@ -110,9 +110,9 @@ class Engine:
     def native(self, session):
         """argv that opens this session in the provider's own interactive UI."""
         base = list(resolve_argv(self.agent) or [])
-        if self.name == "Antigravity" and base:
-            import agy_prompts
-            base = agy_prompts.prepare(self.agent, base)
+        if base:
+            import system_prompts
+            base = system_prompts.prepare(self.agent, base)
         if not session:
             return base
         if self.name == "Codex":
@@ -345,7 +345,8 @@ class CursorEngine(Engine):
         argv += ["--mode", "plan"] if plan else ["--yolo"]
         if session:
             argv += ["--resume", session]
-        return argv + [prompt]
+        import system_prompts
+        return system_prompts.prepare(self.agent, argv + [prompt])
 
     def parse(self, d, state):
         kind = d.get("type")
@@ -511,8 +512,8 @@ class AntigravityEngine(Engine):
         argv += ["--mode", "plan"] if plan else ["--dangerously-skip-permissions"]
         if session:
             argv += ["--conversation", session]
-        import agy_prompts
-        return agy_prompts.prepare(self.agent, argv)
+        import system_prompts
+        return system_prompts.prepare(self.agent, argv)
 
     def parse(self, d, state):
         kind = d.get("event")

@@ -192,7 +192,7 @@ class SchedulerTests(unittest.TestCase):
 
     def test_gemini_keeps_antigravity_prompt_preparation(self):
         self.profile(self.fake(name="agy"), "Gemini")
-        with patch("agy_prompts.prepare", side_effect=lambda agent, argv: argv + ["--agent", "prepared"]) as prepare:
+        with patch("system_prompts.prepare", side_effect=lambda agent, argv: argv + ["--agent", "prepared"]) as prepare:
             argv = scheduler.command(self.values(provider="Gemini"))
         self.assertIn("prepared", argv)
         prepare.assert_called_once()

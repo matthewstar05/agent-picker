@@ -6,6 +6,7 @@ import os
 import re
 import tempfile
 import model_catalog
+import system_prompts
 
 
 EFFORTS = ("low", "medium", "high", "xhigh", "max", "ultra")
@@ -92,9 +93,9 @@ def current(agent):
     if name == "Codex":
         config = {key: value for _, _, key, value in codex_configs(argv)}
         values["fast_mode"] = config.get("service_tier") in ("fast", "priority")
-    if name == "Antigravity":
-        values["system_prompts"] = agent.get("defaults", {}).get(
-            "system_prompts", agent.get("system_prompts", True))
+    if system_prompts.supported(agent):
+        # Applied at launch by system_prompts, not stored in argv.
+        values["system_prompts"] = system_prompts.enabled(agent)
     if name == "Claude":
         # Applied at launch by claude_ultracode, not stored in argv.
         values["ultracode"] = agent.get("defaults", {}).get("ultracode", agent.get("ultracode", False))
@@ -117,7 +118,7 @@ def apply(agent, values):
         raise ValueError("Bypass Permissions must be on or off")
     if agent["name"] == "Codex" and not isinstance(values["fast_mode"], bool):
         raise ValueError("Fast Mode must be on or off")
-    if agent["name"] == "Antigravity" and not isinstance(values["system_prompts"], bool):
+    if system_prompts.supported(agent) and not isinstance(values["system_prompts"], bool):
         raise ValueError("System Prompts must be on or off")
     if agent["name"] == "Claude" and not isinstance(values["ultracode"], bool):
         raise ValueError("Ultracode must be on or off")
@@ -259,7 +260,7 @@ class Menu:
             fields = ("model", "bypass_permissions")
         else:
             fields = ("model", "effort", "bypass_permissions")
-        return fields + (("system_prompts",) if self.agent["name"] == "Antigravity" else ())
+        return fields + (("system_prompts",) if system_prompts.supported(self.agent) else ())
 
     def models(self):
         return self.model_rows

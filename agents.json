@@ -253,6 +253,7 @@
   },
   {
     "name": "Cursor",
+    "system_prompts": true,
     "pastel": [
       255,
       160,

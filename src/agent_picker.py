@@ -927,7 +927,9 @@ def render_defaults(menu, cols, rows, t):
         if field == "fast_mode":
             out.append(note("Faster replies use more quota.", bw, accent))
         if field == "system_prompts":
-            out.append(note("agy context only; herdr-ai adds its own instructions.", bw, accent))
+            import system_prompts
+            out += [note(line, bw, accent)
+                    for line in textwrap.wrap(system_prompts.note(agent), max(20, bw - 4))]
         if field == "ultracode":
             text = ("Claude Code's ultracode: a workflow for every substantive task in new Claude sessions. "
                     "Uses more quota; narrow workflow agents use haiku.")
@@ -1553,8 +1555,8 @@ def main():
         raise RuntimeError(f"{agent['name']} is not installed. Run --picker-doctor.")
     if args[:1] == ["--"]:
         args = args[1:]
-    import agy_prompts
-    argv = agy_prompts.prepare(agent, argv + args)
+    import system_prompts
+    argv = system_prompts.prepare(agent, argv + args)
     import claude_ultracode
     argv = claude_ultracode.prepare(agent, argv)
     save_last(index)
