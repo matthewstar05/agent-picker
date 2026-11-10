@@ -26,7 +26,7 @@ VALUES = {
                "--system-prompt", "--permission-mode", "--add-dir", "--mcp-config"},
     "Codex": {"-m", "--model", "-c", "--config", "-p", "--profile", "-s", "--sandbox",
               "-a", "--ask-for-approval", "-C", "--cd", "--add-dir", "--enable", "--disable"},
-    "Cursor": {"--model", "--mode", "--workspace", "--sandbox"},
+    "Cursor": {"--model", "--mode", "--workspace", "--sandbox", "--plugin-dir"},
     "Kiro": {"--model", "--effort", "--agent", "--agent-engine", "--mode", "--wrap"},
     "Antigravity": {"--model", "--effort", "--agent", "--project", "--mode", "--add-dir",
                     "--log-file"},
@@ -221,6 +221,8 @@ def resume_argv(name, argv, session):
         # Positional words are old prompts, never a new task on refresh.
         i += 1
     selector = ["resume", session] if name == "Codex" else [RESUME[name], session]
+    import hidden_briefs
+    hidden_briefs.restore(name, kept)   # the herdr brief folder these flags name
     return prefix + kept + selector
 
 

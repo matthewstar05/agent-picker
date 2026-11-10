@@ -104,6 +104,7 @@ from pathlib import Path
 
 from platform_runtime import state_dir
 import herdr_sidebar
+import hidden_briefs
 import session_refresh
 
 ENTRY = Path(__file__).resolve().parent / "agent_picker.py"
@@ -908,7 +909,8 @@ def handoff_main(argv, herdr=None, spawn=None):
         moved = "this pane"
     job = {"herdr": herdr.binary, "caller": me, "lead": me, "lines": lines, "cwd": cwd, "key": key,
            "update": update, "goal": handoff_goal(goal, caller, notes),
-           "opening": target not in ("Claude", "Codex", "Grok Bot")}
+           "opening": target not in ("Claude", "Codex", "Grok Bot")
+                      and not hidden_briefs.supported(target, cwd)}
     log = state_dir() / "herdr-ai-handoff.log"
     log.parent.mkdir(parents=True, exist_ok=True)
     (spawn or spawn_runner)(job, log)

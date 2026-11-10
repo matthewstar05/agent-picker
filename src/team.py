@@ -25,9 +25,11 @@ models is the "team" entry of its profile in agents.json, or the local config's.
 
 Instructions reach each CLI the way it supports: Claude appends them to its
 system prompt, Codex takes them as developer instructions, and Grok Bot saves
-them with its conversation (--append-system-prompt). Kiro, Cursor and
-Antigravity have no such flag, so their lead (or Standard pane) gets them as its
-opening prompt and their crew get the reply and usage rules inside each task.
+them with its conversation (--append-system-prompt). Cursor and Antigravity
+have no such flag, so hidden_briefs gives them a folder they read the brief
+from, out of the transcript. Kiro (and Antigravity when that folder cannot
+work) gets them as its lead's (or Standard pane's) opening prompt, and the
+flagless crew get the reply and usage rules inside each task.
 """
 
 import copy
@@ -44,6 +46,7 @@ import time
 import agent_picker as ap
 import grokbot_where
 import handoff
+import hidden_briefs
 import model_catalog
 import provider_defaults
 import preferences
@@ -390,6 +393,12 @@ def instruct(agent, args, brief, opening, shared):
             agent["argv"] += ["-c", "mcp_servers.iMCP.enabled=false"]  # see CLAUDE_SETTINGS
     elif name == "Grok Bot":
         agent["argv"] += ["--append-system-prompt", brief]
+    elif opening and hidden_briefs.supported(name, brief=brief):
+        # No system prompt flag, but a folder the CLI reads keeps the brief out of sight.
+        agent["argv"] += hidden_briefs.attach(name, brief)
+        if args and all(not arg.startswith("-") for arg in args):
+            request = " ".join(args)
+            args = ["-i", request] if name == "Antigravity" else [request]
     elif opening:
         # No system prompt flag: the agent reads its brief as the opening prompt.
         if context and args and all(not arg.startswith("-") for arg in args):

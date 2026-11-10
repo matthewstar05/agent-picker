@@ -9,6 +9,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 import herdr_agent_context as context
+import hidden_briefs
 import model_catalog
 import settings
 import team
@@ -25,6 +26,10 @@ class HerdrAgentContextTests(unittest.TestCase):
             "HERDR_TAB_ID": "tab-a",
             "HERDR_PANE_ID": "pane-2",
         }
+        for root, folder in (("_state_root", "briefs"), ("_temp_root", "temp-briefs")):
+            hidden = patch.object(hidden_briefs, root, return_value=self.state / folder)
+            hidden.start()
+            self.addCleanup(hidden.stop)
 
     def save(self, entry, key="default|tab-a"):
         (self.state / "herdr-ai-tabs.json").write_text(json.dumps({key: entry}), encoding="utf-8")
@@ -120,6 +125,11 @@ class HerdrAgentContextTests(unittest.TestCase):
                 original = profiles[name]
                 prepared, tail = team.prepare(context.annotate(original), args)
                 content = " ".join(prepared["argv"] + tail)
+                for flag in ("--add-dir", "--plugin-dir"):   # a brief kept out of the transcript
+                    if flag in prepared["argv"]:
+                        folder = Path(prepared["argv"][prepared["argv"].index(flag) + 1])
+                        content += (folder / hidden_briefs.MARKER).read_text(encoding="utf-8")
+                        self.assertNotIn("agent 2 = crew-b", " ".join(tail), name)
                 self.assertIn("agent 2 = crew-b", content, name)
                 self.assertEqual(original.get("_herdr_context"), None, name)
             lead, tail = team.prepare(context.annotate(profiles["Claude"]),

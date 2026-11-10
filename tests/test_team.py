@@ -14,6 +14,7 @@ import model_catalog
 import provider_defaults
 import settings
 import team
+import hidden_briefs
 
 TEAM = ("Claude", "Codex", "Antigravity", "Cursor", "Kiro")
 
@@ -32,6 +33,16 @@ class TeamTests(unittest.TestCase):
         rows = patch.object(model_catalog, "load_rows", return_value=[])
         rows.start()
         self.addCleanup(rows.stop)
+        briefs = tempfile.TemporaryDirectory()
+        self.addCleanup(briefs.cleanup)
+        self.briefs = Path(briefs.name)
+        for root, folder in (("_state_root", "briefs"), ("_temp_root", "temp-briefs")):
+            hidden = patch.object(hidden_briefs, root, return_value=self.briefs / folder)
+            hidden.start()
+            self.addCleanup(hidden.stop)
+
+    def hidden_brief(self, argv, flag):
+        return (Path(argv[argv.index(flag) + 1]) / hidden_briefs.MARKER).read_text(encoding="utf-8")
 
     def prepare(self, name, role, panes):
         agent = self.agents[name]
@@ -260,13 +271,19 @@ class TeamTests(unittest.TestCase):
                 self.assertEqual(json.load(f), {"deniedMcpServers": [{"serverName": "iMCP"}]}, role)
 
     def test_flagless_lead_gets_opening_prompt_last(self):
-        for name in ("Kiro", "Cursor"):
-            prepared, args = self.prepare(name, "--picker-lead", "w:p2,w:p3")
-            self.assertEqual(args[0], "--extra")
-            self.assertEqual(len(args), 2, name)
-            self.assertIn("w:p2, w:p3", args[-1])
-            self.assertTrue(args[-1].endswith("Reply only: ready."), name)
-            self.assertFalse(any("herdr team" in a for a in prepared["argv"]), name)
+        prepared, args = self.prepare("Kiro", "--picker-lead", "w:p2,w:p3")
+        self.assertEqual(args[0], "--extra")
+        self.assertEqual(len(args), 2)
+        self.assertIn("w:p2, w:p3", args[-1])
+        self.assertTrue(args[-1].endswith("Reply only: ready."))
+        self.assertFalse(any("herdr team" in a for a in prepared["argv"]))
+
+    def test_cursor_lead_reads_its_brief_from_a_plugin_not_the_transcript(self):
+        prepared, args = self.prepare("Cursor", "--picker-lead", "w:p2,w:p3")
+        self.assertEqual(args, ["--extra"])
+        brief = self.hidden_brief(prepared["argv"], "--plugin-dir")
+        self.assertIn("w:p2, w:p3", brief)
+        self.assertNotIn("Reply only: ready", brief)
 
     def test_gemini_never_leads_and_every_lead_is_sol_or_opus(self):
         with self.assertRaisesRegex(ValueError, "no team lead"):
@@ -289,11 +306,26 @@ class TeamTests(unittest.TestCase):
 
     @patch.object(team.handoff, "enabled", return_value=True)
     def test_antigravity_solo_uses_interactive_flag(self, _):
-        _, args = team.prepare(self.agents["Antigravity"], ["--picker-solo", "--extra"])
+        with patch.object(hidden_briefs, "supported", return_value=False):
+            _, args = team.prepare(self.agents["Antigravity"], ["--picker-solo", "--extra"])
         self.assertEqual(args[:2], ["--extra", "-i"])
         self.assertIn("herdr-ai", args[2])
         self.assertIn("--handoff", args[2])
         self.assertEqual(len(args), 3)
+
+    @patch.object(team.handoff, "enabled", return_value=True)
+    def test_antigravity_solo_reads_its_brief_from_an_added_rule_folder(self, _):
+        with patch.object(hidden_briefs, "_sorts_after", return_value=True):
+            agent, args = team.prepare(self.agents["Antigravity"], ["--picker-solo", "--extra"])
+            self.assertEqual(args, ["--extra"])
+            brief = self.hidden_brief(agent["argv"], "--add-dir")
+            self.assertIn("--handoff", brief)
+            rule = Path(agent["argv"][agent["argv"].index("--add-dir") + 1]) / ".agents/rules/herdr-brief.md"
+            self.assertTrue(rule.read_text(encoding="utf-8").startswith("---\ntrigger: always_on\n---\n"))
+            # A user request stays the interactive prompt, now without the brief in front.
+            agent, args = team.instruct(dict(self.agents["Antigravity"], argv=list(self.agents["Antigravity"]["argv"]),
+                                             _herdr_context="pane context"), ["fix", "it"], "", True, False)
+            self.assertEqual(args, ["-i", "fix it"])
 
     def test_flagless_crew_get_no_opening_prompt(self):
         for name in ("Kiro", "Cursor", "Antigravity"):

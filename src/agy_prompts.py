@@ -59,13 +59,48 @@ def install():
     return NAME
 
 
+BRIEF_NAME = "agent-picker-no-system-prompt-brief-v1"
+
+
+def install_brief(folder):
+    """The same profile carrying the Herdr brief of a hidden_briefs folder.
+
+    excludeDefaultComponents drops every rule, including the folder's own, but
+    keeps the profile body, so the brief goes there. agy resolves agents in an
+    --add-dir folder's .agents/agents by name. Each H1 opens a prompt section,
+    so headings inside the brief are demoted."""
+    import hidden_briefs
+    brief = (folder / hidden_briefs.MARKER).read_text(encoding="utf-8").strip()
+    lines = ["#" + line if line.startswith("# ") else line for line in brief.splitlines()]
+    text = (PROFILE.replace("name: " + NAME, "name: " + BRIEF_NAME, 1)
+            .replace("disabled\n", "disabled, plus the herdr-ai brief\n", 1)
+            + "# herdr_brief\n" + "\n".join(lines) + "\n")
+    path = folder / ".agents/agents" / (BRIEF_NAME + ".md")
+    if not (path.is_file() and path.read_text(encoding="utf-8") == text):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name("." + path.name + "." + str(os.getpid()))
+        temporary.write_text(text, encoding="utf-8")
+        os.replace(temporary, path)
+    return BRIEF_NAME
+
+
 def disable(agent, argv):
     """Apply only agy's layer. Preserve models, permissions and Herdr briefs."""
     if agent.get("native_gemini"):
         return list(argv)   # the scheduler's native gemini fallback has no agy profiles
+    import hidden_briefs
+    folder = hidden_briefs.folder(argv)
     selected = provider_defaults.option(argv, ("--agent",))
-    if selected and selected != NAME:
+    if selected and selected not in (NAME, BRIEF_NAME):
         raise ValueError("agy System Prompts Off cannot be combined with --agent " + selected +
                          "; turn System Prompts On to use a custom agent.")
-    name = install()
-    return list(argv) if selected else [argv[0], "--agent", name, *argv[1:]]
+    if folder is not None and (folder / hidden_briefs.MARKER).is_file():
+        name = install_brief(folder)
+    else:
+        name = install()
+    if selected == name:
+        return list(argv)
+    if selected:
+        raise ValueError("agy System Prompts Off found --agent " + selected + " where " + name +
+                         " belongs; relaunch from the picker.")
+    return [argv[0], "--agent", name, *argv[1:]]

@@ -108,7 +108,9 @@ class AgyPromptTests(unittest.TestCase):
                             encoding="utf-8")
             fake.chmod(0o755)
         env = dict(os.environ, AGENT_PICKER_STATE_HOME=str(self.home / "state"),
-                   AGENT_PICKER_NO_PRETRUST="1", HERDR_TAB_ID="test:tab", HERDR_ENV="0")
+                   AGENT_PICKER_NO_PRETRUST="1", HERDR_TAB_ID="test:tab", HERDR_ENV="0",
+                   TMPDIR=str(self.home / "tmp"), TEMP=str(self.home / "tmp"), TMP=str(self.home / "tmp"))
+        (self.home / "tmp").mkdir()
         for agy_on in (True, False):
             for herdr_on in (True, False):
                 with self.subTest(agy=agy_on, herdr=herdr_on):
@@ -122,7 +124,11 @@ class AgyPromptTests(unittest.TestCase):
                     self.assertEqual(result.returncode, 0, result.stderr)
                     argv = json.loads(captured.read_text())
                     self.assertEqual("--agent" in argv, not agy_on)
-                    self.assertEqual("-i" in argv, herdr_on)
+                    hidden = "--add-dir" in argv   # the brief as a rule folder, when agy's order allows
+                    self.assertEqual("-i" in argv or hidden, herdr_on)
+                    self.assertFalse("-i" in argv and hidden)
+                    if hidden and not agy_on:
+                        self.assertEqual(argv[argv.index("--agent") + 1], agy_prompts.BRIEF_NAME)
                     self.assertIn("gemini-3.8-flash-high", argv)
                     self.assertIn("--dangerously-skip-permissions", argv)
 
