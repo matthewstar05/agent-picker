@@ -98,9 +98,57 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(request.call_count, 1)
 
 
+class HibernationTests(unittest.TestCase):
+    def server(self, method, *failures):
+        calls, failures = [], list(failures)
+
+        def request(url, body, headers):
+            name = url.rsplit("/", 1)[-1]
+            calls.append(name)
+            if name == "EnsureSandBox":
+                return {"gatewayUrl": "https://box.cursorvm.com", "gatewayToken": "private"}
+            if name == method and failures:
+                raise failures.pop(0)
+            return {"agents": [{"id": "bot"}]} if name == "listAgents" else {"agent": {"id": "bot"}}
+        return calls, request
+
+    def asleep(self):
+        return gateway.GrokError("Grok Bot request failed (HTTP 417).", "unknown", transient=True, status=417)
+
+    def test_a_sleeping_pod_is_woken_at_once_for_a_read(self):
+        calls, request = self.server("listAgents", self.asleep())
+        sleeps = []
+        self.assertEqual(gateway.Gateway(token="account", request=request, sleep=sleeps.append).agents(), [{"id": "bot"}])
+        self.assertEqual(calls, ["EnsureSandBox", "listAgents", "EnsureSandBox", "listAgents"])
+        self.assertEqual(sleeps, [])
+
+    def test_a_conversation_created_while_the_pod_sleeps_is_asked_again_once(self):
+        calls, request = self.server("createAgent", self.asleep())
+        self.assertEqual(gateway.Gateway(token="account", request=request).create("CLI", "")["id"], "bot")
+        self.assertEqual(calls, ["EnsureSandBox", "createAgent", "EnsureSandBox", "createAgent"])
+
+    def test_a_write_still_asleep_after_waking_is_not_repeated_again(self):
+        calls, request = self.server("createAgent", self.asleep(), self.asleep())
+        with self.assertRaisesRegex(gateway.GrokError, "HTTP 417"):
+            gateway.Gateway(token="account", request=request).create("CLI", "")
+        self.assertEqual(calls.count("createAgent"), 2)
+
+    def test_other_write_failures_are_never_repeated(self):
+        calls, request = self.server("createAgent", gateway.GrokError("HTTP 502", "unknown", transient=True, status=502))
+        with self.assertRaises(gateway.GrokError):
+            gateway.Gateway(token="account", request=request).create("CLI", "")
+        self.assertEqual(calls.count("createAgent"), 1)
+
+    def test_post_reports_the_http_status(self):
+        with patch.object(gateway, "exchange", return_value=(417, b"")):
+            with self.assertRaises(gateway.GrokError) as caught:
+                gateway.post("https://box.cursorvm.com/api/listAgents", {}, {})
+        self.assertEqual(caught.exception.status, 417)
+
+
 class TransportTests(unittest.TestCase):
     def setUp(self):
-        self.pool_patch = patch.object(gateway, "_pool", threading.local())
+        self.pool_patch = patch.object(gateway, "_pool", {})
         self.pool_patch.start()
         self.addCleanup(self.pool_patch.stop)
         self.proxy_patch = patch.object(gateway, "proxied", return_value=False)
@@ -127,7 +175,7 @@ class TransportTests(unittest.TestCase):
         for method, retries in (("getAgentTranscriptTail", True), ("SendGrokBotUserMessage", False),
                                 ("ResolveGrokBotLocalToolPermission", False), ("InterruptGrokBotAgentRun", False)):
             with self.subTest(method=method):
-                gateway._pool.connections = {}
+                gateway._pool.clear()
                 old, new = self.connection(), self.connection()
                 with patch.object(gateway.http.client, "HTTPSConnection", side_effect=[old, new]) as constructor:
                     url = "https://api2.cursor.sh/api/" + method
@@ -140,6 +188,58 @@ class TransportTests(unittest.TestCase):
                             gateway.post(url, {}, {})
                     self.assertEqual(constructor.call_count, 2 if retries else 1)
                 old.close.assert_called()
+
+    def test_a_new_turn_thread_reuses_the_last_turns_connection(self):
+        connection = self.connection()
+        url = "https://box.cursorvm.com/api/getAgentTranscriptTail"
+        with patch.object(gateway.http.client, "HTTPSConnection", return_value=connection) as constructor:
+            for _ in range(2):
+                turn = threading.Thread(target=gateway.post, args=(url, {}, {}))
+                turn.start()
+                turn.join()
+        self.assertEqual(constructor.call_count, 1)
+        self.assertEqual(connection.request.call_count, 2)
+
+    def test_writes_skip_connections_idle_long_enough_to_be_dropped(self):
+        old, new = self.connection(), self.connection()
+        read = "https://api2.cursor.sh/aiserver.v1.GrokBotService/GetGrokBotSendStatus"
+        write = "https://api2.cursor.sh/aiserver.v1.GrokBotService/SendGrokBotUserMessage"
+        with patch.object(gateway.http.client, "HTTPSConnection", side_effect=[old, new]) as constructor:
+            gateway.post(read, {}, {})
+            clock = gateway.time.monotonic() + gateway.KEEP_IDLE_WRITE + 1
+            with patch.object(gateway.time, "monotonic", return_value=clock):
+                gateway.post(write, {}, {})
+        self.assertEqual(constructor.call_count, 2)
+        old.close.assert_called()
+        self.assertEqual(old.request.call_count, 1)
+        self.assertEqual(new.request.call_count, 1)
+
+    def test_reads_reuse_a_connection_idle_under_a_minute(self):
+        connection = self.connection()
+        url = "https://box.cursorvm.com/api/listAgents"
+        with patch.object(gateway.http.client, "HTTPSConnection", return_value=connection) as constructor:
+            gateway.post(url, {}, {})
+            with patch.object(gateway.time, "monotonic", return_value=gateway.time.monotonic() + gateway.KEEP_IDLE - 5):
+                gateway.post(url, {}, {})
+        self.assertEqual(constructor.call_count, 1)
+
+    def test_pool_keeps_a_bounded_number_of_idle_connections(self):
+        connections = [self.connection() for _ in range(gateway.POOL_SIZE + 2)]
+        for connection in connections:
+            gateway.checkin(("box.cursorvm.com", 443), connection)
+        self.assertEqual(len(gateway._pool[("box.cursorvm.com", 443)]), gateway.POOL_SIZE)
+        connections[0].close.assert_called()
+        connections[-1].close.assert_not_called()
+
+    def test_prime_opens_the_gateway_connection_without_a_request(self):
+        connection = self.connection()
+        with patch.object(gateway.http.client, "HTTPSConnection", return_value=connection) as constructor:
+            gateway.prime("https://box.cursorvm.com")
+            gateway.prime("https://evil.test")
+            gateway.post("https://box.cursorvm.com/api/listAgents", {}, {})
+        constructor.assert_called_once()
+        connection.connect.assert_called_once()
+        self.assertEqual(connection.request.call_count, 1)
 
     def test_transport_rejects_untrusted_hosts_before_opening_connection(self):
         with patch.object(gateway.http.client, "HTTPSConnection") as constructor:

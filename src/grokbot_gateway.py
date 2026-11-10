@@ -31,16 +31,19 @@ REFUSED = re.compile(r"may not make this request", re.I)
 
 
 class GrokError(RuntimeError):
-    def __init__(self, message, delivery=None, transient=False):
+    def __init__(self, message, delivery=None, transient=False, status=None):
         super().__init__(message)
         self.delivery = delivery
         self.transient = transient   # a gateway failure that a read can safely retry
+        self.status = status         # the HTTP status, when the server answered with one
 
 
 # Read-only gateway methods: repeating one changes nothing, so a cold or
 # restarting sandbox pod's 417/5xx is retried instead of ending the turn.
 READS = ("listAgents", "getAgentTranscriptTail", "getAgentThread")
 RETRY_DELAYS = (1, 2, 4)
+# The gateway's answer while the sandbox pod sleeps (the desktop app's pod_hibernated).
+HIBERNATED = 417
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -95,10 +98,14 @@ def cursor_token():
 # connection turns out to have been closed by the server while it sat idle.
 IDEMPOTENT = {"listAgents", "getAgentTranscriptTail", "getAgentThread", "getHostSettings", "EnsureSandBox",
               "ListSandMachines", "GetFilteredUsageEvents", "GetGrokBotSendStatus"}
-# One persistent HTTPS connection per host and thread. A new TLS handshake to the
-# sandbox gateway costs 100 to 300 ms, and a running turn reads it every poll.
-IDLE_REUSE = 4      # seconds; Node servers drop an idle keep-alive connection after 5
-_pool = threading.local()
+# Idle HTTPS connections, shared by every thread: the interactive CLI runs each turn
+# on a new thread, and a new TLS handshake costs 100 to 300 ms per host. Both Cursor
+# hosts kept an idle connection open for over a minute when measured (November 2026).
+KEEP_IDLE = 55          # seconds an idle connection serves a request that is safe to repeat
+KEEP_IDLE_WRITE = 30    # and a write, which is never resent after a connection drops
+POOL_SIZE = 4           # idle connections kept per host
+_pool = {}
+_pool_lock = threading.Lock()
 _tls = []
 
 
@@ -129,16 +136,14 @@ def exchange(url, data, headers, timeout):
         except urllib.error.HTTPError as exc:
             return exc.code, exc.read(MAX_BODY + 1) if exc.fp else b""
     key = (parts.hostname, parts.port or 443)
-    pool = getattr(_pool, "connections", None)
-    if pool is None:
-        pool = _pool.connections = {}
     method = parts.path.rsplit("/", 1)[-1]
+    safe = method in IDEMPOTENT
     for attempt in (0, 1):
-        held = pool.pop(key, None)
-        reused = bool(held and time.monotonic() - held[1] < IDLE_REUSE)
-        if held and not reused:
-            held[0].close()
-        connection = held[0] if reused else http.client.HTTPSConnection(key[0], key[1], timeout=timeout, context=tls())
+        # A retry after a dropped connection always opens a fresh one.
+        connection = checkout(key, KEEP_IDLE if safe else KEEP_IDLE_WRITE) if attempt == 0 else None
+        reused = connection is not None
+        if not reused:
+            connection = http.client.HTTPSConnection(key[0], key[1], timeout=timeout, context=tls())
         connection.timeout = timeout
         if connection.sock:
             connection.sock.settimeout(timeout)
@@ -149,7 +154,7 @@ def exchange(url, data, headers, timeout):
         except (http.client.RemoteDisconnected, ConnectionResetError, BrokenPipeError):
             connection.close()
             # The server closed a kept-alive connection; resend only what is safe to repeat.
-            if reused and attempt == 0 and method in IDEMPOTENT:
+            if reused and attempt == 0 and safe:
                 continue
             raise
         except BaseException:
@@ -158,9 +163,51 @@ def exchange(url, data, headers, timeout):
         if len(body) > MAX_BODY or response.will_close or not response.isclosed():
             connection.close()
         else:
-            pool[key] = (connection, time.monotonic())
+            checkin(key, connection)
         return response.status, body
     raise ConnectionResetError()
+
+
+def checkout(key, limit):
+    """The most recently used idle connection to key, if it has been idle under limit seconds."""
+    stale = []
+    with _pool_lock:
+        idle = _pool.get(key) or []
+        found = None
+        while idle and found is None:
+            connection, used = idle.pop()
+            if time.monotonic() - used < limit:
+                found = connection
+            else:
+                stale.append(connection)
+                stale += [c for c, _ in idle]   # the rest are older still
+                idle.clear()
+    for connection in stale:
+        connection.close()
+    return found
+
+
+def checkin(key, connection):
+    with _pool_lock:
+        idle = _pool.setdefault(key, [])
+        idle.append((connection, time.monotonic()))
+        extra = idle[:-POOL_SIZE]
+        del idle[:-POOL_SIZE]
+    for old, _ in extra:
+        old.close()
+
+
+def prime(url, timeout=10):
+    """Open the TLS connection to url ahead of its first request (no request is sent)."""
+    try:
+        parts = urllib.parse.urlsplit(allowed_url(url, gateway=True))
+        if proxied(parts.hostname):
+            return
+        connection = http.client.HTTPSConnection(parts.hostname, parts.port or 443, timeout=timeout, context=tls())
+        connection.connect()
+    except (GrokError, OSError, http.client.HTTPException):
+        return
+    checkin((parts.hostname, parts.port or 443), connection)
 
 
 def post(url, body, headers, timeout=30):
@@ -194,13 +241,13 @@ CONNECT_CODES = {"resource_exhausted": "Grok Bot usage or rate limit reached",
 def failure(status, raw):
     detail = refusal(raw)
     if detail:
-        raise GrokError(f"Grok Bot refused the request (HTTP {status}): {detail} Nothing was sent.", "rejected")
+        raise GrokError(f"Grok Bot refused the request (HTTP {status}): {detail} Nothing was sent.", "rejected", status=status)
     code = connect_code(raw)
     # Do not echo a URL, token, account export, or upstream response body.
     label = CONNECT_CODES.get(code) or ("Sign in to Cursor again" if status in (401, 403) else "Grok Bot request failed")
     raise GrokError(f"{label} (HTTP {status}" + (f", {code}" if code else "") + ").",
                     "rejected" if status < 500 and status not in (408, 417) else "unknown",
-                    transient=status in (408, 417, 500, 502, 503, 504))
+                    transient=status in (408, 417, 500, 502, 503, 504), status=status)
 
 
 def error_body(raw):
@@ -242,6 +289,8 @@ class Gateway:
         def run():
             try:
                 self.connect()
+                if self.request is post:
+                    prime(self.session[0])   # the turn's first gateway read skips the TLS handshake
             except Exception:
                 pass
         threading.Thread(target=run, name="grokbot-warm", daemon=True).start()
@@ -291,12 +340,19 @@ class Gateway:
                         dict(headers, Authorization="Bearer " + data["gatewayToken"]))
 
     def call(self, method, body=None):
+        woke = False
         for attempt in range(len(RETRY_DELAYS) + 1):
             try:
                 self.connect()
                 return self.request(self.session[0] + "/api/" + method, body or {}, self.session[1])
             except GrokError as exc:
-                # Writes (sendPrompt, createAgent, approvals) are never repeated here:
+                if exc.status == HIBERNATED and not woke:
+                    # The pod went to sleep (after about 4 idle minutes) and turned the request
+                    # away unprocessed, so even a write may be asked again once, as the desktop
+                    # app does. EnsureSandBox wakes it; asking at once skips the read waits.
+                    woke, self.session = True, None
+                    continue
+                # Other writes (createAgent, host settings) are never repeated here:
                 # their callers decide from the delivery state instead.
                 if method not in READS or not exc.transient or attempt == len(RETRY_DELAYS):
                     raise
