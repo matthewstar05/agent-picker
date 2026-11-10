@@ -24,6 +24,25 @@ def state_dir():
     return Path(base) / "agent-picker"
 
 
+def _shift_reader():
+    """A local modifier-state query for terminals that omit bare modifier events."""
+    if os.environ.get("SSH_CONNECTION") or os.environ.get("SSH_TTY"):
+        return None
+    import ctypes
+    try:
+        if sys.platform == "darwin":
+            flags = ctypes.CDLL("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics").CGEventSourceFlagsState
+            flags.argtypes, flags.restype = [ctypes.c_int], ctypes.c_uint64
+            return lambda: bool(flags(0) & (1 << 17))  # combined session state, maskShift
+        if sys.platform == "win32":
+            state = ctypes.WinDLL("user32", use_last_error=True).GetAsyncKeyState
+            state.argtypes, state.restype = [ctypes.c_int], ctypes.c_short
+            return lambda: bool(state(0x10) & 0x8000)  # VK_SHIFT, currently down
+    except (OSError, AttributeError):
+        pass
+    return None
+
+
 class Terminal:
     # Opt-in decoding for screens that need more than menu keys (the file
     # browser): Shift+Enter, the Shift key itself, shifted symbols, focus and
@@ -35,6 +54,20 @@ class Terminal:
 
     def __init__(self, raw=False):
         self.raw = raw
+
+    def shift_pressed(self):
+        """Current local Shift state, or None when only terminal reports are available."""
+        if not self.extended:
+            return None
+        if not hasattr(self, "_shift_reader"):
+            self._shift_reader = _shift_reader()
+        if self._shift_reader is None:
+            return None
+        try:
+            return self._shift_reader()
+        except OSError:
+            self._shift_reader = None
+            return None
 
     def __enter__(self):
         self.fd = sys.stdin.fileno()

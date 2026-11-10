@@ -954,6 +954,7 @@ class App:
         self.focused = True
         self.bare_shift = False        # the terminal reports Shift on its own, so its release is seen
         self.shift_until = 0.0
+        self.polling_shift = False
         self.boost = 0.0
         self.last_frame = time.monotonic()
         self.ncols, self.hits, self.page = 1, [], 1
@@ -998,6 +999,13 @@ class App:
         return self.focused or preferences.get(ANIMATE.key) == "always"
 
     def shift_held(self):
+        if not self.focused:
+            return False
+        reader = getattr(self.terminal, "shift_pressed", None)
+        actual = reader() if reader else None
+        self.polling_shift = actual is not None
+        if actual is not None:
+            return actual
         held = bool(getattr(self.terminal, "shift", False))
         if self.bare_shift:
             return held
@@ -1958,6 +1966,10 @@ class App:
             return None
         if key in ("focus-in", "focus-out"):
             self.focused = key == "focus-in"
+            if not self.focused:
+                self.terminal.shift = False
+                self.shift_until = 0.0
+                self.polling_shift = False
             self.static = None
             return None
         if getattr(self.terminal, "shift", False):
@@ -2150,6 +2162,8 @@ class App:
                 or (self.preview and self.preview.loading) or self.boost not in (0.0, 1.0) or self.typing)
         if self.animating() or busy:
             return 1 / 30
+        if self.focused and self.polling_shift:
+            return 0.05  # bare Shift may arrive without a terminal key event
         return 1.0
 
     def run(self):
