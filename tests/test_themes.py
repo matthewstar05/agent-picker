@@ -14,7 +14,7 @@ import themes
 import usage_panel as panel
 
 BUILTIN_NAMES = ["brand", "rainbow", "rose", "ember", "sunset", "latte", "solar",
-                 "matrix", "aurora", "ocean", "glacier", "galaxy", "vapor", "sakura", "mono"]
+                 "flora", "matrix", "aurora", "ocean", "glacier", "galaxy", "vapor", "sakura", "mono"]
 
 
 class ThemeTests(unittest.TestCase):
