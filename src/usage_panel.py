@@ -716,8 +716,9 @@ class View:
         style = {"gradient": stops, "glow": 1.0,
                  "color": ap.grad(theme, i / max(1, len(self.agents)) * 0.85)}
         if THEMES[self.theme]["name"] == "rose":
-            # Give limit fills the titles' soft, readable pastel treatment.
-            style["bar_gradient"] = [themes.label_color(mix(c, WHITE, 0.2)) for c in stops]
+            # Soften the darker fills while keeping Rose's red fully saturated.
+            style["bar_gradient"] = [themes.label_color(mix(c, WHITE, 0.2))
+                                     for c in stops[:-1]] + [stops[-1]]
         return style
 
     def frame_style(self):

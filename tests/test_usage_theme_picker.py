@@ -112,6 +112,18 @@ class UsageThemePickerTests(unittest.TestCase):
         panel.put_name(line, agent, 0)
         self.assertEqual(line.cells[0][1], themes.label_color(agent['color']))
 
+    def test_rose_usage_bar_renders_its_vivid_red_without_pastel_lightening(self):
+        preferences.put(panel.THEME.key, 'rose')
+        preferences.put(panel.BARS.key, 'used')
+        line = panel.Line()
+        panel.draw_bar(line, {'label': '5h', 'pct': 100, 'resets': None}, 12,
+                       self.view.style(0), 0, False, False, 0, 2 / 3)
+        self.assertEqual(line.cells[0][:2], ('▰', themes.stops('rose')[-1]))
+        red = line.cells[0][1]
+        self.assertGreaterEqual(red[0], 250)
+        self.assertLess(red[1], 40)
+        self.assertLess(red[2], 60)
+
 
 if __name__ == '__main__':
     unittest.main()
