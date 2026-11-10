@@ -89,6 +89,26 @@ class Base(unittest.TestCase):
 
 
 class TextTests(unittest.TestCase):
+    def test_github_name_has_a_white_star_without_changing_the_name(self):
+        entry = fsb.Entry("agent-picker", Path("/agent-picker"), is_dir=True, kind="folder-github")
+        cells = fsb.filename_cells(entry, 20, fsb.TEXT)[0]
+        self.assertEqual("".join(c[0] for c in cells), "★ agent-picker")
+        self.assertEqual(cells[0][1], fsb.WHITE)
+        self.assertTrue(all(c[1] == fsb.TEXT for c in cells[2:]))
+        self.assertEqual(entry.name, "agent-picker")
+        entry.kind = "folder-git"
+        self.assertEqual("".join(c[0] for c in fsb.filename_cells(entry, 20, fsb.TEXT)[0]), "agent-picker")
+
+    def test_marked_names_fit_and_keep_the_marker_on_the_first_name_line(self):
+        entry = fsb.Entry("日本語 project with a long name", Path("/repo"), kind="folder-github")
+        for width in range(1, 24):
+            for count in (1, 2):
+                lines = fsb.filename_cells(entry, width, fsb.TEXT, lines=count)
+                self.assertEqual(lines[0][0][:2], ("★", fsb.WHITE))
+                self.assertTrue(all(len(line) <= width for line in lines))
+                if width > 4:
+                    self.assertTrue(any(c[0].strip() for c in lines[0][2:]))
+
     def test_middle_keeps_the_extension_and_the_width(self):
         text = fsb.middle("a_really_long_file_name_for_testing.json", 16)
         self.assertEqual(fsb.text_width(text), 16)
@@ -305,6 +325,16 @@ class NavigationTests(Base):
 
 
 class DrawingTests(Base):
+    def test_github_marker_is_present_in_icon_details_and_tiny_views(self):
+        for view, cols, rows in (("icons", 100, 12), ("details", 100, 12), ("icons", 18, 4)):
+            with self.subTest(view=view, cols=cols):
+                app = self.app(view=view)
+                app.entries[0].kind = "folder-github"
+                app.entries[1].kind = "folder-git"
+                shown = "\n".join(self.draw(app, cols, rows))
+                self.assertIn("★ alpha", shown)
+                self.assertNotIn("★ beta", shown)
+
     def test_every_pane_size_draws_inside_its_bounds(self):
         for view in ("icons", "details"):
             app = self.app(view=view)

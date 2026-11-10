@@ -17,7 +17,6 @@ from pathlib import Path
 
 WHITE, BLACK = (255, 255, 255), (0, 0, 0)
 FOLDER_BLUE = (92, 172, 238)      # the macOS folder blue, softened for a dark screen
-STRIPE = (246, 247, 250)         # the white band across a GitHub repository's folder
 PAGE = (232, 230, 224)            # off-white paper, easier on the eyes than pure white
 PAGE_EDGE = (206, 204, 198)
 FOLD = (172, 171, 166)
@@ -457,28 +456,23 @@ _EMBLEMS = {
     "folder-movies": ("........", "...e....", "...ee...", "...eee..", "...ee...", "...e...."),
     "folder-library": ("........", "........", ".eeeeee.", "..e..e..", "..e..e..", ".eeeeee."),
     "folder-public": ("........", "........", "...ee...", "........", "..eeee..", "..eeee.."),
-    # A GitHub repository: a white band across the folder, one pixel row under its top edge.
-    "folder-github": ("........", "........", "wwwwwwww", "........", "........", "........"),
 }
 
 
 def _folder_colors(base):
     return {"t": _mix(base, WHITE, 0.30), "1": _mix(base, WHITE, 0.14), "2": _mix(base, WHITE, 0.05),
             "3": base, "4": _mix(base, BLACK, 0.07), "5": _mix(base, BLACK, 0.15),
-            "e": _mix(base, BLACK, 0.40), "w": STRIPE}
+            "e": _mix(base, BLACK, 0.40)}
 
 
 def _folder(kind, size, accent):
     base = accent or FOLDER_BLUE
     if size == "mini":
-        # Two cells have no room for the band; the Kind column names a GitHub repository.
         return [[("▙", base, None, False), ("▄", base, None, False)]]
     grid = _FOLDER[size]
     if kind in _EMBLEMS:
         if size == "large":
             grid = _overlay(grid, _EMBLEMS[kind])
-        elif kind == "folder-github":   # the same band, on the small folder's third row
-            grid = _overlay(grid, ("....", "....", "wwww", "...."))
         else:   # too small to tell emblems apart: a mark says "special"
             grid = _overlay(grid, ("....", "....", ".ee.", "...."))
     return _render(grid, _folder_colors(base))

@@ -841,6 +841,16 @@ def tile_name(name, width, lines):
     return [head.rstrip(" "), middle(rest, width)]
 
 
+def filename_cells(entry, width, color, bold=False, lines=1):
+    """A GitHub marker belongs to the label, leaving the folder icon plain."""
+    width = max(0, width)
+    marker = cells_of("★ ", WHITE, None, bold)[:width] if entry.kind == "folder-github" else []
+    room = width - len(marker)
+    names = tile_name(entry.name, room, lines) if room else [""]
+    return [(marker if i == 0 else []) + cells_of(name, color, None, bold)
+            for i, name in enumerate(names)]
+
+
 class Region:
     """A rectangle of content drawn fresh every frame: the selected item."""
 
@@ -1173,17 +1183,17 @@ class App:
             icon = [[dim_cell(c, 0.45) if c[1] or c[2] else c for c in row] for row in icon]
         if g.inline:
             put(inner[0], 1, icon[0])
-            put(inner[0], 4, cells_of(middle(clean(entry.name), iw - 5), name_color, None, bool(lit)))
+            put(inner[0], 4, filename_cells(entry, iw - 5, name_color, bool(lit))[0])
         else:
             x = (iw - len(icon[0])) // 2
             for y, row in enumerate(icon):
                 put(inner[y], x, row)
-            names = tile_name(entry.name, iw, g.lines)
+            names = filename_cells(entry, iw, name_color, bool(lit), g.lines)
             # A one-line name takes the last row, leaving a row between it and the icon,
             # so the icon and name sit evenly inside the highlight's ring.
             first = len(icon) + g.lines - len(names)
             for k, line in enumerate(names):
-                put(inner[first + k], (iw - text_width(line)) // 2, cells_of(line, name_color, None, bool(lit)))
+                put(inner[first + k], (iw - len(line)) // 2, line)
         if lit is None:
             if not side:
                 return inner
@@ -1230,7 +1240,7 @@ class App:
             except Exception:
                 pass
             main = WHITE if selected else SOFT if entry.hidden else TEXT
-            put(cells, 5, cells_of(middle(clean(entry.name), name_w), main, None, selected))
+            put(cells, 5, filename_cells(entry, name_w, main, selected)[0])
             side = TEXT if selected else SOFT
             for key, at, width in columns[1:]:
                 if key == "date":
@@ -1423,8 +1433,10 @@ class App:
         for i in range(first, min(n, first + rows)):
             e = self.entries[i]
             cells = [BLANK] * cols
-            put(cells, 0, cells_of(("❯ " if i == self.index else "  ") + fit(clean(e.name), cols - 2),
+            put(cells, 0, cells_of("❯ " if i == self.index else "  ",
                                    WHITE if i == self.index else TEXT, None, i == self.index))
+            put(cells, 2, filename_cells(e, cols - 2, WHITE if i == self.index else TEXT,
+                                         i == self.index)[0])
             if i == self.index:
                 light([cells], self.lit_for(e, t))
             self.hits.append((1, len(out) + 1, cols, 1, i))

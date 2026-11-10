@@ -93,18 +93,12 @@ class IconTests(unittest.TestCase):
         self.assertNotEqual(plain, tinted)
         self.assertNotEqual(fs_icons.icon("python", "large"), fs_icons.icon("python", "large", link=True))
 
-    def test_github_repositories_carry_a_white_band_and_other_repositories_none(self):
-        # The band is the third pixel row: the top half of the middle cell row, every column.
-        for size in ("large", "small"):
-            band = fs_icons.icon("folder-github", size)[1]
-            self.assertTrue(all(cell[0] == "▀" and cell[1] == fs_icons.STRIPE for cell in band), size)
-            plain = fs_icons.icon("folder", size)
-            self.assertEqual(fs_icons.icon("folder-github", size)[0], plain[0], size)   # tab and top edge unchanged
-        tinted = fs_icons.icon("folder-github", "large", accent=(240, 130, 175))
-        self.assertTrue(all(cell[1] == fs_icons.STRIPE for cell in tinted[1]))
-        self.assertEqual(fs_icons.icon("folder-github", "mini"), fs_icons.icon("folder", "mini"))
+    def test_repositories_use_plain_folder_icons_without_a_band(self):
         for size in fs_icons.SIZES:
-            self.assertEqual(fs_icons.icon("folder-git", size), fs_icons.icon("folder", size), size)
+            for kind in ("folder-git", "folder-github"):
+                for accent in (None, (240, 130, 175)):
+                    self.assertEqual(fs_icons.icon(kind, size, accent=accent),
+                                     fs_icons.icon("folder", size, accent=accent), (kind, size))
 
     def test_gradients_and_colors_are_rgb(self):
         for kind in ("folder", "python", "image", "file"):
