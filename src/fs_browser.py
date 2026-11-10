@@ -1115,11 +1115,20 @@ class App:
 
     def entry_icon(self, entry, size, accent):
         gradient = None
-        if self.theme() == "rainbow" and (entry.kind == "home" or entry.kind.startswith("folder")):
-            # The same pastel stops as Rainbow usage bars, one adjoining pair per folder.
-            palette = next(a["bar_gradient"] for a in ap.AGENTS if a["name"] == "Antigravity")
+        if entry.kind == "home" or entry.kind.startswith("folder"):
+            stops = themes.stops(self.theme())
+            if stops == "rainbow":
+                # Keep Rainbow's existing usage-bar pastel colors exactly.
+                palette = next(a["bar_gradient"] for a in ap.AGENTS if a["name"] == "Antigravity")
+            elif stops is None or len(stops) == 1:
+                # Brand and single-color themes get a gentle light-to-dark diagonal.
+                base = fs_icons.color(entry.kind) if stops is None else stops[0]
+                palette = [ap.mix(base, WHITE, 0.45), ap.mix(base, WHITE, 0.20)]
+            else:
+                palette = [ap.mix(color, WHITE, 0.35) for color in stops]
             index = self.folder_ordinals.get(entry.path, 0) % len(palette)
-            gradient = (palette[index], palette[(index + 1) % len(palette)])
+            gradient = (palette[0], palette[1]) if stops is None or len(stops) == 1 else (
+                palette[index], palette[(index + 1) % len(palette)])
         return fs_icons.icon(entry.kind, size, accent, entry.is_link, folder_gradient=gradient)
 
     def content(self, W, H, t):
