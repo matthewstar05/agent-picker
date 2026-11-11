@@ -8,6 +8,7 @@ from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
+import bloom
 import herdr_team_status as status
 import herdr_sidebar as sidebar
 
@@ -195,6 +196,7 @@ zoom = "prefix+z"
              patch.object(sidebar, 'endpoint', return_value='fake.sock'), \
              patch.object(sidebar, 'request', return_value={'snapshot': {'agents': live, 'workspaces': workspaces}}) as call, \
              patch.object(sidebar, 'sync'), \
+             patch.object(bloom, 'sync'), \
              patch.object(status, 'install_indicators'), \
              patch.object(status, 'publish') as publish, \
              patch.object(status, 'publish_spaces') as publish_spaces, \

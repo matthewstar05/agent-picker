@@ -51,13 +51,15 @@ GROUPS = {
 SKY = ["#0f0e19", "#14121f", "#1b1a2e", "#232640", "#2d3358", "#4a5484"]
 
 # Terminal and Herdr colors. The ones in TINTED lean toward the theme with the sky.
+# The overlays are the sidebar's quiet text; they are kept light enough to read
+# with nothing solid behind them, since the sidebar is see-through.
 GHOSTTY = {"background": "#14121f", "foreground": "#ece4f5", "cursor-color": ACCENT, "cursor-text": "#14121f",
            "selection-background": "#3a3260", "selection-foreground": "#fbf6ff"}
 PALETTE = ["#1b1a2e", "#f0788c", "#8fc27a", "#ffd98a", "#7fa8f0", "#c9a0f0", "#8ff0d2", "#ece4f5",
-           "#5a567a", "#ff9aa8", "#b4e09a", "#ffe6ad", "#a4c2ff", "#dcbcff", "#b6f7e3", "#fbf6ff"]
+           "#807ba6", "#ff9aa8", "#b4e09a", "#ffe6ad", "#a4c2ff", "#dcbcff", "#b6f7e3", "#fbf6ff"]
 HERDR = {"panel_bg": "reset", "sidebar_bg": "reset", "active_row_bg": "#2a2440", "selection_bg": "#3a3260",
-         "surface0": "#1b1a2e", "surface1": "#2d3358", "surface_dim": "#14121f", "overlay0": "#5a567a",
-         "overlay1": "#7d78a3", "text": "#ece4f5", "subtext0": "#b9afd0", "accent": ACCENT,
+         "surface0": "#1b1a2e", "surface1": "#2d3358", "surface_dim": "#14121f", "overlay0": "#8f8ab3",
+         "overlay1": "#aca6cf", "text": "#ece4f5", "subtext0": "#cfc6e4", "accent": ACCENT,
          "mauve": "#c9a0f0", "green": "#8fc27a", "yellow": "#ffd98a", "red": "#f0788c", "blue": "#7fa8f0",
          "teal": "#8ff0d2", "peach": "#ffb38a"}
 TINTED = {"background", "selection-background", "active_row_bg", "selection_bg", "surface0", "surface1",
@@ -89,9 +91,9 @@ SCENE = preferences.Setting(
     "bloom.scene", _SECTION, "Scene", scene_names() or ["elder-tree"], (scene_names() or ["elder-tree"])[0],
     hint="Which picture is drawn. PNG files in bloom/scenes are listed here.")
 DIM = preferences.Setting(
-    "bloom.dim", _SECTION, "Strength", [15, 25, 35, 45, 55, 70, 85, 100], 45,
-    names={n: f"{n}%" for n in (15, 25, 35, 45, 55, 70, 85, 100)},
-    hint="How strongly the picture shows through. Lower keeps text easier to read.")
+    "bloom.dim", _SECTION, "Strength", [0, 15, 25, 35, 45, 55, 70, 85, 100], 45,
+    names={0: "0% (colors only)", **{n: f"{n}%" for n in (15, 25, 35, 45, 55, 70, 85, 100)}},
+    hint="How strongly the picture shows through. 0% hides it and keeps the Bloom colors.")
 SIDE = preferences.Setting(
     "bloom.side", _SECTION, "Tree side", ["right", "left"], "right",
     hint="Left mirrors the picture so the tree stands by the sidebar.")
@@ -379,9 +381,10 @@ def ghostty_text(image, dim, mirror, colors, palette):
     lines = ["# Written by agent-picker (Settings, Bloom backdrop). Edits here are overwritten."]
     lines += [f"{key} = {value}" for key, value in colors.items()]
     lines += [f"palette = {i}={value}" for i, value in enumerate(palette)]
-    lines += [f"background-image = {image}", "background-image-fit = cover",
-              f"background-image-position = bottom-{'left' if mirror else 'right'}",
-              f"background-image-opacity = {dim / 100:.2f}"]
+    if image:
+        lines += [f"background-image = {image}", "background-image-fit = cover",
+                  f"background-image-position = bottom-{'left' if mirror else 'right'}",
+                  f"background-image-opacity = {dim / 100:.2f}"]
     return "\n".join(lines) + "\n"
 
 
@@ -502,7 +505,7 @@ def sync(call=None):
     if (signature == _applied() and active.exists() and wanted_herdr == herdr_text
             and include_line() in ghostty_before.splitlines()):
         return False
-    image = image_for(want)
+    image = image_for(want) if want["dim"] else None     # 0%: colors only, no picture
     write_text(active, ghostty_text(image, want["dim"], want["mirror"], colors, palette))
     included = with_include(ghostty_before)
     if included != ghostty_before:

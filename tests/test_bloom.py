@@ -172,6 +172,25 @@ class BloomTests(unittest.TestCase):
         self.assertIn("background-image-opacity = 0.25", self.active())
         self.assertEqual(self.image()[2][0][0], PINK)              # mirrored
 
+    def test_zero_strength_drops_the_picture_and_keeps_the_colors(self):
+        preferences.put(bloom.ENABLED.key, True)
+        preferences.put(bloom.DIM.key, 0)
+        self.assertTrue(bloom.sync(self.call))
+        self.assertNotIn("background-image", self.active())
+        self.assertIn("background = #14121f", self.active())
+        self.assertIn('[theme.custom]\npanel_bg = "reset"', self.herdr.read_text())
+        self.assertFalse((bloom.home() / "cache").exists())
+        preferences.put(bloom.DIM.key, 45)
+        self.assertTrue(bloom.sync(self.call))
+        self.assertIn("background-image-opacity = 0.45", self.active())
+
+    def test_sidebar_quiet_text_stays_readable_without_a_solid_background(self):
+        for stops in (None, themes.stops("ocean")):
+            ghostty, _, herdr = bloom.interface(stops, True)
+            floor = bloom.luma(bloom.rgb(ghostty["background"]))
+            for token in ("overlay0", "overlay1", "subtext0"):
+                self.assertGreater(bloom.luma(bloom.rgb(herdr[token])) - floor, 100, token)
+
     def test_your_own_theme_custom_block_is_left_alone(self):
         self.herdr.write_text(self.herdr.read_text() + '\n[theme.custom]\naccent = "#ff8800"\n', encoding="utf-8")
         before = self.herdr.read_text()
