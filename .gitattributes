@@ -6,3 +6,4 @@
 *.cmd text eol=crlf
 *.bat text eol=crlf
 *.command text eol=lf
+*.png binary

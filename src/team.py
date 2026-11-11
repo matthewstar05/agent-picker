@@ -566,7 +566,7 @@ def choose(settings_only=False):
     menu = preferences.Menu([preferences.register(s) for s in
                              (ap.VISIBILITY, *herdr_sidebar.SETTINGS, ap.BARS, ap.CURSOR_MODEL_BARS,
                               ap.CURSOR_GROK_TRANSIENT, handoff.AUTO, MODE,
-                              TERMINAL, ap.GROKBOT_WHERE)])
+                              TERMINAL, ap.GROKBOT_WHERE, *filter(None, [ap.bloom.register()]))])
     settings_open = settings_only
     models = None          # a provider's models screen (models_menu), while open
     confirming, choice = False, 0
@@ -607,6 +607,7 @@ def choose(settings_only=False):
                     return None
                 before = [preferences.get(s.key) for s in herdr_sidebar.SETTINGS]
                 closed = menu.handle(key) == "close"
+                ap.sync_bloom()
                 if [preferences.get(s.key) for s in herdr_sidebar.SETTINGS] != before:
                     try:
                         import herdr_ai

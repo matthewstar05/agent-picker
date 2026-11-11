@@ -246,8 +246,13 @@ def run():
                     seen_path.write_text(json.dumps(seen) + "\n", encoding="utf-8")
                 if returns:
                     returns.tick(snapshot)
-                install_indicators(call)
                 preferences._values = None
+                try:
+                    import bloom   # the backdrop follows its settings and the usage theme
+                    bloom.sync(call)
+                except Exception as exc:
+                    print(f"herdr-ai bloom: {exc}", file=sys.stderr, flush=True)
+                install_indicators(call)
                 for setting in sidebar.SETTINGS:
                     preferences.register(setting)
                 selected = tuple(preferences.get(s.key) for s in sidebar.SETTINGS)

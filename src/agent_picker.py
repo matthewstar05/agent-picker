@@ -31,6 +31,7 @@ if __name__ == "__main__":
     # import find this copy instead of loading a second one.
     sys.modules.setdefault("agent_picker", sys.modules[__name__])
 
+import bloom
 import grokbot_where
 import model_catalog
 import preferences
@@ -169,6 +170,7 @@ VISIBILITY = preferences.register(preferences.Page(
     "visibility", "General", "Visibility",
     hint="Which CLIs the agent selector lists and which providers get a usage card. ⏎ opens.",
     summary=visibility_summary))
+bloom.register()
 
 
 def shown_setting(agent):
@@ -1321,7 +1323,9 @@ def choose(screen=None, only=None):
             elif screen == "settings":
                 if key in ("\x03", "\x04"):
                     return None
-                if menu.handle(key) == "close":
+                closed = menu.handle(key) == "close"
+                sync_bloom()
+                if closed:
                     relist()
                     usage_panel.rescope()   # card settings may have changed
                     go(came_from)
@@ -1392,6 +1396,14 @@ def visible_len(text):
     return len(_ANSI.sub("", text))
 
 
+def sync_bloom():
+    """Apply a Bloom backdrop setting as soon as it changes; never break a screen over it."""
+    try:
+        bloom.sync()
+    except Exception:
+        pass
+
+
 def doctor():
     print(f"Checkout: {ROOT}")
     print(f"Local config: {config_path()}")
@@ -1400,6 +1412,7 @@ def doctor():
     print("Themes: " + ", ".join(f"{path}{'' if exists else ' (not created)'}" for path, exists in themes.sources()))
     for problem in themes.problems():
         print("  " + problem)
+    print("\n".join(bloom.status()))
     missing = []
     for agent in AGENTS:
         argv = resolve_argv(agent)
@@ -1479,6 +1492,8 @@ def main():
     if args[:1] == ["--picker-doctor"]:
         doctor()
         return 0
+    if args[:1] == ["--picker-bloom"]:
+        return bloom.command(args[1:])
     if args[:1] == ["--picker-catalog"]:
         catalog()
         return 0
@@ -1495,6 +1510,7 @@ def main():
         print("agent --picker-update                 fast-forward this Git checkout")
         print("agent --picker-doctor                 show paths and launch profiles")
         print("agent --picker-catalog                every known CLI, its colors, and whether it is installed")
+        print("agent --picker-bloom [on|off|toggle|status]  the pixel-art backdrop behind Herdr (Ghostty)")
         print("agent --picker-connect                provider install guides, sign-in, and checks")
         print("agent --picker-help                   show this help")
         print("usage                                 opens on the usage panel; u switches screens")
