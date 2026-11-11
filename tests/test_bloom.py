@@ -184,6 +184,28 @@ class BloomTests(unittest.TestCase):
         self.assertTrue(bloom.sync(self.call))
         self.assertIn("background-image-opacity = 0.45", self.active())
 
+    def test_herdr_colors_stay_and_follow_the_theme_while_the_backdrop_is_off(self):
+        before = self.herdr.read_text()
+        preferences.put(bloom.COLORS.key, True)
+        self.assertEqual(preferences.find("bloom").show(), "colors only")
+        self.assertTrue(bloom.sync(self.call))
+        self.assertNotIn("background-image", self.active())
+        self.assertIn(f'accent = "{bloom.ACCENT}"', self.herdr.read_text())
+        ocean = themes.stops("ocean")
+        with patch.object(themes, "stops", lambda name: ocean):
+            self.assertTrue(bloom.sync(self.call))
+            self.assertIn(f'accent = "{bloom.hexa(ocean[-1])}"', self.herdr.read_text())
+            preferences.put(bloom.ENABLED.key, True)
+            self.assertTrue(bloom.sync(self.call))
+            self.assertIn("background-image-opacity = 0.45", self.active())
+            preferences.put(bloom.ENABLED.key, False)
+            self.assertTrue(bloom.sync(self.call))
+            self.assertNotIn("background-image", self.active())
+        preferences.put(bloom.COLORS.key, False)
+        self.assertTrue(bloom.sync(self.call))
+        self.assertEqual(self.herdr.read_text(), before)
+        self.assertFalse(bloom.active_path().exists())
+
     def test_sidebar_quiet_text_stays_readable_without_a_solid_background(self):
         for stops in (None, themes.stops("ocean")):
             ghostty, _, herdr = bloom.interface(stops, True)

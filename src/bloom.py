@@ -75,7 +75,7 @@ def scene_names():
 
 def _summary(children):
     if not preferences.get(ENABLED.key):
-        return "off"
+        return "colors only" if preferences.get(COLORS.key) else "off"
     return f"on · {preferences.get(SCENE.key)}"
 
 
@@ -86,7 +86,10 @@ PAGE = preferences.Page(
     hint="A pixel-art backdrop behind Herdr in the Ghostty terminal. ⏎ opens.", summary=_summary)
 ENABLED = preferences.Setting(
     "bloom.enabled", _SECTION, "Backdrop", [False, True], False, names=_ON_OFF,
-    hint="Draws the scene behind every pane. Off restores your normal Herdr and Ghostty look.")
+    hint="Draws the scene behind every pane. Off restores your normal look, unless Herdr colors is on.")
+COLORS = preferences.Setting(
+    "bloom.colors", _SECTION, "Herdr colors", [False, True], False, names=_ON_OFF,
+    hint="Keeps the Bloom colors, following the usage theme, while the backdrop is off.")
 SCENE = preferences.Setting(
     "bloom.scene", _SECTION, "Scene", scene_names() or ["elder-tree"], (scene_names() or ["elder-tree"])[0],
     hint="Which picture is drawn. PNG files in bloom/scenes are listed here.")
@@ -107,7 +110,7 @@ FOLLOW = preferences.Setting(
 TINT = preferences.Setting(
     "bloom.tint", _SECTION, "Theme tint", [True, False], True, names=_ON_OFF,
     hint="The night sky and the terminal background lean toward the theme's first color.")
-SETTINGS = (ENABLED, SCENE, DIM, SIDE, SHIFT, FOLLOW, TINT)
+SETTINGS = (ENABLED, COLORS, SCENE, DIM, SIDE, SHIFT, FOLLOW, TINT)
 
 
 def register():
@@ -391,11 +394,13 @@ def ghostty_text(image, dim, mirror, colors, palette):
 # ---- applying ----
 
 def spec():
-    """What the settings ask for now, or None while the backdrop is off."""
+    """What the settings ask for now, or None while the backdrop and its colors
+    are both off. Colors alone are the backdrop at no strength."""
     if not SUPPORTED:
         return None
     register()
-    if not preferences.get(ENABLED.key):
+    picture = bool(preferences.get(ENABLED.key))
+    if not picture and not preferences.get(COLORS.key):
         return None
     names = scene_names()
     if not names:
@@ -407,7 +412,7 @@ def spec():
         themes.reload()
         stops = themes.stops(preferences.get("usage.theme") or "brand")
         stops = [list(stop) for stop in stops] if isinstance(stops, list) else stops
-    return {"scene": scene if scene in names else names[0], "dim": preferences.get(DIM.key),
+    return {"scene": scene if scene in names else names[0], "dim": preferences.get(DIM.key) if picture else 0,
             "mirror": preferences.get(SIDE.key) == "left", "shift": preferences.get(SHIFT.key),
             "stops": stops, "tint": bool(preferences.get(TINT.key))}
 
@@ -530,7 +535,8 @@ def status():
     register()
     ghostty = ghostty_config_path()
     on = bool(preferences.get(ENABLED.key))
-    lines = [f"Bloom backdrop: {'on' if on else 'off'}"
+    state = "on" if on else "off, Herdr colors kept" if preferences.get(COLORS.key) else "off"
+    lines = [f"Bloom backdrop: {state}"
              + ("" if ghostty else " (Ghostty config not found, so nothing is drawn)")]
     lines.append("  scene {} · strength {}% · tree {} · offset {} · theme colors {} · tint {}".format(
         preferences.get(SCENE.key), preferences.get(DIM.key), preferences.get(SIDE.key),

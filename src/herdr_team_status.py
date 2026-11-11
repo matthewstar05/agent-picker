@@ -249,6 +249,11 @@ def run():
                 preferences._values = None
                 try:
                     import bloom   # the backdrop follows its settings and the usage theme
+                    stamp = os.stat(bloom.__file__).st_mtime_ns
+                    if stamp != getattr(bloom, "_loaded", stamp):
+                        import importlib   # an update replaced the file: a long-lived watcher takes it up
+                        importlib.reload(bloom)
+                    bloom._loaded = stamp
                     bloom.sync(call)
                 except Exception as exc:
                     print(f"herdr-ai bloom: {exc}", file=sys.stderr, flush=True)
