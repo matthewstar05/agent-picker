@@ -100,6 +100,7 @@ class StarploymentKeepAwakeTests(unittest.TestCase):
         stale = self.database("stale/jobhub.db", mode="off")
         self.assertEqual(self.run_detection(stale, "/Applications/JobHub.app/Contents/MacOS/JobHub"), [])
 
+    @unittest.skipUnless(keep_awake.SUPPORTED, "Amphetamine sessions are macOS only")
     def test_tick_keeps_session_when_only_starployment_is_active(self):
         database = self.database()
         amp = {"active": False, "commands": []}
