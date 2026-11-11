@@ -22,12 +22,14 @@ macOS only: on other systems the setting is not offered and tick() does nothing.
 
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
+from urllib.parse import quote
 
 import preferences
 from platform_runtime import state_dir
@@ -90,13 +92,74 @@ def _scheduled_running():
         return []
 
 
+def _starployment_working():
+    """Native Starployment processes with JARVIS enabled in their open database.
+
+    Match the process first, then inspect only the database path reported by lsof
+    for that PID. This avoids keeping the Mac awake for an old database or a
+    different Starployment checkout. The SQLite connection is strictly read-only
+    and selects only the two settings needed here.
+    """
+    if not SUPPORTED:
+        return []
+    try:
+        result = subprocess.run(["ps", "-axo", "pid=,comm="], capture_output=True, text=True,
+                                encoding="utf-8", errors="replace", timeout=5)
+        if getattr(result, "returncode", 0):
+            return []
+    except (OSError, subprocess.SubprocessError):
+        return []
+
+    found = []
+    seen = set()
+    for line in result.stdout.splitlines():
+        fields = line.strip().split(None, 1)
+        if len(fields) != 2:
+            continue
+        try:
+            pid = int(fields[0])
+        except ValueError:
+            continue
+        name = Path(fields[1]).name.casefold()
+        if name not in {"starployment", "jobhub"} or pid in seen:
+            continue
+        seen.add(pid)
+        try:
+            opened = subprocess.run(["lsof", "-Fn", "-p", str(pid)], capture_output=True, text=True,
+                                    encoding="utf-8", errors="replace", timeout=5)
+            if getattr(opened, "returncode", 0):
+                continue
+        except (OSError, subprocess.SubprocessError):
+            continue
+        paths = [line[1:] for line in opened.stdout.splitlines()
+                 if line.startswith("n") and Path(line[1:]).name == "jobhub.db"]
+        for database in paths:
+            try:
+                uri = "file:" + quote(str(Path(database).resolve()), safe="/") + "?mode=ro"
+                connection = sqlite3.connect(uri, uri=True, timeout=1)
+                try:
+                    rows = dict(connection.execute(
+                        "SELECT key, value FROM settings WHERE key IN ('jarvis_mode', 'setup_complete')"))
+                finally:
+                    connection.close()
+                mode = json.loads(rows.get("jarvis_mode", '"off"'))
+                setup = json.loads(rows.get("setup_complete", "false"))
+            except (OSError, sqlite3.Error, ValueError, TypeError):
+                continue
+            if setup is True and mode in ("new", "all", "all_plus"):
+                label = "JobHub" if name == "jobhub" else "Starployment"
+                found.append(f"{label} JARVIS (pid {pid})")
+                break
+    return found
+
+
 def agents_working():
     """What is working right now, as short descriptions; empty when nothing is."""
     base = state_dir()
     found = [f"{name} turn (pid {pid})" for name, pid in
              (("StarCLI", _live_turns(base / "star" / "live")), ("Grok Bot", _live_turns(base / "grokbot" / "live"))) if pid]
     found += [f"scheduled prompt {job}" for job in _scheduled_running()]
-    return found + _herdr_working()
+    return found + _starployment_working() + _herdr_working()
 
 
 # ---- Amphetamine ------------------------------------------------------------
