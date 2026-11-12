@@ -55,10 +55,32 @@ def load_agents():
     return agents
 
 
+RELEASES = "https://github.com/matthewstar05/agent-picker/releases/latest/download"
+
+
+def release_update_command(platform=None, releases=None):
+    """The one-line installer for this platform, which also updates an install."""
+    releases = releases or os.environ.get("AGENT_PICKER_RELEASES_URL") or RELEASES
+    if (platform or sys.platform) == "win32":
+        return ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
+                f"irm {releases}/install.ps1 | iex"]
+    return ["sh", "-c", f"curl -fsSL {releases}/install.sh | sh"]
+
+
+def update_release(run=None):
+    """Update an install made by the release installer: run it again, into this folder."""
+    import subprocess
+    done = (run or subprocess.run)(release_update_command(), env={**os.environ, "AGENT_PICKER_HOME": str(ROOT)})
+    if done.returncode:
+        raise RuntimeError("The release installer did not finish; nothing else was changed.")
+
+
 def update_checkout():
     import subprocess
     if not (ROOT / ".git").exists():
-        raise RuntimeError("Install from a Git clone to use --picker-update.")
+        if (ROOT / "VERSION").is_file():
+            return update_release()
+        raise RuntimeError("Install from a Git clone or with the release installer to use --picker-update.")
     dirty = subprocess.check_output(["git", "-C", str(ROOT), "status", "--porcelain"], text=True)
     if dirty:
         raise RuntimeError("Checkout has local changes. Commit and push them, or resolve them before updating.")

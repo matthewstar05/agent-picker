@@ -268,6 +268,7 @@ class HerdrAiTests(unittest.TestCase):
         with patch.dict(os.environ, {**clean, **env, "AGENT_PICKER_STATE_HOME": self.state.name}, clear=True), \
              self.menu as menu, \
              patch.object(herdr_ai, "sidebar_update"), \
+             patch.object(herdr_ai.herdr_core, "ensure_server", return_value=True) as server, \
              patch.object(herdr_ai.subprocess, "run", self.fake), \
              patch.object(herdr_ai.subprocess, "call", return_value=0) as attach, \
              patch.object(herdr_ai.os, "execvp") as execvp, \
@@ -281,6 +282,7 @@ class HerdrAiTests(unittest.TestCase):
         execv.assert_not_called()   # only open_browser may replace the process
         self.stopped = stop.call_args[0][1] if stop.called else []
         self.menu_calls = menu.call_args_list
+        self.server_started = server.called
         self.browser_opened = browser.called
         return attach.called or execvp.called
 
@@ -309,6 +311,52 @@ class HerdrAiTests(unittest.TestCase):
         self.assertEqual(self.fake.calls[0][:2], ["workspace", "create"])
         self.assertIn(ROOT.name, self.fake.calls[0])
         self.assertTrue(attached)
+
+    def test_outside_herdr_starts_the_server_before_laying_out(self):
+        self.run_cli({})
+        self.assertTrue(self.server_started)
+        self.run_cli(INSIDE)
+        self.assertFalse(self.server_started)
+
+    def test_selectors_puts_an_agent_selector_in_all_five_agent_panes(self):
+        self.run_cli(INSIDE, ["--selectors"])
+        runs = self.fake.runs()
+        saved = next(iter(json.loads((Path(self.state.name) / "herdr-ai-tabs.json").read_text()).values()))
+        self.assertTrue(saved["selectors"])
+        self.assertEqual(self.menu_calls[0].args, ("standard",))      # no setup menu
+        selector = herdr_ai.picker_command(["--picker-return"])
+        for role in herdr_ai.AGENT_PANES:
+            self.assertEqual(runs[saved["panes"][role]], [selector], role)
+        self.assertEqual(runs[saved["panes"]["usage"]], [herdr_ai.picker_command(["--picker-usage"])])
+        self.assertEqual(herdr_ai.entry_commands(saved), herdr_ai.SELECTORS)   # a refresh keeps them selectors
+        self.assertEqual(herdr_ai.entry_commands({"panes": {}}), herdr_ai.PANES)
+        with self.assertRaises(SystemExit):
+            self.run_cli(INSIDE, ["--selectors", "--setup", "codex"])
+
+    def test_agent_reopens_the_selector_workspace_it_laid_out_for_a_folder(self):
+        original = self.fake.__call__
+        live = []
+
+        def respond(argv, **kwargs):
+            result = original(argv, **kwargs)
+            payload = json.loads(result.stdout)
+            if argv[1:3] == ["workspace", "create"]:
+                live.append({"workspace_id": "w9"})
+                payload["result"].update(workspace={"workspace_id": "w9"}, tab={"tab_id": "w9:t1"})
+            elif argv[1:3] == ["workspace", "list"]:
+                payload["result"]["workspaces"] = list(live)
+            result.stdout = json.dumps(payload)
+            return result
+
+        with patch.object(herdr_ai.herdr_sidebar, "endpoint", return_value="outside.sock"), \
+             patch.object(FakeHerdr, "__call__", side_effect=respond):
+            self.assertTrue(self.run_cli({}, ["--selectors"]))
+            first = len([c for c in self.fake.calls if c[:2] == ["workspace", "create"]])
+            self.assertTrue(self.run_cli({}, ["--selectors"]))                  # same folder: attach only
+            self.assertEqual(len([c for c in self.fake.calls if c[:2] == ["workspace", "create"]]), first)
+            self.assertIn(["workspace", "focus", "w9"], self.fake.calls)
+            self.run_cli({}, ["--selectors"], cwd=ROOT / "src")                 # another folder: its own
+            self.assertEqual(len([c for c in self.fake.calls if c[:2] == ["workspace", "create"]]), first + 1)
 
     def test_outside_team_records_layout_identity(self):
         original = self.fake.__call__

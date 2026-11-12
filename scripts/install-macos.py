@@ -120,8 +120,8 @@ def main(argv=None):
         print("  . " + shlex.quote(str(Path.home() / ".zshrc" if os.environ.get("SHELL", "").endswith("zsh")
                                      else Path.home() / ".bashrc")))
     print("Then run agent --picker-doctor; agent --picker-connect opens provider setup.")
-    if "herdr-ai" in commands and not shutil.which("herdr"):
-        print("Herdr commands require the separately installed Herdr terminal.")
+    if "herdr-ai" in commands and not shutil.which("herdr") and not (ROOT / "bin" / "herdr").is_file():
+        print("Herdr commands need Herdr: the release installer bundles it, or install it from herdr.dev.")
     print(f"Keep this checkout in place: {ROOT}")
     return 0
 

@@ -1,5 +1,24 @@
 # Install agent-picker on Windows or macOS
 
+The one-line installer downloads a release that includes its own Herdr and
+installs every command. It needs Python 3.9 or later:
+
+```sh
+# macOS
+curl -fsSL https://github.com/matthewstar05/agent-picker/releases/latest/download/install.sh | sh
+```
+
+```powershell
+# Windows PowerShell
+irm https://github.com/matthewstar05/agent-picker/releases/latest/download/install.ps1 | iex
+```
+
+Add component options after `sh -s --` on macOS, for example
+`curl -fsSL .../install.sh | sh -s -- --components usage,fs,herdr`. A Herdr that
+is already installed is left alone. Run the line again, or
+`agent --picker-update`, to update. The rest of this page describes installing
+from a Git checkout or an unpacked bundle by hand.
+
 Install Python 3.9 or later, then extract the release ZIP or clone this repository
 to a permanent folder. Run the installer from that folder:
 

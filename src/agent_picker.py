@@ -170,6 +170,11 @@ VISIBILITY = preferences.register(preferences.Page(
     "visibility", "General", "Visibility",
     hint="Which CLIs the agent selector lists and which providers get a usage card. ⏎ opens.",
     summary=visibility_summary))
+RUNS = preferences.register(preferences.Setting(
+    "agent.opens", "General", "agent runs", ["selector", "workspace"], "selector",
+    hint="What a bare agent command opens outside Herdr: this selector, or Herdr with a selector "
+         "in each of the five agent panes. agent --picker-select always opens the selector.",
+    names={"selector": "agent selector", "workspace": "Herdr workspace"}))
 bloom.register()
 
 
@@ -1437,6 +1442,10 @@ def catalog():
         print(f"  {name} {swatch}  {state}")
 
 def print_launch_banner(agent):
+    # Leaving the selector's alternate screen brings back the shell's old
+    # output; wipe it and the scrollback so the agent opens on a clean pane.
+    if sys.stdout.isatty():
+        sys.stdout.write(f"{ESC}[H{ESC}[2J{ESC}[3J")
     mascot = agent.get("mascot")
     if not mascot:
         print(f"  {fg(agent['color'])}●{RESET} {BOLD}{agent['name']}{RESET} {FAINT}{grokbot_where.detail(agent)}{RESET}\n", flush=True)
@@ -1470,6 +1479,16 @@ def print_launch_banner(agent):
     print("\n" + "\n".join(lines) + "\n", flush=True)
 
 
+def opens_workspace(args, returning=False):
+    """Whether this run is a bare `agent` that should open the Herdr workspace:
+    set to, typed at a terminal, and not already inside a Herdr pane."""
+    if args or returning or os.environ.get("HERDR_ENV") == "1":
+        return False
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return False
+    return preferences.get(RUNS.key) == "workspace"
+
+
 def main():
     args = sys.argv[1:]
     # herdr-ai's workbench panes: quitting the agent reopens the selector, and
@@ -1483,6 +1502,13 @@ def main():
         import session_refresh
         argv = session_refresh.decode(args[1])
         return launch_and_return(argv) if returning else launch(argv)
+    if args[:1] == ["--picker-select"]:
+        args = args[1:]
+    elif opens_workspace(args, returning):
+        import herdr_ai
+        opened = herdr_ai.agent_workspace()
+        if opened is not None:
+            return opened
     if args[:1] == ["--picker-update"]:
         update_checkout()
         return 0
@@ -1507,6 +1533,7 @@ def main():
         print("agent --picker-launch NAME --picker-solo  launch with herdr-ai's usage and handoff rules")
         print("agent --picker-usage --picker-only NAMES  the usage panel for these providers (comma separated)")
         print("agent --picker-priority               explain the Cursor/Kiro workbench choice")
+        print("agent --picker-select                 open the selector even when agent runs the Herdr workspace")
         print("agent --picker-update                 fast-forward this Git checkout")
         print("agent --picker-doctor                 show paths and launch profiles")
         print("agent --picker-catalog                every known CLI, its colors, and whether it is installed")

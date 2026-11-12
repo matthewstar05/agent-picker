@@ -15,6 +15,24 @@ The CLI installer lets you toggle the usage panel, file browser, StarCLI, Grok B
 
 ## Setup
 
+The quickest install brings agent-picker and its own Herdr together, the way Herdr itself installs:
+
+```sh
+# macOS
+curl -fsSL https://github.com/matthewstar05/agent-picker/releases/latest/download/install.sh | sh
+```
+
+```powershell
+# Windows PowerShell
+irm https://github.com/matthewstar05/agent-picker/releases/latest/download/install.ps1 | iex
+```
+
+It downloads the release bundle for your computer, checks it against the release's checksums, unpacks it into `~/.local/share/agent-picker` (`%LOCALAPPDATA%\agent-picker\app` on Windows), and installs every command. Python 3.9 or later is the only requirement. The bundle carries a Herdr built from this repository's `herdr/` folder, a fork of [herdrdev/herdr](https://github.com/herdrdev/herdr) that is not an official Herdr release. If the computer has no Herdr, `herdr` becomes a command for the bundled one; a Herdr you already have is left alone, and `agent` then runs the bundled one in a session of its own (`agent-picker`), with its own server. Run the same line again, or `agent --picker-update`, to update.
+
+After this install a bare `agent` opens Herdr in the Standard layout with an agent selector in each of the five agent panes, the usage panel, and the file browser. Running it again in the same folder returns to that workspace. `agent --picker-select` opens only the selector, and **agent runs** on the General settings page switches a bare `agent` back to it. Inside a Herdr pane, and with any arguments, `agent` is the selector as before.
+
+To work on the code instead, clone the repository as described below.
+
 For a release ZIP, use the [Windows and macOS install guide](docs/INSTALL.md).
 Windows: double-click **Install agent-picker.cmd** after installing Python.
 Use `agent --picker-connect`, or press **c** in the selector or usage screen,
@@ -43,7 +61,8 @@ agent "help me understand this repo"  forward this prompt to the chosen CLI
 agent --picker-launch Codex           directly launch Codex
 agent --picker-priority               explain the Cursor/Kiro workbench choice
 agent --picker-doctor                 inspect detected providers and local paths
-agent --picker-update                 pull shared updates from GitHub
+agent --picker-update                 pull shared updates from GitHub, or rerun the release installer
+agent --picker-select                 open the selector when agent is set to open Herdr
 agent --picker-catalog                every known CLI, its colors, and whether it is installed
 agent --picker-help                   show picker help
 agent -- --picker-help                pass a management-looking argument to the CLI
@@ -430,5 +449,19 @@ agent --picker-update
 ```
 
 The next invocation uses the new code. If installer or shell-integration behavior changed, rerun the relevant installer after pulling. Machine-specific local overrides stay in the local config.
+
+### Herdr and agent-picker together
+
+The Herdr source is in `herdr/`, so one commit can change both the terminal and the tools built on it. `agent` runs the binary in `bin/` (ignored by Git) when there is one:
+
+```sh
+python3 scripts/herdr_bin.py build    # compile herdr/ with cargo into bin/herdr
+python3 scripts/herdr_bin.py fetch    # or download the latest release's build
+python3 scripts/herdr_bin.py status
+```
+
+`build` needs the Rust toolchain named in `herdr/rust-toolchain.toml`, Zig 0.16, cmake and ninja; `herdr/CONTRIBUTING.md` and `herdr/AGENTS.md` describe the Herdr code. `herdr/FORK.md` lists what differs from upstream and how to pull a newer upstream version in. Herdr's own tests run with `cargo test` inside `herdr/`; they are not part of this repository's CI.
+
+A release is a tag: `git tag v2.0.1 && git push origin v2.0.1` runs the Release workflow, which builds Herdr for macOS (Apple silicon and Intel) and Windows, bundles each with agent-picker, tries the one-line installers against the bundles, and publishes them. Running that workflow by hand does everything except publish.
 
 GitHub Actions tests macOS with Python 3.9 and 3.13, including process argument forwarding, exit codes, rendering bounds, and configuration. Tests use fake providers and do not open paid agent sessions. CI does not verify authentication or provider model availability.

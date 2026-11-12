@@ -1,0 +1,253 @@
+name: Release
+# Builds Herdr from herdr/, bundles it with agent-picker for each platform, tries
+# the one-line installers against those bundles, and on a v* tag publishes them.
+# Run it by hand (workflow_dispatch) to check a build without publishing.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  RUST_TOOLCHAIN_VERSION: 1.96.1
+
+jobs:
+  herdr:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            name: herdr-macos-aarch64
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            name: herdr-macos-x86_64
+          - target: x86_64-pc-windows-msvc
+            os: windows-2022
+            name: herdr-windows-x86_64.zip
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    env:
+      LIBGHOSTTY_VT_OPTIMIZE: ReleaseFast
+      LIBGHOSTTY_VT_SIMD: "true"
+    defaults:
+      run:
+        working-directory: herdr
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN_VERSION }}
+          targets: ${{ matrix.target }}
+
+      - name: Install Zig
+        uses: vercel-labs/setup-zig@83c1594f26b86da8a9a8ddd9b5ee5f3af0f96943 # v1.0.2
+        with:
+          version: 0.16.0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install macOS build tools
+        if: runner.os == 'macOS'
+        run: HOMEBREW_NO_AUTO_UPDATE=1 brew install cmake ninja
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          workspaces: herdr
+          key: release-${{ matrix.target }}
+
+      - name: Remove Zig caches
+        shell: bash
+        run: rm -rf .zig-cache vendor/libghostty-vt/.zig-cache vendor/libghostty-vt/zig-out
+
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Package artifact
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          cp target/${{ matrix.target }}/release/herdr ${{ matrix.name }}
+          if [ "${{ matrix.target }}" = "aarch64-apple-darwin" ]; then ./${{ matrix.name }} --version; fi
+
+      - name: Package artifact
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $package = Join-Path $env:RUNNER_TEMP "Microsoft.Windows.Console.ConPTY.nupkg"
+          $stage = Join-Path $env:RUNNER_TEMP "herdr-windows-x86_64"
+          .\scripts\package_windows_conpty.ps1 `
+            -HerdrExe target\${{ matrix.target }}\release\herdr.exe `
+            -PackagePath $package `
+            -StageDir $stage `
+            -OutputPath ${{ matrix.name }}
+          & (Join-Path $stage "herdr.exe") --version
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ matrix.name }}
+          path: herdr/${{ matrix.name }}
+          if-no-files-found: error
+
+  bundle:
+    needs: herdr
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          path: dist
+          pattern: herdr-*
+          merge-multiple: true
+
+      - name: Name the version
+        id: version
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            tag="$GITHUB_REF_NAME"; version="${GITHUB_REF_NAME#v}"
+          else
+            tag="v0.0.0-dev"; version="0.0.0-dev.${GITHUB_SHA::7}"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Bundle each platform
+        run: |
+          set -eu
+          ls -la dist
+          for target in macos-aarch64 macos-x86_64; do
+            python3 scripts/package_release.py bundle --target "$target" --binary "dist/herdr-$target" \
+              --version "${{ steps.version.outputs.version }}" --out dist
+          done
+          python3 scripts/package_release.py bundle --target windows-x86_64 --binary dist/herdr-windows-x86_64.zip \
+            --version "${{ steps.version.outputs.version }}" --out dist
+          cp scripts/install.sh scripts/install.ps1 dist/
+          python3 scripts/package_release.py manifest --dir dist --tag "${{ steps.version.outputs.tag }}"
+          ls -la dist
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release
+          path: dist
+          if-no-files-found: error
+
+  smoke:
+    needs: bundle
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: release
+          path: dist
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install with the one-line installer (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          set -eu
+          export HOME="$RUNNER_TEMP/home"
+          mkdir -p "$HOME"
+          AGENT_PICKER_RELEASES_URL="file://$PWD/dist" sh dist/install.sh
+          app="$HOME/.local/share/agent-picker"
+          export PATH="$HOME/.local/bin:$PATH"
+          test "$(cat "$app/VERSION")" = "${{ needs.bundle.outputs.version }}"
+          herdr --version
+          test "$(readlink "$HOME/.local/bin/herdr")" = "$app/bin/herdr"
+          agent --picker-doctor
+          herdr-ai --help > /dev/null
+          grep -q '"agent.opens": "workspace"' "$HOME/.local/state/agent-picker/preferences.json"
+          # The bundled Herdr serves a workspace without a screen attached.
+          herdr server > "$RUNNER_TEMP/server.log" 2>&1 &
+          for i in $(seq 1 50); do herdr status server | grep -q "status: running" && break; sleep 0.2; done
+          herdr workspace create --cwd "$HOME" --label smoke
+          herdr workspace list | grep -q '"label":"smoke"'
+          herdr server stop
+          # A second run updates in place.
+          AGENT_PICKER_RELEASES_URL="file://$PWD/dist" sh dist/install.sh
+          herdr --version
+
+      - name: Install with the one-line installer (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $env:LOCALAPPDATA = Join-Path $env:RUNNER_TEMP "local"
+          $env:AGENT_PICKER_STATE_HOME = Join-Path $env:RUNNER_TEMP "state"
+          New-Item -ItemType Directory -Path $env:LOCALAPPDATA -Force | Out-Null
+          $env:AGENT_PICKER_RELEASES_URL = "file:///" + ((Join-Path $PWD "dist") -replace "\\", "/")
+          & .\dist\install.ps1
+          $app = Join-Path $env:LOCALAPPDATA "agent-picker\app"
+          $bin = Join-Path $env:LOCALAPPDATA "agent-picker\bin"
+          if ((Get-Content (Join-Path $app "VERSION")).Trim() -ne "${{ needs.bundle.outputs.version }}") { throw "wrong version" }
+          & (Join-Path $app "bin\herdr.exe") --version
+          if ($LASTEXITCODE -ne 0) { throw "herdr.exe did not run" }
+          if (-not (Test-Path (Join-Path $bin "herdr.cmd"))) { throw "herdr command was not linked" }
+          & (Join-Path $bin "herdr.cmd") --version
+          if ($LASTEXITCODE -ne 0) { throw "herdr.cmd did not run" }
+          & (Join-Path $bin "agent.cmd") --picker-doctor
+          if ($LASTEXITCODE -ne 0) { throw "agent --picker-doctor failed" }
+          $saved = Get-Content (Join-Path $env:AGENT_PICKER_STATE_HOME "preferences.json") -Raw
+          if ($saved -notmatch '"agent.opens": "workspace"') { throw "agent was not set to open the workspace" }
+          & .\dist\install.ps1
+
+  publish:
+    if: github.ref_type == 'tag'
+    needs: [bundle, smoke]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: release
+          path: dist
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          cat > notes.md <<EOF
+          agent-picker ${{ needs.bundle.outputs.version }} with its own Herdr, built from the \`herdr/\` folder of this repository.
+
+          **macOS**
+
+              curl -fsSL https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/install.sh | sh
+
+          **Windows (PowerShell)**
+
+              irm https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/install.ps1 | iex
+
+          Python 3.9 or later is required. A Herdr you already have is left alone; \`agent\` then opens the bundled one in a session of its own. Running the same line again updates the install.
+
+          The bundled Herdr is a fork of [herdrdev/herdr](https://github.com/herdrdev/herdr) (Apache 2.0) and is not an official Herdr release.
+          EOF
+          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" \
+            --title "agent-picker ${{ needs.bundle.outputs.version }}" --notes-file notes.md --latest

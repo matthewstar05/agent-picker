@@ -12,6 +12,7 @@
 - Test provider launches with fake executables. Real launches may create sessions or spend quota.
 - Installs follow main through --picker-update.
 - Keep update operations fast-forward only. Do not reset, stash, or discard local work automatically.
+- herdr/ is a fork of Herdr kept with git subtree; herdr/FORK.md lists its changes. Record new changes to it there. Never rebase a subtree merge: push it as it is.
 
 ## Auto-commit and push (standing authorization)
 

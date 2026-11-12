@@ -7,3 +7,6 @@ __pycache__/
 config.local.json
 usage.json
 .venv-windows/
+# The Herdr binary built or fetched for this checkout (scripts/herdr_bin.py).
+/bin/
+/dist/

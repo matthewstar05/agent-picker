@@ -69,11 +69,13 @@ on the next provider with quota, Codex, then Claude, then Cursor or Kiro
 its crew share hands off the whole team.
 The middle-bottom pane chooses Cursor or Kiro by remaining quota and reset date.
 
-Usage: herdr-ai [--setup NAME] [--mode off|individual|orchestrator] [--no-fs] [label]
+Usage: herdr-ai [--setup NAME] [--mode off|individual|orchestrator] [--no-fs] [--selectors] [label]
                               (label defaults to the directory name; --setup
                               skips the menu: standard, star, claude, codex, ...;
                               --mode overrides the System prompt setting for this layout;
-                              --no-fs leaves the terminal pane a shell this time)
+                              --no-fs leaves the terminal pane a shell this time;
+                              --selectors lays out Standard with an agent selector
+                              in each of the five agent panes, as agent does)
        herdr-ai --refresh [label]
                               refresh the tab's agents into this directory, as a
                               rerun does; exits 3 on a tab herdr-ai has not laid out
@@ -103,6 +105,7 @@ import time
 from pathlib import Path
 
 from platform_runtime import state_dir
+import herdr_core
 import herdr_sidebar
 import hidden_briefs
 import session_refresh
@@ -122,6 +125,9 @@ PANES = {
     "picker": ["--picker-return"],
     "usage": ["--picker-usage"],
 }
+# The five agent panes of Standard, each an agent selector: what `agent` opens.
+AGENT_PANES = ("agy", "codex", "claude", "picker", "cursor")
+SELECTORS = {**{role: ["--picker-return"] for role in AGENT_PANES}, "usage": ["--picker-usage"]}
 # A team's panes: the lead, four crew, usage for that provider, and the terminal.
 CREW = ("crew1", "crew2", "crew3", "crew4")
 PEERS = ("lead", *CREW)   # an individual layout keeps the team's roles, so refresh and handoff work alike
@@ -135,7 +141,7 @@ KEPT = "usage"
 
 
 def find_herdr():
-    return os.environ.get("HERDR_BIN_PATH") or shutil.which("herdr")
+    return herdr_core.find()
 
 
 def picker_command(args):
@@ -657,9 +663,10 @@ TEAM_TERMINAL = 0.82
 STANDARD_SIZES = {"side": 0.7173, "usage": 0.5167, "terminal": TEAM_TERMINAL, "columns": 0.5109, "rows": 0.5306}
 
 
-def build(herdr, root, cwd, team=None, plan=None):
+def build(herdr, root, cwd, team=None, plan=None, commands=None):
     """Split root into the workbench, or into team's layout (plan from team_plan).
-    root ends up as the terminal along the bottom."""
+    root ends up as the terminal along the bottom. commands replaces what
+    Standard's panes run."""
     def split(pane, direction, ratio):
         return herdr("pane", "split", pane, "--direction", direction, "--ratio", str(ratio),
                      "--cwd", cwd, "--no-focus")["pane"]["pane_id"]
@@ -677,7 +684,7 @@ def build(herdr, root, cwd, team=None, plan=None):
     panes["picker"] = split(panes["agy"], "down", sizes["rows"])
     panes["cursor"] = split(panes["codex"], "down", sizes["rows"])
 
-    launch_panes(herdr, panes, PANES)
+    launch_panes(herdr, panes, commands or PANES)
     return panes
 
 
@@ -795,6 +802,8 @@ def entry_commands(entry, recorded=None):
     is gone keeps no commands, so its crew restart as they were."""
     if not entry:
         return PANES
+    if entry.get("selectors") and not entry.get("team"):
+        return SELECTORS
     if entry.get("team") and recorded is not None and "lead" not in recorded:
         return {}
     return layout_commands(entry.get("team"), entry["panes"], entry.get("lead"), entry.get("gemini", False),
@@ -1022,8 +1031,12 @@ def main(argv=None, herdr=None, cwd=None):
         return 0
     setup, mode, argv = None, None, list(argv)
     # --no-fs keeps every pane a shell this run; --refresh only refreshes a laid-out tab.
-    no_fs, refresh = "--no-fs" in argv, "--refresh" in argv
-    argv = [a for a in argv if a not in ("--no-fs", "--refresh")]
+    no_fs, refresh, selectors = "--no-fs" in argv, "--refresh" in argv, "--selectors" in argv
+    argv = [a for a in argv if a not in ("--no-fs", "--refresh", "--selectors")]
+    if selectors:
+        if any(a == "--setup" or a.startswith("--setup=") for a in argv):
+            sys.exit("herdr-ai: --selectors is the Standard layout; it takes no --setup")
+        setup = "standard"
     if refresh and not inside_herdr():
         print("herdr-ai: --refresh runs from a pane inside herdr, on a tab herdr-ai laid out", file=sys.stderr)
         return 2
@@ -1067,8 +1080,14 @@ def main(argv=None, herdr=None, cwd=None):
             return 0
         plan = team_plan(team, mode)
         require_codex(team, plan.get("lead"))
+        if not herdr_core.ensure_server(herdr.binary):
+            sys.exit("herdr-ai: the herdr server did not start; run herdr once, then try again")
+        if selectors:
+            reopened = reopen_selectors(herdr, cwd)
+            if reopened is not None:
+                return reopened
         out = herdr("workspace", "create", "--cwd", cwd, "--label", label, "--focus")
-        panes = build(herdr, out["root_pane"]["pane_id"], cwd, team, plan)
+        panes = build(herdr, out["root_pane"]["pane_id"], cwd, team, plan, SELECTORS if selectors else None)
         # Outside launches need the same saved identity as tabs built inside Herdr.
         root = out["root_pane"]
         workspace = root.get("workspace_id") or out.get("workspace", {}).get("workspace_id")
@@ -1079,6 +1098,8 @@ def main(argv=None, herdr=None, cwd=None):
             key = herdr_sidebar.endpoint() + "|" + tab
             state[key] = {"panes": panes, "auto_label": auto, "team": team, **plan,
                                    "terminals": {p: live.get(p, {}).get("terminal_id") for p in panes.values()}}
+            if selectors:
+                state[key].update(selectors=True, workspace=workspace, cwd=cwd)
             save_state(state)
         sidebar_update(lambda: herdr_sidebar.sync(load_state()))
         if browser_wanted(no_fs):
@@ -1106,10 +1127,12 @@ def main(argv=None, herdr=None, cwd=None):
         plan = team_plan(team, mode)
         require_codex(team, plan.get("lead"))
         close_leftovers(herdr, state.get(key))
-        panes = build(herdr, os.environ["HERDR_PANE_ID"], cwd, team, plan)
+        panes = build(herdr, os.environ["HERDR_PANE_ID"], cwd, team, plan, SELECTORS if selectors else None)
         live = herdr.tab_panes(os.environ["HERDR_WORKSPACE_ID"], os.environ["HERDR_TAB_ID"])
         entry = state[key] = {"panes": panes, "auto_label": auto, "team": team, **plan,
                               "terminals": {p: live.get(p, {}).get("terminal_id") for p in panes.values()}}
+        if selectors:
+            entry["selectors"] = True
     # An explicit label sticks; otherwise the tab follows the directory
     # unless it was renamed in herdr.
     if not auto:
@@ -1121,6 +1144,35 @@ def main(argv=None, herdr=None, cwd=None):
     if not refresh and opens_browser(entry, no_fs):
         return open_browser()
     return 0
+
+
+def reopen_selectors(herdr, cwd):
+    """Focus the selector workspace `agent` already laid out for cwd and attach
+    to it, so running agent twice in a folder does not stack a second copy.
+    None when there is none to return to."""
+    try:
+        prefix = herdr_sidebar.endpoint() + "|"
+        live = {w.get("workspace_id") for w in herdr("workspace", "list").get("workspaces", [])}
+    except (RuntimeError, OSError, subprocess.SubprocessError):
+        return None
+    for key, entry in load_state().items():
+        if (key.startswith(prefix) and entry.get("selectors") and entry.get("cwd") == cwd
+                and entry.get("workspace") in live):
+            herdr("workspace", "focus", entry["workspace"])
+            return os.execvp(herdr.binary, [herdr.binary])
+    return None
+
+
+def agent_workspace(cwd=None):
+    """What a bare `agent` does when it is set to open the workspace: this
+    checkout's Herdr, Standard's layout, an agent selector in each of the five
+    agent panes. None when there is no Herdr to open, so the caller can fall
+    back to the selector itself."""
+    binary = herdr_core.bundled() or herdr_core.find()
+    if not binary:
+        return None
+    herdr_core.adopt(binary)
+    return main(["--selectors"], binary, cwd)
 
 
 def sidebar_update(action):
