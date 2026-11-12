@@ -358,6 +358,44 @@ class HerdrAiTests(unittest.TestCase):
             self.run_cli({}, ["--selectors"], cwd=ROOT / "src")                 # another folder: its own
             self.assertEqual(len([c for c in self.fake.calls if c[:2] == ["workspace", "create"]]), first + 1)
 
+    def test_agent_restarts_the_selectors_in_a_workspace_herdr_restored_as_shells(self):
+        original = self.fake.__call__
+        restored = []
+
+        def respond(argv, **kwargs):
+            result = original(argv, **kwargs)
+            payload = json.loads(result.stdout)
+            if argv[1:3] == ["workspace", "create"]:
+                payload["result"].update(workspace={"workspace_id": "w9"}, tab={"tab_id": "w9:t1"})
+            elif argv[1:3] == ["workspace", "list"]:
+                payload["result"]["workspaces"] = [{"workspace_id": "w9"}]
+            elif argv[1:3] == ["pane", "list"] and restored:
+                for pane in payload["result"]["panes"]:
+                    pane["terminal_id"] = "restored_" + pane["pane_id"]     # same panes, new terminals
+            result.stdout = json.dumps(payload)
+            return result
+
+        with patch.object(herdr_ai.herdr_sidebar, "endpoint", return_value="outside.sock"), \
+             patch.object(FakeHerdr, "__call__", side_effect=respond):
+            self.run_cli({}, ["--selectors"])
+            restored.append(True)
+            before = len(self.fake.calls)
+            self.assertTrue(self.run_cli({}, ["--selectors"]))
+            later = self.fake.calls[before:]
+            self.assertNotIn(["workspace", "create"], [c[:2] for c in later])
+            selector = herdr_ai.picker_command(["--picker-return"])
+            self.assertEqual(len([c for c in later if c[:2] == ["pane", "run"] and c[3] == selector]), 5)
+            saved = next(iter(json.loads((Path(self.state.name) / "herdr-ai-tabs.json").read_text()).values()))
+            self.assertTrue(all(t.startswith("restored_") for t in saved["terminals"].values()))
+            # Something already running in one of them: leave it, lay out a fresh workspace.
+            restored.append(True)
+            self.fake.panes["w9:p2"]["argv"] = ["vim"]
+            for terminal in saved["terminals"]:
+                saved["terminals"][terminal] = "stale"
+            (Path(self.state.name) / "herdr-ai-tabs.json").write_text(json.dumps({"outside.sock|w9:t1": saved}))
+            self.run_cli({}, ["--selectors"])
+            self.assertIn(["workspace", "create"], [c[:2] for c in self.fake.calls[before + len(later):]])
+
     def test_outside_team_records_layout_identity(self):
         original = self.fake.__call__
 

@@ -1083,7 +1083,7 @@ def main(argv=None, herdr=None, cwd=None):
         if not herdr_core.ensure_server(herdr.binary):
             sys.exit("herdr-ai: the herdr server did not start; run herdr once, then try again")
         if selectors:
-            reopened = reopen_selectors(herdr, cwd)
+            reopened = reopen_selectors(herdr, cwd, no_fs)
             if reopened is not None:
                 return reopened
         out = herdr("workspace", "create", "--cwd", cwd, "--label", label, "--focus")
@@ -1146,20 +1146,38 @@ def main(argv=None, herdr=None, cwd=None):
     return 0
 
 
-def reopen_selectors(herdr, cwd):
-    """Focus the selector workspace `agent` already laid out for cwd and attach
-    to it, so running agent twice in a folder does not stack a second copy.
-    None when there is none to return to."""
+def reopen_selectors(herdr, cwd, no_fs=False):
+    """Return to the selector workspace `agent` already laid out for cwd and
+    attach to it, so running agent twice in a folder does not stack a second
+    copy. After a server restart Herdr restores that workspace as bare shells;
+    the selectors are started in them again. None when there is none to return to."""
     try:
         prefix = herdr_sidebar.endpoint() + "|"
         live = {w.get("workspace_id") for w in herdr("workspace", "list").get("workspaces", [])}
     except (RuntimeError, OSError, subprocess.SubprocessError):
         return None
-    for key, entry in load_state().items():
-        if (key.startswith(prefix) and entry.get("selectors") and entry.get("cwd") == cwd
+    state = load_state()
+    for key, entry in state.items():
+        if not (key.startswith(prefix) and entry.get("selectors") and entry.get("cwd") == cwd
                 and entry.get("workspace") in live):
-            herdr("workspace", "focus", entry["workspace"])
-            return os.execvp(herdr.binary, [herdr.binary])
+            continue
+        panes = herdr.tab_panes(entry["workspace"], key[len(prefix):])
+        terminals = entry.get("terminals") or {}
+        if not any(panes.get(pane, {}).get("terminal_id") == terminal for pane, terminal in terminals.items()):
+            # Restored: new terminals in the old panes. Start over in them only
+            # when every pane is there and still an idle shell.
+            recorded = entry["panes"]
+            if not all(pane in panes for pane in recorded.values()):
+                continue
+            if any(busy(herdr.process_info(pane)) for pane in recorded.values()):
+                continue
+            launch_panes(herdr, recorded, SELECTORS)
+            if browser_wanted(no_fs):
+                herdr("pane", "run", recorded["terminal"], fs_command())
+            entry["terminals"] = {pane: panes[pane].get("terminal_id") for pane in recorded.values()}
+            save_state(state)
+        herdr("workspace", "focus", entry["workspace"])
+        return os.execvp(herdr.binary, [herdr.binary])
     return None
 
 
