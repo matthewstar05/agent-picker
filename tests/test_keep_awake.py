@@ -55,22 +55,27 @@ class KeepAwakeTests(unittest.TestCase):
         self.addCleanup(folder.cleanup)
         self.root = Path(folder.name)
         self.working = []
+        self.docked = False
         self.app = FakeAmphetamine()
         for patcher in (patch.object(preferences, "PATH", self.root / "preferences.json"),
                         patch.object(preferences, "_values", {}),
                         patch.object(keep_awake, "STATE", self.root / "keep-awake.json"),
                         patch.object(keep_awake, "LOCK", self.root / "keep-awake.lock"),
                         patch.object(keep_awake, "installed", return_value=True),
-                        patch.object(keep_awake, "agents_working", side_effect=lambda: self.working),
+                        patch.object(keep_awake, "agents_working", side_effect=lambda: list(self.working)),
+                        patch.object(keep_awake, "_external_display_on_ac", side_effect=lambda: self.docked),
                         patch.object(keep_awake, "_tell", side_effect=self.app),
                         patch.object(keep_awake, "ensure_service")):
             patcher.start()
             self.addCleanup(patcher.stop)
         preferences.put(keep_awake.KEEP_AWAKE.key, True)
+        preferences.put(keep_awake.KEEP_AWAKE_DOCKED.key, True)
 
     def test_setting_is_listed_with_the_usage_panel_and_starts_off(self):
         self.assertEqual(keep_awake.KEEP_AWAKE.section, "Usage panel")
         self.assertIs(keep_awake.KEEP_AWAKE.default, False)
+        self.assertEqual(keep_awake.KEEP_AWAKE_DOCKED.label, "Keep awake while docked")
+        self.assertIs(keep_awake.KEEP_AWAKE_DOCKED.default, True)
 
     def test_a_working_agent_starts_a_session_that_ends_after_the_grace_period(self):
         self.working = ["claude in Herdr pane w1:p1"]
@@ -172,6 +177,68 @@ class KeepAwakeTests(unittest.TestCase):
             self.assertIsNone(keep_awake.tick(now=1000))
         self.assertEqual(self.app.started(), 0)
 
+    def test_docked_external_display_keeps_an_idle_session_stable(self):
+        self.docked = True
+        first = keep_awake.tick(now=1000, force=True)
+        second = keep_awake.tick(now=1000 + keep_awake.GRACE + keep_awake.INTERVAL, force=True)
+        self.assertTrue(first["owned"] and second["owned"])
+        self.assertEqual(second["reason"], ["external display on AC power"])
+        self.assertEqual(self.app.started(), 1)
+        self.assertIn("displaySleepAllowed:true", self.app.commands[1])
+
+    def test_disconnect_ends_docked_session_after_grace(self):
+        self.docked = True
+        keep_awake.tick(now=1000, force=True)
+        self.docked = False
+        state = keep_awake.tick(now=1000 + keep_awake.GRACE + 5, force=True)
+        self.assertFalse(state["owned"])
+        self.assertEqual(self.app.ended(), 1)
+
+    def test_probe_failure_preserves_last_docked_reason_and_retries_later(self):
+        self.docked = True
+        keep_awake.tick(now=1000, force=True)
+        self.docked = None
+        state = keep_awake.tick(now=1000 + keep_awake.GRACE + keep_awake.INTERVAL, force=True)
+        self.assertTrue(state["owned"])
+        self.assertIn("external display on AC power", state["reason"])
+        self.assertEqual(self.app.started(), 1)
+        self.assertEqual(self.app.ended(), 0)
+
+    def test_battery_or_setting_off_does_not_keep_an_idle_dock_session(self):
+        self.docked = False   # external display on battery is not a docked reason
+        self.assertFalse(keep_awake.tick(now=1000, force=True).get("owned", False))
+        self.docked = True
+        preferences.put(keep_awake.KEEP_AWAKE_DOCKED.key, False)
+        self.assertFalse(keep_awake.tick(now=1000 + keep_awake.INTERVAL, force=True).get("owned", False))
+        self.assertEqual(self.app.started(), 0)
+
+    def test_docked_mode_leaves_a_user_session_alone(self):
+        self.docked = True
+        self.app.active, self.app.remaining = True, 3600
+        keep_awake.tick(now=1000, force=True)
+        keep_awake.tick(now=1000 + keep_awake.GRACE + 5, force=True)
+        self.assertEqual((self.app.started(), self.app.ended()), (0, 0))
+
+    def test_main_setting_off_ends_a_docked_session(self):
+        self.docked = True
+        keep_awake.tick(now=1000, force=True)
+        preferences.put(keep_awake.KEEP_AWAKE.key, False)
+        self.assertFalse(keep_awake.tick(now=1001, force=True)["owned"])
+        self.assertEqual(self.app.ended(), 1)
+
+    def test_docked_option_falls_back_to_agent_activity_and_never_takes_over_a_user_session(self):
+        preferences.put(keep_awake.KEEP_AWAKE_DOCKED.key, False)
+        self.working = ["codex in Herdr pane w1:p1"]
+        self.assertTrue(keep_awake.tick(now=1000, force=True)["owned"])
+
+        self.app.active, self.app.remaining = True, 3600
+        self.working = []
+        self.docked = True
+        state = keep_awake.tick(now=1000 + keep_awake.GRACE + 5, force=True)
+        self.assertFalse(state["owned"])
+        self.assertEqual((self.app.started(), self.app.ended()), (1, 0))
+        self.assertTrue(self.app.active)
+
 
 @unittest.skipUnless(keep_awake.SUPPORTED, "Amphetamine is macOS only")
 class AgentsWorkingTests(unittest.TestCase):
@@ -180,7 +247,9 @@ class AgentsWorkingTests(unittest.TestCase):
         self.addCleanup(folder.cleanup)
         self.root = Path(folder.name)
         for patcher in (patch.object(keep_awake, "state_dir", return_value=self.root),
-                        patch.object(keep_awake, "_scheduled_running", return_value=[])):
+                        patch.object(keep_awake, "_scheduled_running", return_value=[]),
+                        patch.object(preferences, "PATH", self.root / "preferences.json"),
+                        patch.object(preferences, "_values", {})):
             patcher.start()
             self.addCleanup(patcher.stop)
 

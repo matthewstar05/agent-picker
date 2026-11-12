@@ -4,7 +4,8 @@ With Usage panel › Keep awake while agents work on, an Amphetamine session run
 whenever an agent is working, so turning the display off or closing the lid
 doesn't put the Mac to sleep and pause it. The display may still sleep; only
 the system stays awake. The session ends a minute after the last agent
-stops working, or as soon as the setting is turned off.
+stops working, unless Keep awake while docked is on and an external display
+is connected while the Mac draws AC power. Turning the main setting off ends it.
 
 An agent counts as working when Herdr reports one of its panes as working, a
 StarCLI or Grok Bot turn is running, or a scheduled prompt is running. The
@@ -20,6 +21,8 @@ restarted until the agents have gone idle and started again.
 macOS only: on other systems the setting is not offered and tick() does nothing.
 """
 
+import ctypes
+import ctypes.util
 import json
 import os
 import sqlite3
@@ -47,6 +50,10 @@ _service_checked = False   # whether this process has made sure the dispatcher i
 KEEP_AWAKE = preferences.register(preferences.Setting(
     "usage.keep_awake", "Usage panel", "Keep awake while agents work", [False, True], False,
     hint="Amphetamine keeps the Mac awake while agents work, lid shut too.",
+    names={False: "off", True: "on"})) if SUPPORTED else None
+KEEP_AWAKE_DOCKED = preferences.register(preferences.Setting(
+    "usage.keep_awake_docked", "Usage panel", "Keep awake while docked", [False, True], True,
+    hint="With keep-awake on, keep the Mac awake while an external display is connected on AC power.",
     names={False: "off", True: "on"})) if SUPPORTED else None
 
 
@@ -151,6 +158,50 @@ def _starployment_working():
                 found.append(f"{label} JARVIS (pid {pid})")
                 break
     return found
+
+
+def _external_display_on_ac():
+    """Whether an external display is online while the Mac draws AC power.
+
+    None means one of the lightweight system probes failed. CoreGraphics avoids
+    the slow system_profiler path and pmset reports the current power source.
+    """
+    if not SUPPORTED:
+        return False
+    try:
+        library = ctypes.util.find_library("CoreGraphics")
+        if not library:
+            return None
+        core_graphics = ctypes.CDLL(library)
+        get_displays = core_graphics.CGGetOnlineDisplayList
+        get_displays.argtypes = [ctypes.c_uint32, ctypes.POINTER(ctypes.c_uint32),
+                                 ctypes.POINTER(ctypes.c_uint32)]
+        get_displays.restype = ctypes.c_int32
+        is_builtin = core_graphics.CGDisplayIsBuiltin
+        is_builtin.argtypes = [ctypes.c_uint32]
+        is_builtin.restype = ctypes.c_bool
+        capacity = 32
+        displays = (ctypes.c_uint32 * capacity)()
+        count = ctypes.c_uint32()
+        if get_displays(capacity, displays, ctypes.byref(count)) != 0 or count.value > capacity:
+            return None
+        external = any(not is_builtin(displays[index]) for index in range(count.value))
+    except (AttributeError, OSError, TypeError, ValueError):
+        return None
+    if not external:
+        return False
+    try:
+        power = subprocess.run(["pmset", "-g", "batt"], capture_output=True, text=True,
+                               encoding="utf-8", errors="replace", timeout=3)
+        if getattr(power, "returncode", 0):
+            return None
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if "Now drawing from 'AC Power'" in power.stdout:
+        return True
+    if "Now drawing from 'Battery Power'" in power.stdout:
+        return False
+    return None
 
 
 def agents_working():
@@ -266,6 +317,19 @@ def tick(now=None, force=False):
                 _service_checked = True
                 threading.Thread(target=ensure_service, daemon=True).start()
             working = agents_working() if on else []
+            if not on or preferences.get(KEEP_AWAKE_DOCKED.key) is not True:
+                state["docked"] = False
+            else:
+                docked = _external_display_on_ac()
+                if docked is not None:
+                    state["docked"] = docked
+                elif state.get("docked"):
+                    # A transient probe failure must not end and restart an owned
+                    # docked session. Keep the last confirmed state until a probe
+                    # confirms disconnect, and retry on the next tick.
+                    docked = True
+                if docked:
+                    working.insert(0, "external display on AC power")
             state["reason"] = working[:5]   # what kept the Mac awake last, for anyone wondering why
             if working:
                 state["working"] = now

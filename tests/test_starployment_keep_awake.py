@@ -136,6 +136,7 @@ class StarploymentKeepAwakeTests(unittest.TestCase):
                 patch.object(keep_awake, "_live_turns", return_value=None), \
                 patch.object(keep_awake, "_tell", side_effect=tell), \
                 patch.object(keep_awake, "ensure_service"), \
+                patch.object(keep_awake, "_external_display_on_ac", return_value=False), \
                 patch.object(keep_awake, "SUPPORTED", True), \
                 patch.object(keep_awake.subprocess, "run", side_effect=lambda args, **kwargs:
                              self.process() if args[:2] == ["ps", "-axo"] else type("Done", (), {
