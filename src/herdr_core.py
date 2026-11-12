@@ -39,14 +39,14 @@ def _same(a, b):
         return False
 
 
-def session_for(binary, environ=None, which=shutil.which):
+def session_for(binary, environ=None, which=None):
     """The session `agent` opens binary in: the one already chosen in the
     environment, the default when binary is the machine's only Herdr, and
     SESSION when another Herdr is installed beside it."""
     environ = os.environ if environ is None else environ
     if environ.get("HERDR_SESSION"):
         return environ["HERDR_SESSION"]
-    other = which("herdr")
+    other = (which or shutil.which)("herdr")
     return SESSION if other and not _same(other, binary) else None
 
 
