@@ -109,7 +109,7 @@ FOLLOW = preferences.Setting(
     hint="Blossoms, wisteria and glows take the usage panel theme's colors.")
 TINT = preferences.Setting(
     "bloom.tint", _SECTION, "Theme tint", [True, False], True, names=_ON_OFF,
-    hint="The night sky and the terminal background lean toward the theme's first color.")
+    hint="Backgrounds lean toward the theme's first color. brand, rainbow and mono get black and white.")
 SETTINGS = (ENABLED, COLORS, SCENE, DIM, SIDE, SHIFT, FOLLOW, TINT)
 
 
@@ -177,14 +177,36 @@ def recolor_table(stops, tint):
     return table
 
 
-def interface(stops, tint):
-    """(ghostty colors, 16-color palette, herdr tokens) for the theme stops."""
-    ghostty, palette, herdr = dict(GHOSTTY), list(PALETTE), dict(HERDR)
+def neutral(stops):
+    """Themes with no color of their own to lend: brand, rainbow, and grays like mono."""
     if not isinstance(stops, list) or not stops:
-        return ghostty, palette, herdr
-    accent = hexa(lift(stops[-1], 190))
-    ghostty["cursor-color"] = herdr["accent"] = accent
-    if tint:
+        return True
+    return all(colorsys.rgb_to_hsv(*(c / 255 for c in stop))[1] < 0.12 for stop in stops)
+
+
+def gray(value):
+    return hexa((round(luma(rgb(value))),) * 3)
+
+
+STATUS = {"green", "yellow", "red", "teal", "peach"}    # these carry meaning in the sidebar
+
+
+def interface(stops, tint):
+    """(ghostty colors, 16-color palette, herdr tokens) for the theme stops. A
+    colored theme lends its hues; a neutral one gets black and white."""
+    ghostty, palette, herdr = dict(GHOSTTY), list(PALETTE), dict(HERDR)
+    plain = neutral(stops)
+    if not plain:
+        ghostty["cursor-color"] = herdr["accent"] = hexa(lift(stops[-1], 190))
+        herdr["mauve"] = hexa(lift(stops[0], 190))
+        herdr["blue"] = hexa(lift(stops[len(stops) // 2], 190))
+    if tint and plain:
+        ghostty = {key: gray(value) for key, value in ghostty.items()}
+        herdr = {key: value if key in STATUS or value == "reset" else gray(value) for key, value in herdr.items()}
+        ghostty["cursor-color"] = herdr["accent"] = "#f4f4f4"
+        for index in (0, 7, 8, 15):
+            palette[index] = gray(palette[index])
+    elif tint:
         shade = lambda value: hexa(tinted(rgb(value), stops[0]))
         ghostty = {key: shade(value) if key in TINTED else value for key, value in ghostty.items()}
         herdr = {key: shade(value) if key in TINTED else value for key, value in herdr.items()}

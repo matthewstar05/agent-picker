@@ -150,7 +150,9 @@ class BloomTests(unittest.TestCase):
         self.assertEqual(preferences.get("usage.theme") or "brand", "brand")
         bloom.sync(self.call)
         self.assertEqual(self.image()[2][0][-1], PINK)             # brand: as drawn
-        self.assertIn("background = #14121f", self.active())
+        self.assertIn("background = #131313", self.active())      # on black and white
+        self.assertIn('accent = "#f4f4f4"', self.herdr.read_text())
+        self.assertIn('yellow = "#ffd98a"', self.herdr.read_text())   # status colors keep their meaning
 
         ocean = themes.stops("ocean")
         with patch.object(themes, "stops", lambda name: ocean):
@@ -177,7 +179,7 @@ class BloomTests(unittest.TestCase):
         preferences.put(bloom.DIM.key, 0)
         self.assertTrue(bloom.sync(self.call))
         self.assertNotIn("background-image", self.active())
-        self.assertIn("background = #14121f", self.active())
+        self.assertIn("background = #131313", self.active())
         self.assertIn('[theme.custom]\npanel_bg = "reset"', self.herdr.read_text())
         self.assertFalse((bloom.home() / "cache").exists())
         preferences.put(bloom.DIM.key, 45)
@@ -190,7 +192,7 @@ class BloomTests(unittest.TestCase):
         self.assertEqual(preferences.find("bloom").show(), "colors only")
         self.assertTrue(bloom.sync(self.call))
         self.assertNotIn("background-image", self.active())
-        self.assertIn(f'accent = "{bloom.ACCENT}"', self.herdr.read_text())
+        self.assertIn('accent = "#f4f4f4"', self.herdr.read_text())
         ocean = themes.stops("ocean")
         with patch.object(themes, "stops", lambda name: ocean):
             self.assertTrue(bloom.sync(self.call))
@@ -205,6 +207,17 @@ class BloomTests(unittest.TestCase):
         self.assertTrue(bloom.sync(self.call))
         self.assertEqual(self.herdr.read_text(), before)
         self.assertFalse(bloom.active_path().exists())
+
+    def test_brand_rainbow_and_gray_themes_get_black_and_white(self):
+        for stops in (None, "rainbow", themes.stops("mono")):
+            ghostty, palette, herdr = bloom.interface(stops, True)
+            for value in [*ghostty.values(), palette[0], palette[8], herdr["surface1"], herdr["mauve"], herdr["text"]]:
+                self.assertEqual(len(set(bloom.rgb(value))), 1, (stops, value))
+            self.assertEqual(herdr["red"], bloom.HERDR["red"])
+            self.assertEqual(bloom.interface(stops, False)[0]["background"], "#14121f")
+        colored = bloom.interface(themes.stops("ocean"), True)[2]
+        self.assertGreater(len(set(bloom.rgb(colored["surface1"]))), 1)
+        self.assertNotEqual(colored["mauve"], bloom.HERDR["mauve"])
 
     def test_sidebar_quiet_text_stays_readable_without_a_solid_background(self):
         for stops in (None, themes.stops("ocean")):
