@@ -93,6 +93,19 @@ class CursorBarVisibilityTests(unittest.TestCase):
         self.assertEqual([w["label"] for w in shown], ["cr", "ex", "gb"])
         self.assertEqual(shown[-1]["pct"], 10)
 
+    def test_partial_fetch_keeps_last_model_readings_until_they_reset(self):
+        previous = {"windows": [{"label": "cr", "pct": 32, "resets": self.now + 86400},
+                                {"label": "ex", "pct": 54, "resets": self.now - 60},
+                                {"label": "gb", "pct": 90, "resets": self.now + 3600}]}
+        panel.USAGE["Cursor"] = previous
+        fresh = [{"label": "gb", "pct": 12, "resets": self.now + 3600}]
+        with patch.dict(ap.FETCHERS, {"Cursor": lambda: fresh}), patch.object(panel, "merge_cache"), \
+                patch.object(panel, "record"):
+            panel.fetch("Cursor")
+        windows = {w["label"]: w["pct"] for w in panel.USAGE["Cursor"]["windows"]}
+        self.assertEqual(windows, {"gb": 12, "cr": 32})
+        self.assertEqual(ap.keep_missing("Claude", previous, fresh), fresh)
+
 
 if __name__ == "__main__":
     unittest.main()

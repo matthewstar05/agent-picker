@@ -599,6 +599,7 @@ def fetch(name):
         windows = None
     with LOCK:
         INFLIGHT.discard(name)
+        windows = ap.keep_missing(name, USAGE.get(name), windows)
         if windows:
             USAGE[name] = {"windows": windows, "fetched": time.time()}
             FAILS[name] = 0

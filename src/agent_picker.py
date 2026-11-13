@@ -411,12 +411,25 @@ def numeric_windows(windows):
     return [w for w in windows or [] if isinstance(w.get("pct"), (int, float))]
 
 
+def keep_missing(name, previous, windows):
+    """Cursor reads its bars from two endpoints, and one can fail while the other
+    answers. Keep the last reading of a missing bar until that bar resets."""
+    if name != "Cursor" or not windows:
+        return windows
+    have = {w.get("label") for w in windows}
+    now = time.time()
+    kept = [w for w in numeric_windows((previous or {}).get("windows"))
+            if w.get("label") not in have and (w.get("resets") or 0) > now]
+    return windows + kept
+
+
 def _fetch(name):
     try:
         windows = numeric_windows(FETCHERS[name]())
     except Exception:
         windows = None
     with USAGE_LOCK:
+        windows = keep_missing(name, USAGE.get(name), windows)
         PENDING.discard(name)
         if windows:
             USAGE[name] = {"windows": windows, "fetched": time.time()}
