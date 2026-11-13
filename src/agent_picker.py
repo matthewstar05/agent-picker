@@ -175,6 +175,11 @@ RUNS = preferences.register(preferences.Setting(
     hint="What a bare agent command opens outside Herdr: this selector, or Herdr with a selector "
          "in each of the five agent panes. agent --picker-select always opens the selector.",
     names={"selector": "agent selector", "workspace": "Herdr workspace"}))
+MOUSE = preferences.register(preferences.Setting(
+    "selector.mouse", "General", "Selector mouse", [True, False], True,
+    hint="Click an agent to select it, double-click to launch it, the wheel moves. "
+         "Off leaves the mouse to the terminal.",
+    names={True: "on", False: "off"}))
 bloom.register()
 
 
@@ -355,16 +360,39 @@ def usage_antigravity():
 
 
 def _agy_version():
-    """The installed agy's version, e.g. '1.4.4' (the last one checked if it can't be run)."""
+    """The installed agy's version, e.g. '1.4.4' (the last one checked if it can't be run).
+
+    agy is asked once per build of it and the answer is kept. It runs in a
+    session of its own: started inside a Herdr pane's foreground job, Herdr
+    would take the pane for an Antigravity agent and the usage pane would list
+    Antigravity as open."""
     agent = next(a for a in AGENTS if a["name"] == "Antigravity")
-    argv = resolve_argv(agent)
+    kept = STATE / "agy-version.json"
+    try:
+        argv = resolve_argv(agent)
+        stamp = os.stat(shutil.which(argv[0]) or argv[0])
+        build = [argv[0], stamp.st_mtime_ns, stamp.st_size]
+    except (OSError, TypeError, IndexError):
+        return "1.4.4"
+    try:
+        saved = json.loads(kept.read_text(encoding="utf-8"))
+        if saved.get("build") == build and re.fullmatch(r"\d+\.\d+\.\d+", str(saved.get("version"))):
+            return saved["version"]
+    except (OSError, ValueError, AttributeError):
+        pass
+    apart = {"creationflags": 0x08000000} if sys.platform == "win32" else {"start_new_session": True}
     try:
         out = subprocess.run([argv[0], "--version"], capture_output=True, text=True, timeout=10,
-                             stdin=subprocess.DEVNULL).stdout
+                             stdin=subprocess.DEVNULL, **apart).stdout
         match = re.search(r"\d+\.\d+\.\d+", out)
         if match:
+            try:
+                kept.parent.mkdir(parents=True, exist_ok=True)
+                kept.write_text(json.dumps({"build": build, "version": match.group(0)}), encoding="utf-8")
+            except OSError:
+                pass
             return match.group(0)
-    except (OSError, TypeError, IndexError, subprocess.SubprocessError):
+    except (OSError, subprocess.SubprocessError):
         pass
     return "1.4.4"
 
@@ -741,11 +769,14 @@ HINTS = [" ↑↓ move · → defaults · ⏎ launch · u usage · \\ schedule �
          " → defaults · ⏎ launch · \\ schedule · s · esc ", " ⏎ launch · \\ schedule ", ""]
 
 
-def render(selected, available, t, cols, rows, sweep=None, agents=None, title="agent selector", hints=HINTS):
+def render(selected, available, t, cols, rows, sweep=None, agents=None, title="agent selector", hints=HINTS,
+           owners=None):
     """Lines for the current terminal size, each at most cols wide.
 
     agents: the profiles to list (the installed ones); every profile by default.
-    title and hints let herdr-ai's setup menu reuse the same panel."""
+    title and hints let herdr-ai's setup menu reuse the same panel.
+    owners: a list filled with one entry per returned line, the index of the
+    agent drawn on it or None, so a click can be matched to an agent."""
     agents = AGENTS if agents is None else agents
     color = agents[selected]["color"]
     iw = min(MAX_IW, cols - 2)
@@ -763,6 +794,8 @@ def render(selected, available, t, cols, rows, sweep=None, agents=None, title="a
             first = agent_rows(agent, available[i], min(cols, MAX_IW), t, i == selected)[0]
             lines.append(lit([first], agent, t, sweep)[0] if i == selected else first.paint())
         first = min(max(0, selected - rows // 2), max(0, len(lines) - rows))
+        if owners is not None:
+            owners[:] = list(range(len(lines)))[first:first + max(1, rows)]
         return lines[first:first + max(1, rows)]
 
     bw = iw - 4
@@ -776,8 +809,9 @@ def render(selected, available, t, cols, rows, sweep=None, agents=None, title="a
 
     # body entries: (kind, line). "lid" lines are dropped first when short on rows,
     # then "second" lines (each agent collapses to its first line).
-    body = []
+    body, whose = [], []     # whose[n]: the agent body[n] belongs to
     for i, agent in enumerate(agents):
+        before = len(body)
         rows_i = agent_rows(agent, available[i], bw, t, i == selected)
         if i == selected:
             ring = border_ring(agent, t, bw, height=2)
@@ -792,19 +826,28 @@ def render(selected, available, t, cols, rows, sweep=None, agents=None, title="a
         else:
             for y, line in enumerate(rows_i):
                 body.append(("first" if y == 0 else "second", framed("  " + line.paint(), bw + 2)))
+        whose.extend([i] * (len(body) - before))
 
     hint = next((h for h in hints if len(h) <= iw - 2), "")
     bottom = f"{edge}╰─{RESET}{FAINT}{hint}{RESET}{edge}{'─' * (iw - 1 - len(hint))}╯{RESET}"
 
-    every = [line for kind, line in body if kind != "bare"]
-    lines = [top, framed("", 0)] + every + [framed("", 0), bottom]
+    body = [(kind, line, who) for (kind, line), who in zip(body, whose)]
+
+    def keep(test, padded=False):
+        kept = [(line, who) for kind, line, who in body if test(kind)]
+        edge_rows = [(framed("", 0), None)] if padded else []
+        return [(top, None)] + edge_rows + kept + edge_rows + [(bottom, None)]
+
+    lines = keep(lambda kind: kind != "bare", padded=True)
     if len(lines) > rows:   # drop the breathing room, then the box lids, then second lines
-        lines = [top] + every + [bottom]
+        lines = keep(lambda kind: kind != "bare")
     if len(lines) > rows:
-        lines = [top] + [line for kind, line in body if kind not in ("lid", "bare")] + [bottom]
+        lines = keep(lambda kind: kind not in ("lid", "bare"))
     if len(lines) > rows:
-        lines = [top] + [line for kind, line in body if kind in ("first", "bare")] + [bottom]
-    return lines[:rows]
+        lines = keep(lambda kind: kind in ("first", "bare"))
+    if owners is not None:
+        owners[:] = [who for _, who in lines[:rows]]
+    return [line for line, _ in lines[:rows]]
 
 
 GOLD = {"color": (225, 165, 40), "gradient": [(225, 165, 40), (255, 222, 120), (255, 190, 90)]}
@@ -1153,6 +1196,34 @@ def centered(lines, cols, rows):
     return frame
 
 
+def hit_rows(lines, owners, cols, rows):
+    """Where each agent sits once lines are centered on a cols by rows screen:
+    (row, first column, last column, agent index), 1-based as the mouse reports."""
+    width = max((visible_len(line) for line in lines), default=0)
+    left = max(0, (cols - width) // 2)
+    top = max(0, (rows - len(lines)) // 2)
+    return [(top + n + 1, left + 1, left + max(width, 1), who)
+            for n, who in enumerate(owners[:rows - top]) if who is not None]
+
+
+def mouse_target(key, hits):
+    """What a mouse report asks of the selector: (agent index, 0) for a left
+    click on an agent's rows, (None, +1 or -1) for the wheel, else (None, 0)."""
+    try:
+        _, button, x, y, kind = key.split(":")
+        button, x, y = int(button), int(x), int(y)
+    except ValueError:
+        return None, 0
+    if button & 64:
+        return None, 1 if button & 1 else -1
+    if kind != "press" or button & 3 or button & 32:
+        return None, 0
+    for row, first, last, who in hits:
+        if row == y and first <= x <= last:
+            return who, 0
+    return None, 0
+
+
 def load_last(agents=None):
     try:
         name = (STATE / "last").read_text().strip()
@@ -1207,6 +1278,8 @@ def choose(screen=None, only=None):
     start = time.monotonic()
     visibility = Visibility()
     was_hidden = False
+    hits = []                    # (screen row, first column, last column, agent) of the frame on screen
+    clicked = (None, 0.0)        # the agent last clicked and when, to tell a double-click
 
     def draw(sweep=None):
         nonlocal was_hidden
@@ -1234,7 +1307,12 @@ def choose(screen=None, only=None):
         elif screen == "confirm_back":
             frame = centered(render_back_confirmation(defaults_menu, quit_choice, cols, rows, t), cols, rows)
         else:
-            frame = centered(render(selected, available, t, cols, rows, sweep, listed), cols, rows)
+            owners = []
+            lines = render(selected, available, t, cols, rows, sweep, listed, owners=owners)
+            hits[:] = hit_rows(lines, owners, cols, rows)
+            frame = centered(lines, cols, rows)
+        if hasattr(terminal, "mouse"):
+            terminal.mouse(screen == "agents" and bool(preferences.get(MOUSE.key)))
         writer.show(frame, cols, rows)
 
     def go(name):
@@ -1292,6 +1370,21 @@ def choose(screen=None, only=None):
             key = terminal.read_key()
             if not key or (key.startswith("release:") and screen != "usage"):
                 continue
+            if key.startswith("mouse:"):
+                if screen != "agents":
+                    continue
+                target, step = mouse_target(key, hits)
+                if step:
+                    move(step)
+                elif target is not None:
+                    twice = clicked[0] == target and time.monotonic() - clicked[1] < 0.45
+                    selected = target
+                    clicked = (None, 0.0) if twice else (target, time.monotonic())
+                    if twice:
+                        key = "\r"          # a double-click launches, as Enter does
+                if key.startswith("mouse:"):
+                    draw()
+                    continue
             if screen == "connections":
                 action = connection_menu.handle(key)
                 if action == "close":
@@ -1387,6 +1480,8 @@ def choose(screen=None, only=None):
             draw()
     finally:
         visibility.close()
+        if hasattr(terminal, "mouse"):
+            terminal.mouse(False)
         terminal.keyboard(False)
         if hasattr(terminal, "old") or hasattr(terminal, "modes"):
             terminal.__exit__()

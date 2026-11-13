@@ -75,7 +75,7 @@ fs ~/code --view details             open a folder in the details view
 agent --picker-schedule               the same scheduler inside agent
 ```
 
-Inside the command: `u` switches between the agent selector and the usage panel, and `s` opens general settings from either one.
+Inside the command: `u` switches between the agent selector and the usage panel, and `s` opens general settings from either one. In the selector the mouse works too: click an agent to select it, double-click to launch it, and the wheel moves the selection. **Selector mouse** on the General settings page turns that off and leaves the mouse to the terminal.
 
 ## Grok Bot CLI
 

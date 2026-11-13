@@ -375,7 +375,7 @@ class Terminal:
         if not seq:
             return "esc"
         text = seq.decode(errors="ignore")
-        key, event = decode_key(prefix, text, self.extended)
+        key, event = decode_key(prefix, text, self.extended, getattr(self, "mouse_reports", False))
         if self.extended:
             if key == "\t":
                 self.tab = event != 3
@@ -429,7 +429,7 @@ KITTY_KEYS = {9: "\t", 13: "\r", 27: "esc", 127: "\x7f", 8: "\b", 57414: "\r",
 US_SHIFTED = dict(zip("`1234567890-=[]\\;',./", '~!@#$%^&*()_+{}|:"<>?'))
 
 
-def decode_key(prefix, seq, extended=False):
+def decode_key(prefix, seq, extended=False, mouse=False):
     """(key name, event) for the bytes after ESC [ or ESC O. event is 1 press,
     2 repeat, 3 release. Kitty sends CSI code;mods:event u, and arrows as
     CSI 1;mods:event A. Other sequences (Home, F-keys, focus, paste and mouse
@@ -439,10 +439,11 @@ def decode_key(prefix, seq, extended=False):
     extended adds "shift-enter", "shift" (either Shift key), shifted symbols
     ("?" for Shift+/), "focus-in"/"focus-out", and SGR mouse reports as
     "mouse:<button>:<x>:<y>:press" or ":release", numbers as sent (1-based
-    cells; the wheel is button 64/65, motion adds 32)."""
+    cells; the wheel is button 64/65, motion adds 32). mouse alone decodes
+    just those reports, for a screen that wants clicks and nothing else."""
     final, fields = seq[-1:], seq[:-1].split(";")
-    if extended and prefix == b"[":
-        if seq in ("I", "O"):
+    if (extended or mouse) and prefix == b"[":
+        if extended and seq in ("I", "O"):
             return ("focus-in" if seq == "I" else "focus-out"), 1
         if seq[:1] == "<" and final in ("M", "m"):
             numbers = seq[1:-1].split(";")
