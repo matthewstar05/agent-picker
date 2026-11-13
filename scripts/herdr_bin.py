@@ -13,11 +13,13 @@ bin/ is ignored by Git, so neither touches the repository.
 
 import argparse
 import hashlib
+import http.client
 import os
 import platform
 import shutil
 import subprocess
 import sys
+import time
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -64,9 +66,16 @@ def build(profile="release"):
     return place(built)
 
 
-def download(url):
-    with urllib.request.urlopen(url, timeout=120) as response:
-        return response.read()
+def download(url, tries=4, wait=time.sleep):
+    """The bytes at url. A dropped connection is retried before giving up."""
+    for attempt in range(tries):
+        try:
+            with urllib.request.urlopen(url, timeout=120) as response:
+                return response.read()
+        except (OSError, http.client.HTTPException) as error:
+            if attempt == tries - 1:
+                raise SystemExit(f"herdr_bin: could not download {url}: {error}")
+            wait(2 * (attempt + 1))
 
 
 def fetch(tag=None, get=download):

@@ -186,6 +186,18 @@ zoom = "prefix+z"
             return
         self.assertEqual(len(tomllib.loads(changed)['ui']['sidebar']['agents']['rows'][0]), 7)
 
+    def test_watcher_leaves_once_its_server_stays_gone(self):
+        waits = []
+        with tempfile.TemporaryDirectory() as folder, \
+             patch.object(status, 'state_dir', return_value=Path(folder)), \
+             patch.object(sidebar, 'endpoint', return_value='fake.sock'), \
+             patch.object(sidebar, 'request', side_effect=FileNotFoundError(2, 'No such file or directory')) as call, \
+             patch.object(status, 'GONE_AFTER', 3), \
+             patch('builtins.print'), \
+             patch.object(status.time, 'sleep', side_effect=waits.append):
+            self.assertIsNone(status.run())
+        self.assertEqual((call.call_count, len(waits)), (3, 2))
+
     def test_observer_reads_completion_sequences_from_session_agents(self):
         live = [pane('agent')]
         live[0]['completion_seq'] = 10

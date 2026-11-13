@@ -217,6 +217,9 @@ def ensure_running():
                          stdout=log, stderr=log, close_fds=True, start_new_session=True)
 
 
+GONE_AFTER = 60   # consecutive seconds without a server before the watcher leaves
+
+
 def run():
     path = sidebar.endpoint()
     call = lambda method, params: sidebar.request(method, params, path)
@@ -232,6 +235,7 @@ def run():
             seen = json.loads(seen_path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             seen = {}
+        absent = 0
         while True:
             try:
                 snapshot = call("session.snapshot", {}).get("snapshot", {})
@@ -264,8 +268,16 @@ def run():
                 if selected != previous_settings:
                     sidebar.sync(socket_path=path, call=call, migrate=False)
                     previous_settings = selected
+                absent = 0
             except Exception as exc:   # an odd herdr reply must not stop the watcher
                 print(f"herdr-ai status: {exc}", file=sys.stderr, flush=True)
                 refreshed.clear()
                 spaces_refreshed.clear()
+                # A server that stays gone has been stopped: leave, instead of
+                # logging once a second forever. The next server start or
+                # herdr-ai run starts a watcher again.
+                absent = absent + 1 if isinstance(exc, (FileNotFoundError, ConnectionRefusedError)) else 0
+                if absent >= GONE_AFTER:
+                    print(f"herdr-ai status: no server at {path}; the watcher is leaving", file=sys.stderr, flush=True)
+                    return
             time.sleep(1)
