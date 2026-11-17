@@ -192,6 +192,23 @@ jobs:
           # A second run updates in place.
           AGENT_PICKER_RELEASES_URL="file://$PWD/dist" sh dist/install.sh
           herdr --version
+          grep -q '^onboarding = false' "$HOME/.config/herdr/config.toml"
+
+      - name: Install piped, as on a new Mac without Python (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          set -eu
+          # A new Mac has no Python until the Command Line Tools are installed, so
+          # the installer downloads its own; force that path here.
+          export HOME="$RUNNER_TEMP/new mac"
+          mkdir -p "$HOME"
+          cd /
+          cat "$GITHUB_WORKSPACE/dist/install.sh" | env AGENT_PICKER_PRIVATE_PYTHON=1 \
+            AGENT_PICKER_RELEASES_URL="file://$GITHUB_WORKSPACE/dist" sh
+          grep -q "agent-picker-python/bin/python3" "$HOME/.local/bin/agent"
+          "$HOME/.local/bin/agent" --picker-doctor
+          "$HOME/.local/bin/herdr" --version
+          grep -q '^onboarding = false' "$HOME/.config/herdr/config.toml"
 
       - name: Install with the one-line installer (Windows)
         if: runner.os == 'Windows'
@@ -245,7 +262,7 @@ jobs:
 
               irm https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/install.ps1 | iex
 
-          Python 3.9 or later is required. A Herdr you already have is left alone; \`agent\` then opens the bundled one in a session of its own. Running the same line again updates the install.
+          On macOS nothing else is needed: the installer brings its own Python when the Mac has none, then opens the workspace. Windows needs Python 3.9 or later. A Herdr you already have is left alone; \`agent\` then opens the bundled one in a session of its own. Running the same line again updates the install.
 
           The bundled Herdr is a fork of [herdrdev/herdr](https://github.com/herdrdev/herdr) (Apache 2.0) and is not an official Herdr release.
           EOF

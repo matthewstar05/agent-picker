@@ -148,6 +148,12 @@ def pretrust(agent):
 
 
 def installed(agent):
+    """Whether this provider can run here: its CLI is found and, for one that
+    drives a Mac app (Grok Bot), that app is installed in Applications."""
+    app = agent.get("requires_app")
+    if app and sys.platform == "darwin" and not any(
+            (base / app).exists() for base in (Path("/Applications"), Path.home() / "Applications")):
+        return False
     return resolve_argv(agent) is not None
 
 

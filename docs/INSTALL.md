@@ -1,7 +1,8 @@
 # Install agent-picker on Windows or macOS
 
 The one-line installer downloads a release that includes its own Herdr and
-installs every command. It needs Python 3.9 or later:
+installs every command. On macOS it needs nothing else; a Mac without Python 3.9
+or later gets a private copy for agent-picker. Windows needs Python 3.9 or later:
 
 ```sh
 # macOS

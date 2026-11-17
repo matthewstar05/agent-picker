@@ -6,7 +6,7 @@ The picker preserves the original animated gradients, usage meters, remembered s
 
 ## Requirements
 
-- Python 3.9 or later. Git is optional when installing from a release ZIP.
+- Python 3.9 or later. The macOS one-line installer downloads its own when the Mac has none. Git is optional when installing from a release ZIP.
 - macOS needs no third-party Python packages. The Windows installer supplies timezone data in its own environment.
 - At least one provider CLI installed and signed in on that computer.
 - Windows 10/11 or macOS and an interactive terminal. Windows Terminal is recommended on Windows.
@@ -27,7 +27,9 @@ curl -fsSL https://github.com/matthewstar05/agent-picker/releases/latest/downloa
 irm https://github.com/matthewstar05/agent-picker/releases/latest/download/install.ps1 | iex
 ```
 
-It downloads the release bundle for your computer, checks it against the release's checksums, unpacks it into `~/.local/share/agent-picker` (`%LOCALAPPDATA%\agent-picker\app` on Windows), and installs every command. Python 3.9 or later is the only requirement. The bundle carries a Herdr built from this repository's `herdr/` folder, a fork of [herdrdev/herdr](https://github.com/herdrdev/herdr) that is not an official Herdr release. If the computer has no Herdr, `herdr` becomes a command for the bundled one; a Herdr you already have is left alone, and `agent` then runs the bundled one in a session of its own (`agent-picker`), with its own server. Run the same line again, or `agent --picker-update`, to update.
+It downloads the release bundle for your computer, checks it against the release's checksums, unpacks it into `~/.local/share/agent-picker` (`%LOCALAPPDATA%\agent-picker\app` on Windows), and installs every command. On macOS it needs nothing else: when the Mac has no Python 3.9 or later (a new Mac has none until the Command Line Tools are installed), it downloads a private, checksum-verified Python into `~/.local/share/agent-picker-python`. Windows needs Python 3.9 or later. The bundle carries a Herdr built from this repository's `herdr/` folder, a fork of [herdrdev/herdr](https://github.com/herdrdev/herdr) that is not an official Herdr release. If the computer has no Herdr, `herdr` becomes a command for the bundled one; a Herdr you already have is left alone, and `agent` then runs the bundled one in a session of its own (`agent-picker`), with its own server. Run the same line again, or `agent --picker-update`, to update.
+
+Run from a terminal, the macOS installer then opens the workspace right away, zooming a small Terminal.app window to fill the screen (`AGENT_PICKER_NO_OPEN=1` skips this), and it turns off Herdr's first-run welcome screen. Grok Bot is listed only on a Mac with the Grok Bot app installed.
 
 After this install a bare `agent` opens Herdr in the Standard layout with an agent selector in each of the five agent panes, the usage panel, and the file browser. Running it again in the same folder returns to that workspace. `agent --picker-select` opens only the selector, and **agent runs** on the General settings page switches a bare `agent` back to it. Inside a Herdr pane, and with any arguments, `agent` is the selector as before.
 

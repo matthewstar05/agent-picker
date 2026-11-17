@@ -70,7 +70,10 @@ def release_update_command(platform=None, releases=None):
 def update_release(run=None):
     """Update an install made by the release installer: run it again, into this folder."""
     import subprocess
-    done = (run or subprocess.run)(release_update_command(), env={**os.environ, "AGENT_PICKER_HOME": str(ROOT)})
+    env = {**os.environ, "AGENT_PICKER_HOME": str(ROOT), "AGENT_PICKER_NO_OPEN": "1"}
+    if sys.platform != "win32":
+        env.setdefault("AGENT_PICKER_PYTHON", sys.executable)
+    done = (run or subprocess.run)(release_update_command(), env=env)
     if done.returncode:
         raise RuntimeError("The release installer did not finish; nothing else was changed.")
 

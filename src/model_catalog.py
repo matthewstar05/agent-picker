@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -102,7 +103,11 @@ def fetch(agent):
     commands = {"Cursor": ["--list-models"], "Antigravity": ["models"]}
     if name not in commands:
         return []
-    result = subprocess.run([argv[0]] + commands[name], capture_output=True, text=True, timeout=12, encoding="utf-8")
+    # In a session of its own: run in a Herdr pane's foreground job, the CLI
+    # would make Herdr take a selector pane for that provider's agent.
+    apart = {"creationflags": 0x08000000} if sys.platform == "win32" else {"start_new_session": True}
+    result = subprocess.run([argv[0]] + commands[name], capture_output=True, text=True, timeout=12, encoding="utf-8",
+                            stdin=subprocess.DEVNULL, **apart)
     if result.returncode:
         return []
     if name == "Cursor":

@@ -87,6 +87,42 @@ def choose_workspace():
     return True
 
 
+def herdr_config(env=None):
+    """The config.toml the bundled Herdr reads (herdr/src/config/io.rs)."""
+    env = os.environ if env is None else env
+    if env.get("HERDR_CONFIG_PATH"):
+        return Path(env["HERDR_CONFIG_PATH"])
+    if env.get("XDG_CONFIG_HOME"):
+        base = Path(env["XDG_CONFIG_HOME"])
+    elif sys.platform == "win32" and env.get("APPDATA"):
+        base = Path(env["APPDATA"])
+    else:
+        base = Path.home() / ".config"
+    return base / "herdr" / "config.toml"
+
+
+def skip_onboarding(path=None):
+    """Herdr's first-run welcome screen would cover the five selectors that a
+    bare agent opens, so a first install turns it off. True when the setting
+    was written; an onboarding value already in the file is kept."""
+    path = path or herdr_config()
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        text = ""
+    except OSError:
+        return False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("["):
+            break   # top-level keys come before the first table
+        if stripped.split("=", 1)[0].strip() == "onboarding":
+            return False
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("onboarding = false\n" + text, encoding="utf-8")
+    return True
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     prefix = argv[argv.index("--prefix") + 1] if "--prefix" in argv and argv.index("--prefix") + 1 < len(argv) else None
@@ -103,6 +139,8 @@ def main(argv=None):
         print("herdr: your existing Herdr was left as it is. agent opens the bundled one in its own session.")
     else:
         print("herdr: no bundled Herdr in this folder; agent uses the herdr on PATH.")
+    if binary and skip_onboarding():
+        print("herdr: skipped Herdr's welcome screen so agent opens straight into the workspace.")
     if binary and choose_workspace():
         print("agent: opens the Herdr workspace. agent --picker-select opens only the selector;")
         print("       Settings, General, agent runs changes it back.")

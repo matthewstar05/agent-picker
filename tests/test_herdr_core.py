@@ -167,6 +167,21 @@ class BootstrapTests(Folder):
             self.assertFalse(bootstrap.choose_workspace())
             self.assertEqual(preferences.get("agent.opens"), "selector")
 
+    def test_a_first_install_skips_herdrs_welcome_screen_and_keeps_a_chosen_value(self):
+        config = self.root / "herdr" / "config.toml"
+        self.assertEqual(bootstrap.herdr_config({"HERDR_CONFIG_PATH": str(config)}), config)
+        self.assertEqual(bootstrap.herdr_config({"XDG_CONFIG_HOME": str(self.root)}), config)
+        self.assertTrue(bootstrap.skip_onboarding(config))
+        self.assertEqual(config.read_text(), "onboarding = false\n")
+        self.assertFalse(bootstrap.skip_onboarding(config))
+        # Existing settings stay, and the key goes above the first table.
+        config.write_text("[ui.sidebar]\nonboarding = true\n")
+        self.assertTrue(bootstrap.skip_onboarding(config))
+        self.assertEqual(config.read_text(), "onboarding = false\n[ui.sidebar]\nonboarding = true\n")
+        config.write_text("onboarding = true\n[theme]\n")
+        self.assertFalse(bootstrap.skip_onboarding(config))
+        self.assertEqual(config.read_text(), "onboarding = true\n[theme]\n")
+
 
 class PackagingTests(Folder):
     def test_bundle_holds_the_checkout_and_the_binary_but_not_the_herdr_source(self):

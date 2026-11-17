@@ -396,6 +396,7 @@
       175
     ],
     "detail": "Cursor Grok Bot usage \u00b7 local machine tools",
+    "requires_app": "Grok Bot.app",
     "argv": [
       "grokbot",
       "--dangerously-skip-permissions"
