@@ -27,7 +27,7 @@ class RequiresAppTest(unittest.TestCase):
             real = Path
             def fake(*parts):
                 path = real(*parts)
-                return system if str(path) == "/Applications" else path
+                return system if path == real("/Applications") else path
             with patch.object(ap.sys, "platform", platform), patch.object(ap, "Path", side_effect=fake) as P, \
                     patch.object(ap, "resolve_argv", return_value=["/bin/grokbot"]):
                 P.home.return_value = home
