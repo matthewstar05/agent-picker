@@ -91,6 +91,21 @@ class AccountTests(unittest.TestCase):
         self.assertEqual(read.call_args.args, ("List-Available-Models", {"nextToken": "page2"}))
         run.assert_not_called()
 
+    def test_model_effort_choices_follow_the_catalog_schema(self):
+        def model(ident, field, levels):
+            return {"modelId": ident, "additionalModelRequestFieldsSchema": {
+                "properties": {field: {"properties": {"effort": {"enum": levels}}}}}}
+
+        grok_levels = ["low", "medium", "high", "xhigh"]
+        opus_levels = ["low", "medium", "high", "max"]
+        models = [model("grok-4.7", "reasoning", grok_levels),
+                  model("claude-opus-4.6", "output_config", opus_levels),
+                  {"modelId": "no-schema", "additionalModelRequestFieldsSchema": None}]
+        with patch.object(account, "account", return_value={"models": models}):
+            rows = account.models()
+        self.assertEqual([r["efforts"] for r in rows],
+                         [grok_levels, opus_levels, ["low", "medium", "high", "xhigh", "max"]])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -12,6 +12,7 @@ import urllib.request
 
 REGIONS = {"us-east-1", "eu-central-1", "us-gov-east-1", "us-gov-west-1"}
 MAX_BODY = 1024 * 1024
+EFFORTS = ("low", "medium", "high", "xhigh", "max")
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -83,6 +84,18 @@ def usage():
     return None
 
 
+def model_efforts(model):
+    if model["modelId"] == "auto":
+        return []
+    for field in ("reasoning", "output_config"):
+        node = model.get("additionalModelRequestFieldsSchema")
+        for key in ("properties", field, "properties", "effort", "enum"):
+            node = node.get(key) if isinstance(node, dict) else None
+        if isinstance(node, list):
+            return [level for level in node if level in ("none", *EFFORTS)]
+    return list(EFFORTS)
+
+
 def models():
     rows, seen, query = [], set(), {}
     for _ in range(5):
@@ -96,7 +109,7 @@ def models():
             if ident and ident not in seen:
                 seen.add(ident)
                 rows.append({"id": ident, "name": model.get("modelName") or ident,
-                             "efforts": ["low", "medium", "high", "xhigh", "max"] if ident != "auto" else []})
+                             "efforts": model_efforts(model)})
         token = data.get("nextToken")
         if not token:
             return rows

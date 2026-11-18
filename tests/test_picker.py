@@ -30,7 +30,7 @@ class PickerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             with patch.dict(os.environ, AGENT_PICKER_CONFIG=str(Path(folder) / "config.json")):
                 agents = {a["name"]: a for a in settings.load_agents()}
-        self.assertEqual(agents["Codex"]["argv"][1:], ["-m", "gpt-6.1-sol", "-c", "model_reasoning_effort=high", "--dangerously-bypass-approvals-and-sandbox", "-c", "features.fast_mode=true", "-c", "service_tier=default"])
+        self.assertEqual(agents["Codex"]["argv"][1:], ["-m", "gpt-6.2-sol", "-c", "model_reasoning_effort=high", "--dangerously-bypass-approvals-and-sandbox", "-c", "features.fast_mode=true", "-c", "service_tier=default"])
         self.assertIn("--dangerously-skip-permissions", agents["Claude"]["argv"])
         self.assertIn("--trust-all-tools", agents["Kiro"]["argv"])
         self.assertEqual(agents["Kiro"]["argv"][1:3], ["chat", "--v3"])   # Kiro CLI v3 agent

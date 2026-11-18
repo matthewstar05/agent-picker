@@ -288,7 +288,7 @@ Fast mode gives faster replies in exchange for higher usage, not higher usage li
 
 Claude has an **Ultracode** toggle below Bypass Permissions. Highlight Claude, press `→`, move down to Ultracode, and toggle it the same way. The choice is saved locally and applies to new Claude sessions the picker starts, including `--picker-solo` and herdr-ai lead, peer and plain panes (crew panes are told not to start subagents, so they stay without it); it starts Off. On turns on Claude Code's ultracode, which runs a workflow for every substantive task, so it needs a Claude Code version with workflows and uses more quota than single-agent turns. The picker passes one `--settings` file (in the local state directory) with `"ultracode": true` and `"enableWorkflows": true`, merged with any settings a team pane already passes, such as its iMCP denial. It also adds a short note to Claude's system prompt (after any herdr-ai brief) asking workflows to use `haiku` for mechanical or narrow agents such as searching, reading files or reformatting data, and to keep the session model for design, important code changes, judging, synthesis and verification, or whenever you ask for a specific model. The same note keeps reviews lean: when the relevant tests pass, workflows add no review or verify stage; an untested or risky change (security, credentials, data loss, concurrency, money) gets at most one haiku reviewer, and a full review runs only when you ask for one. The selector shows `ultracode` beside the model when enabled. Existing sessions keep their current mode.
 
-Choices come from bundled model catalogs, refreshed from installed CLIs or their local caches in the background. Your current model stays selectable. Cursor, Claude, and Codex effort choices follow their model catalogs.
+Choices come from bundled model catalogs, refreshed from installed CLIs, their local caches, or the Kiro account in the background. Your current model stays selectable. Cursor, Claude, Codex, and Kiro effort choices use model-specific catalog data when available.
 
 Changes are saved in the machine-local config as `agents.<Provider>.defaults`, preserving local paths and unrelated arguments. Turning Bypass Permissions Off removes that provider's bypass flags and skips new picker folder-trust writes. Claude uses its default permission mode; Codex uses on-request approvals and the workspace-write sandbox.
 
@@ -299,7 +299,7 @@ Changes are saved in the machine-local config as `agents.<Provider>.defaults`, p
 | Provider | Default model argument | Effort |
 | --- | --- | --- |
 | Claude | opus | medium |
-| Codex | gpt-6.1-sol | high |
+| Codex | gpt-6.2-sol | high |
 | Cursor | grok-4.7-high | encoded in model argument |
 | Kiro | claude-opus-5.5 (`--v3` agent) | medium |
 | Antigravity | gemini-3.8-flash-high | encoded in model argument |

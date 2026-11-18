@@ -149,17 +149,17 @@
         255
       ]
     ],
-    "model": "gpt-6.1-sol",
+    "model": "gpt-6.2-sol",
     "short": "gpt sol",
     "color": [
       16,
       163,
       127
     ],
-    "detail": "gpt-6.1-sol \u00b7 high",
+    "detail": "gpt-6.2-sol \u00b7 high",
     "team": {
       "lead": {
-        "model": "gpt-6.1-sol",
+        "model": "gpt-6.2-sol",
         "effort": "high"
       },
       "crew": {
@@ -170,7 +170,7 @@
     "argv": [
       "codex",
       "-m",
-      "gpt-6.1-sol",
+      "gpt-6.2-sol",
       "-c",
       "model_reasoning_effort=high",
       "--dangerously-bypass-approvals-and-sandbox",

@@ -52,7 +52,7 @@ class TeamTests(unittest.TestCase):
         return prepared, args
 
     def test_orchestrator_summaries_name_the_orchestrators_model(self):
-        expected = {"Claude": "claude-opus-5-5", "Codex": "gpt-6.1-sol", "Antigravity": "gpt-6.1-sol",
+        expected = {"Claude": "claude-opus-5-5", "Codex": "gpt-6.2-sol", "Antigravity": "gpt-6.2-sol",
                     "Cursor": "claude-opus-5-5", "Kiro": "claude-opus-5.5"}
         for name, text in expected.items():
             with patch.object(team, "mode", return_value=team.ORCHESTRATOR), \
@@ -62,7 +62,7 @@ class TeamTests(unittest.TestCase):
 
     def test_individual_and_plain_summaries_name_the_picker_model(self):
         # Fixture picker defaults (Claude's "opus" alias); the label shows the model as launched.
-        expected = {"Claude": "opus", "Codex": "gpt-6.1-sol", "Antigravity": "gemini-3.8-flash-high",
+        expected = {"Claude": "opus", "Codex": "gpt-6.2-sol", "Antigravity": "gemini-3.8-flash-high",
                     "Cursor": "grok-4.7", "Kiro": "claude-opus-5.5"}
         for name, text in expected.items():
             for kind in (team.INDIVIDUAL, team.OFF):
@@ -123,7 +123,7 @@ class TeamTests(unittest.TestCase):
         self.assertEqual(values["effort"], "medium")   # and its effort, not the lead's high
         self.assertTrue(values["bypass_permissions"])
         codex, _, _ = self.peer("Codex")
-        self.assertEqual(provider_defaults.current(codex)["model"], "gpt-6.1-sol")
+        self.assertEqual(provider_defaults.current(codex)["model"], "gpt-6.2-sol")
         self.assertTrue(codex["detail"].startswith("peer · "))
 
     def test_individual_peers_share_context_instead_of_delegating(self):
@@ -291,7 +291,7 @@ class TeamTests(unittest.TestCase):
         for name in TEAM:
             lead = self.agents[name]["team"].get("lead")
             if lead:
-                self.assertRegex(lead["model"], r"^(gpt-6\.1-sol|claude-opus-5[-.]5)$", name)
+                self.assertRegex(lead["model"], r"^(gpt-6\.2-sol|claude-opus-5[-.]5)$", name)
 
     def test_star_takes_no_solo_brief(self):
         star = {"name": "Star", "argv": ["starcli"]}
