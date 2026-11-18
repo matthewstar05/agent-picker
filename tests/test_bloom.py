@@ -208,6 +208,22 @@ class BloomTests(unittest.TestCase):
         self.assertEqual(self.herdr.read_text(), before)
         self.assertFalse(bloom.active_path().exists())
 
+    def test_matrix_uses_a_black_background_and_keeps_its_green_accents(self):
+        preferences.put(bloom.COLORS.key, True)
+        preferences.put("usage.theme", "matrix")
+        self.assertTrue(bloom.sync(self.call))
+        self.assertIn("background = #000000", self.active().splitlines())
+        self.assertNotIn("background-image", self.active())
+        self.assertIn(f'accent = "{bloom.hexa(themes.stops("matrix")[-1])}"', self.herdr.read_text())
+
+        preferences.put(bloom.TINT.key, False)
+        self.assertTrue(bloom.sync(self.call))
+        self.assertIn("background = #000000", self.active().splitlines())
+
+        preferences.put("usage.theme", "ocean")
+        self.assertTrue(bloom.sync(self.call))
+        self.assertIn("background = #14121f", self.active().splitlines())
+
     def test_brand_rainbow_and_gray_themes_get_black_and_white(self):
         for stops in (None, "rainbow", themes.stops("mono")):
             ghostty, palette, herdr = bloom.interface(stops, True)

@@ -428,15 +428,19 @@ def spec():
     if not names:
         return None
     scene = preferences.get(SCENE.key)
+    theme = (preferences.get("usage.theme") or "brand") if preferences.get(FOLLOW.key) else None
     stops = None
-    if preferences.get(FOLLOW.key):
+    if theme is not None:
         import themes   # loaded only while the backdrop follows a theme
         themes.reload()
-        stops = themes.stops(preferences.get("usage.theme") or "brand")
+        stops = themes.stops(theme)
         stops = [list(stop) for stop in stops] if isinstance(stops, list) else stops
-    return {"scene": scene if scene in names else names[0], "dim": preferences.get(DIM.key) if picture else 0,
+    want = {"scene": scene if scene in names else names[0], "dim": preferences.get(DIM.key) if picture else 0,
             "mirror": preferences.get(SIDE.key) == "left", "shift": preferences.get(SHIFT.key),
             "stops": stops, "tint": bool(preferences.get(TINT.key))}
+    if theme == "matrix":
+        want["background"] = "#000000"
+    return want
 
 
 def image_for(want):
@@ -527,6 +531,8 @@ def sync(call=None):
         return False       # Ghostty isn't set up here; the setting waits
     signature = _signature(want)
     colors, palette, tokens = interface(want["stops"], want["tint"])
+    if "background" in want:
+        colors["background"] = want["background"]
     wanted_herdr = with_block(herdr_text, tokens) if config.exists() else herdr_text
     ghostty_before = read_text(ghostty)
     if (signature == _applied() and active.exists() and wanted_herdr == herdr_text
