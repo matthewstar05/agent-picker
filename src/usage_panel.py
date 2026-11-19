@@ -1081,7 +1081,7 @@ def drained_lines(cw, t, now, anim, st, rainbow, targets):
             line = Line().put("   ")
             if k == 0:
                 for n, ch in enumerate(short.ljust(width)):
-                    line.put(ch, WHITE if rainbow else ap.grad(style, n / max(1, width) * 0.7 - t * 0.1 * anim), bold=True)
+                    line.put(ch, WHITE if rainbow else ap.grad(style, n / max(1, width) * 0.7 - t * 0.1 * anim))
             else:
                 line.put(" " * width)
             line.put(" ").put(w["label"].ljust(2), LABEL).put(" ")
@@ -1187,7 +1187,7 @@ def compact_row(view, i, width, t, now):
             part, entry, pools = target
             if part["name"] == "Antigravity":
                 st = part["agent"]
-            line.put(" " + meter_short(part["name"]), WHITE if rainbow else ap.grad(st, 0.2), bold=True)
+            line.put(" " + meter_short(part["name"]), WHITE if rainbow else ap.grad(st, 0.2))
             windows = only_pools(ap.display_windows(part["name"], entry), pools)[:2]
         else:
             windows = ap.display_windows(name, entry)
