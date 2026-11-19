@@ -141,7 +141,7 @@ class RankTests(unittest.TestCase):
         plain, _ = self.rank("fix the bug", fresh())
         sticky, _ = self.rank("fix the bug", fresh(), current="Kiro")
         score = lambda cs: next(c.score for c in cs if c.provider == "Kiro")
-        self.assertAlmostEqual(score(sticky) - score(plain), star_router.STICKY, places=3)
+        self.assertAlmostEqual(score(sticky) - score(plain), star_router.DEFAULT_PERSISTENCE, places=3)
 
     def test_context_bonus_shrinks_when_quota_is_tight(self):
         usage = fresh()
@@ -150,7 +150,7 @@ class RankTests(unittest.TestCase):
         sticky, _ = self.rank("fix the bug", usage, current="Codex")
         score = lambda rows: next(choice.score for choice in rows if choice.provider == "Codex")
         self.assertGreater(score(sticky), score(plain))
-        self.assertLess(score(sticky) - score(plain), star_router.STICKY / 2)
+        self.assertLess(score(sticky) - score(plain), star_router.DEFAULT_PERSISTENCE / 2)
         self.assertNotEqual(sticky[0].provider, "Codex")
 
     def test_provider_error_blocks_only_the_matching_cursor_pool(self):
@@ -743,6 +743,46 @@ class StarSessionTests(unittest.TestCase):
         self.assertEqual(args[args.index("--effort") + 1], "xhigh")
         self.assertEqual(star.pinned, "Claude")
         self.assertFalse((self.dir / "Claude.log").exists())
+
+    def test_persistence_reuses_synced_native_context_and_respects_route_constraints(self):
+        star = self.star({"Claude": False, "Cursor": False})
+        star.convo.record("Claude", "prior request", "prior reply", None)
+        self.assertEqual(star.route("run the tests")[1][0].provider, "Cursor")
+
+        star.pinned = "Claude"
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(star.run("start the fix")[1], "ok")
+        star.pinned = None
+
+        star.persistence = 0.08
+        self.assertEqual(star.route("run the tests")[1][0].provider, "Cursor")
+        star.persistence = star_router.DEFAULT_PERSISTENCE
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(star.run("run the tests")[1], "ok")
+        args = json.loads((self.dir / "Claude.log").read_text().splitlines()[-1])
+        self.assertEqual(args[args.index("--resume") + 1], "sess-1")
+        self.assertNotIn("Recent turns you did not see", args[args.index("-p") + 1])
+        self.assertFalse((self.dir / "Cursor.log").exists())
+
+        star.persistence = 1
+        self.assertEqual(star.route("use Cursor to run the tests")[1][0].provider, "Cursor")
+        ap.USAGE["Claude"] = meter(("5h", 100, HOUR))
+        _, choices, skipped = star.route("run the tests")
+        self.assertEqual(choices[0].provider, "Cursor")
+        self.assertIn("limit used", skipped["Claude"])
+
+    def test_print_route_can_override_saved_persistence_for_a_preview(self):
+        star = self.star({"Claude": False, "Cursor": False})
+        star.convo.record("Claude", "first request", "first reply", "sess-1")
+        star.convo.save()
+        out = io.StringIO()
+        self.addCleanup(os.chdir, os.getcwd())
+        with patch.object(starcli, "installed", return_value={"Claude", "Cursor"}), redirect_stdout(out):
+            self.assertEqual(starcli.main(["-c", "--route", "--persistence", "0", "run the tests"]), 0)
+        winner = next(line for line in ANSI.sub("", out.getvalue()).splitlines() if "✦" in line)
+        self.assertIn("Cursor", winner)
+        self.assertEqual(starcli.Conversation.load(star.convo.id).routing["persistence"],
+                         star_router.DEFAULT_PERSISTENCE)
 
     def test_conflicting_model_instructions_do_not_start_a_provider(self):
         star = self.star({"Claude": False, "Codex": False})
@@ -1629,7 +1669,7 @@ class GoalTests(unittest.TestCase):
 
 
 class RoutingMemoryTests(unittest.TestCase):
-    def test_resume_keeps_the_pin_tier_and_plan_mode(self):
+    def test_resume_keeps_the_pin_tier_plan_mode_and_persistence(self):
         origin = os.getcwd()
         self.addCleanup(lambda: os.chdir(origin))
         with tempfile.TemporaryDirectory() as folder:
@@ -1638,9 +1678,12 @@ class RoutingMemoryTests(unittest.TestCase):
                     redirect_stdout(io.StringIO()):
                 star = starcli.Star(starcli.Conversation({"cwd": folder, "goal": "ship it"}))
                 star.pinned, star.tier, star.plan = "Claude", "heavy", True
-                star.convo.save()
+                commands = starcli.Commands(star)
+                commands.do_persistence("0")
+                commands.do_persistence("nan")
                 loaded = starcli.Conversation.load(star.convo.id)
-                self.assertEqual(loaded.routing, {"pinned": "Claude", "tier": "heavy", "plan": True})
+                self.assertEqual(loaded.routing, {"pinned": "Claude", "tier": "heavy", "plan": True,
+                                                  "persistence": 0})
 
                 again = starcli.Star(loaded, tier="light", plan=False)
                 again.pinned = "Codex"
@@ -1648,6 +1691,7 @@ class RoutingMemoryTests(unittest.TestCase):
                 self.assertEqual(again.pinned, "Claude")
                 self.assertEqual(again.tier, "heavy")
                 self.assertTrue(again.plan)
+                self.assertEqual(again.persistence, 0)
 
                 again.toggle_plan()
                 self.assertFalse(starcli.Conversation.load(again.convo.id).routing["plan"])
@@ -1667,7 +1711,11 @@ class RoutingMemoryTests(unittest.TestCase):
                 self.assertEqual(fresh.pinned, "Claude")
                 self.assertEqual(fresh.tier, "heavy")
                 self.assertFalse(fresh.plan)
+                self.assertEqual(fresh.persistence, 0)
                 self.assertEqual(fresh.convo.id, loaded.id)
+                starcli.Commands(fresh).do_persistence("default")
+                self.assertEqual(starcli.Conversation.load(loaded.id).routing["persistence"],
+                                 star_router.DEFAULT_PERSISTENCE)
 
     def test_two_conversations_in_the_same_second_keep_separate_ids(self):
         first = starcli.Conversation({"cwd": "/tmp"})

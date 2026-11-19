@@ -28,6 +28,7 @@ herdr-ai --setup star lays out a lead and four crew.
     star --send NAME "task" [--wait]   hand a peer a task (and wait for its reply)
     --name N --role lead|crew     this terminal's name and role in the mesh
     --use NAME / --tier T / --plan    pin a provider, a tier, or plan mode
+    --persistence N               prefer reusing context (0 to 1)
 """
 
 import json
@@ -525,6 +526,13 @@ class Conversation:
         return self.turns[-1]["provider"] if self.turns else None
 
     @property
+    def context_provider(self):
+        provider = self.current
+        if self.sessions.get(provider) and self.seen.get(provider) == len(self.turns):
+            return provider
+        return None
+
+    @property
     def title(self):
         first = next((t["user"] for t in self.turns if not t["user"].startswith("[StarCLI")), "")
         return (first or self.goal or "(empty)").strip().splitlines()[0][:70]
@@ -598,7 +606,8 @@ class Conversation:
                "seen": {k: max(0, v - dropped) for k, v in self.seen.items()}}
         if isinstance(self.routing, dict):
             out["routing"] = {"pinned": self.routing.get("pinned"), "tier": self.routing.get("tier"),
-                              "plan": bool(self.routing.get("plan"))}
+                              "plan": bool(self.routing.get("plan")),
+                              "persistence": self.routing.get("persistence", star_router.DEFAULT_PERSISTENCE)}
         return out
 
     def save(self, force=False):
@@ -916,6 +925,7 @@ class Star:
         self.names = [n for n in self.config if n in self.installed]
         self.engines = {n: star_engines.ENGINES[n](agent(n)) for n in self.names if n in star_engines.ENGINES}
         self.pinned, self.tier, self.plan = pinned, tier, plan
+        self.persistence = star_router.DEFAULT_PERSISTENCE
         self.member = member
         self.down = {}            # provider -> why it failed this session
         self.approved = set()     # tools the user allowed for the rest of this session ("a")
@@ -928,7 +938,7 @@ class Star:
         self.bind(conversation or Conversation())
 
     def bind(self, conversation):
-        """Follow a conversation, so every save records this session's pin, tier, and plan."""
+        """Follow a conversation, so every save records its routing settings."""
         if self.lease:
             def reload_saved():
                 latest = Conversation.load(conversation.id)
@@ -947,7 +957,8 @@ class Star:
             self.show_goal_state()
 
     def _stamp_routing(self):
-        self.convo.routing = {"pinned": self.pinned, "tier": self.tier, "plan": bool(self.plan)}
+        self.convo.routing = {"pinned": self.pinned, "tier": self.tier, "plan": bool(self.plan),
+                              "persistence": self.persistence}
         if self.member:
             self.member.beat(conversation=self.convo.id, cwd=self.convo.cwd)
 
@@ -982,10 +993,10 @@ class Star:
             usage = dict(ap.USAGE)
         self.recover_quota_windows(usage)
         choices, skipped = star_router.rank(task, usage, set(self.engines), self.config,
-                                            current=self.convo.current, pinned=None if intent else self.pinned,
+                                            current=self.convo.context_provider, pinned=None if intent else self.pinned,
                                             down=self.down, images=bool(images), models=models,
                                             preferred=intent.provider if intent else None,
-                                            quota_failures=self.quota_failures)
+                                            quota_failures=self.quota_failures, persistence=self.persistence)
         if intent and not choices and not skipped:
             skipped[intent.label] = "no installed provider supports the requested model and settings"
         self.last = (task, choices, skipped)
@@ -1130,8 +1141,8 @@ class Star:
             models = {provider: spec["tiers"][tier] for provider, spec in self.config.items()
                       if tier in spec["tiers"] and not spec.get("explicit_only")}
             choices, _ = star_router.rank(replace(task, tier=tier), usage, set(self.engines), self.config,
-                                          current=self.convo.current, down=self.down, images=bool(images),
-                                          models=models, quota_failures=self.quota_failures)
+                                          current=self.convo.context_provider, down=self.down, images=bool(images),
+                                          models=models, quota_failures=self.quota_failures, persistence=self.persistence)
             for choice in choices:
                 if self.can_run(choice) and (choice.provider, choice.model, choice.effort) not in tried:
                     options.setdefault((choice.provider, choice.pool), choice)
@@ -1583,6 +1594,7 @@ COMMANDS = [
     ("use", "<provider>", "set the default provider (/auto undoes it)"),
     ("model", "<provider> [tier]", "pin a provider and, optionally, its tier"),
     ("tier", "<light|standard|heavy>", "pin the model tier (/tier alone resets it)"),
+    ("persistence", "[0..1 | default]", "show or set the preference for reusing provider context"),
     ("auto", "", "route every turn automatically again"),
     ("models", "", "each provider's light, standard and heavy model"),
     ("crew", "[n]", "open n crew StarCLIs beside this one (herdr) and lead them"),
@@ -1758,6 +1770,7 @@ class Commands:
                 ("mode", "plan (read only)" if star.plan else star.permissions_label()),
                 ("routing", f"default: {star.pinned}" if star.pinned else "automatic"),
                 ("tier", star.tier or "chosen per prompt"),
+                ("persistence", f"{star.persistence:g}"),
                 ("conversation", f"{convo.title}  ·  {len(convo.turns)} turns  ·  {convo.id}"),
                 ("goal", convo.goal or "none"),
                 ("sessions", ", ".join(f"{p} {s[:8]}…" for p, s in convo.sessions.items()) or "none yet"),
@@ -1822,6 +1835,19 @@ class Commands:
         self.star.tier = rest if rest in star_router.TIERS else None
         self.star.convo.save()
         say(f"tier {self.star.tier or 'chosen per prompt'}")
+
+    def do_persistence(self, rest):
+        if rest:
+            try:
+                value = (star_router.DEFAULT_PERSISTENCE if rest == "default"
+                         else star_router.parse_persistence(rest))
+            except ValueError:
+                say("use /persistence with a number from 0 to 1, or with default", BAD)
+                return
+            self.star.persistence = value
+            if not self.star.convo.save(force=True):
+                say("couldn't save persistence for this conversation", BAD)
+        say(f"persistence {self.star.persistence:g}")
 
     def do_auto(self, rest):
         self.star.pinned, self.star.tier = None, None
@@ -2232,7 +2258,7 @@ def shlex_join(words):
 
 
 def apply_saved_routing(star):
-    """A resumed conversation keeps the pin, tier, and plan mode from that session.
+    """A resumed conversation keeps the routing settings from that session.
 
     Launch flags such as --plan and --use describe how the pane was first opened.
     Once the session has saved its own routing, that is what comes back."""
@@ -2243,6 +2269,10 @@ def apply_saved_routing(star):
     tier = saved.get("tier")
     star.tier = tier if tier in star_router.TIERS else None
     star.plan = bool(saved.get("plan"))
+    try:
+        star.persistence = star_router.parse_persistence(saved.get("persistence"))
+    except (TypeError, ValueError, OverflowError):
+        star.persistence = star_router.DEFAULT_PERSISTENCE
     return True
 
 
@@ -2276,6 +2306,8 @@ def cli_main(argv=None, lease=None):
     parser.add_argument("--usage", action="store_true", help="show the meters and exit")
     parser.add_argument("--use", metavar="PROVIDER", help="set the default provider for the conversation")
     parser.add_argument("--tier", choices=star_router.TIERS, help="pin the model tier")
+    parser.add_argument("--persistence", type=star_router.parse_persistence, metavar="0..1",
+                        help=f"prefer reusing provider context (default: {star_router.DEFAULT_PERSISTENCE:g})")
     parser.add_argument("--plan", action="store_true", help="start in plan mode (read only)")
     parser.add_argument("--name", help="this terminal's name in the mesh")
     parser.add_argument("--role", choices=("lead", "crew", "solo"), default="solo", help="its role in the mesh")
@@ -2322,6 +2354,8 @@ def cli_main(argv=None, lease=None):
     star = Star(convo, tier=args.tier, plan=args.plan, lease=None if args.usage or args.route else lease)
     if args.resume or args.resume_id:
         apply_saved_routing(star)
+    if args.persistence is not None:
+        star.persistence = args.persistence
     if args.use:
         commands = Commands(star)
         name = commands.provider(args.use)

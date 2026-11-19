@@ -125,10 +125,11 @@ class ConversationLeaseTests(unittest.TestCase):
     def test_binding_a_saved_member_restores_routing_before_saving_its_identity(self):
         with tempfile.TemporaryDirectory() as folder, patch.object(starcli, "CONVERSATIONS", Path(folder)), \
                 patch.object(starcli, "LAST", Path(folder) / "last"), patch.object(starcli, "report_herdr"):
-            routing = {"pinned": "Claude", "tier": "heavy", "plan": True}
+            routing = {"pinned": "Claude", "tier": "heavy", "plan": True, "persistence": 0.35}
             convo = starcli.Conversation({"cwd": folder, "goal": "saved objective", "routing": routing})
             star = starcli.Star(convo, plan=False, member=Mock())
             self.assertEqual((star.pinned, star.tier, star.plan), ("Claude", "heavy", True))
+            self.assertEqual(star.persistence, 0.35)
             self.assertEqual(starcli.Conversation.load(convo.id).routing, routing)
 
     def test_resume_reads_the_latest_state_only_after_owning_the_conversation(self):

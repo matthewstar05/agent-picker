@@ -5,7 +5,7 @@ keywords and shape into a kind (debug, design, edit, ...) and a tier (light,
 standard, heavy). Each installed provider runs one model per tier (star.json).
 The router then scores every provider:
 
-    score = q * quality + (1 - q) * (0.7 * balance + 0.3 * (1 - cost)) + sticky
+    score = q * quality + (1 - q) * (0.7 * balance + 0.3 * (1 - cost)) + context_bonus
 
 quality is how well the provider handles that kind of task. balance is how
 freely its quota can be spent now: for its tightest window, what is left
@@ -15,8 +15,9 @@ flagship subscriptions are worth more than Cursor's Auto pool or Gemini's
 separate quota. q leans toward quality as the tier gets heavier, so quick
 questions go to cheap idle pools and hard problems go to the strongest model
 that still has room. A provider at NEAR percent of any window
-is skipped. sticky keeps a conversation on the provider that already holds its
-context, which saves the tokens a handoff would resend.
+is skipped. The context bonus depends on persistence and available quota. It
+favors the provider that already holds the context, saving the tokens a
+handoff would resend.
 """
 
 import json
@@ -38,7 +39,7 @@ LAST_HOUR = 96      # ... unless it resets within the hour: spend it nearly to t
 EXPIRING = 0.45     # most a window about to reset unused can add to a provider's balance
 EXPIRY_HORIZON = 3 * 3600   # "soon" for any window: within three hours of its reset
 TIGHT = 75          # percent of a window: route there only when it is clearly best
-STICKY = 0.08
+DEFAULT_PERSISTENCE = 0.15
 QUALITY_WEIGHT = {"light": 0.45, "standard": 0.6, "heavy": 0.72}
 WINDOW = {"5h": 5 * 3600, "wk": 7 * 86400, "gb": 7 * 86400}   # other windows are monthly
 MONTH = 30 * 86400
@@ -124,6 +125,13 @@ class Choice:
 
 def load_config(path=CONFIG):
     return json.loads(Path(path).read_text(encoding="utf-8"))["providers"]
+
+
+def parse_persistence(value):
+    value = float(value)
+    if not 0.0 <= value <= 1.0:
+        raise ValueError("persistence must be between 0 and 1")
+    return value
 
 
 def classify(prompt, tier=None):
@@ -271,7 +279,7 @@ def quota_error(text):
 
 
 def rank(task, usage, installed, config=None, now=None, current=None, pinned=None, down=(), images=False,
-         models=None, preferred=None, quota_failures=None):
+         models=None, preferred=None, quota_failures=None, persistence=DEFAULT_PERSISTENCE):
     """Every usable provider for the task, best first, and why each was skipped.
 
     usage: the agent-picker usage cache ({name: {"windows": [...], "fetched": t}}).
@@ -279,7 +287,8 @@ def rank(task, usage, installed, config=None, now=None, current=None, pinned=Non
     only there. down: providers that failed this session. images: the turn has
     attached images, so only providers marked "images" in star.json take it.
     models restricts explicit selection to the supplied per-provider routes.
-    quota_failures is keyed by (provider, usage pool)."""
+    quota_failures is keyed by (provider, usage pool).
+    persistence is the maximum bonus for reusing current context (0 to 1)."""
     config = config or load_config()
     now = time.time() if now is None else now
     choices, skipped = [], {}
@@ -331,9 +340,9 @@ def rank(task, usage, installed, config=None, now=None, current=None, pinned=Non
         bits = [f"{task.kind} fit {quality:.2f}", meter]
         if preferred == name:
             bits.append("preferred provider")
-        if current == name:
+        if current == name and persistence:
             # Keep the context advantage, but reduce it as usable quota shrinks.
-            context_bonus = STICKY * min(1.0, balance / 0.7) if found else STICKY
+            context_bonus = persistence * min(1.0, balance / 0.7) if found else persistence
             score += context_bonus
             bits.append("holds this conversation")
         choices.append(Choice(name, tier, model["model"], model.get("effort", ""), round(score, 4),
