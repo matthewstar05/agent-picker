@@ -910,14 +910,6 @@ def _card(view, i, cw, t, now, entry, fetching, working, dots=None, rows=3, pane
     themed = THEMES[view.theme]["stops"] is not None
     rainbow = THEMES[view.theme]["stops"] == "rainbow"
     live = working > 0
-    pools = None
-    if name == STAR and live:
-        target = drain_target(now)
-        if target:   # show the provider being drained, with its own bars
-            part, entry, pools = target
-            agent, name = part["agent"], part["name"]
-            st = st if themed else agent
-            fetching = False
     dots = int(t * 3) % 3 if dots is None else dots
     stale = bool(entry) and now - entry["fetched"] > 20 * 60 and not fetching
     if panes is None:
@@ -985,15 +977,19 @@ def _card(view, i, cw, t, now, entry, fetching, working, dots=None, rows=3, pane
     lines = [head.pad(cw)]
 
     if name == STAR:
-        lines += star_lines(cw, t, now, live, view.anim, st if themed else None, rainbow)
-    elif not entry and not only_pools(ap.display_windows(name, entry), pools):
+        target = drain_target(now) if live else None
+        if target:
+            lines += drained_lines(cw, t, now, view.anim, st if themed else target[0]["agent"], rainbow, target)
+        else:
+            lines += star_lines(cw, t, now, live, view.anim, st if themed else None, rainbow)
+    elif not entry and not ap.display_windows(name, entry):
         if name not in ap.FETCHERS:
             msg = "no usage reader for this CLI yet"
         else:
             msg = ("reading limits" + "·" * (1 + dots)) if fetching else f"no data · is {name} signed in?"
         lines.append(Line().put("   ").put(clip(msg, cw - 4), SOFT).pad(cw))
     else:
-        for k, w in enumerate(only_pools(ap.display_windows(name, entry), pools)):
+        for k, w in enumerate(ap.display_windows(name, entry)):
             w = dict(w)
             if w.get("pct") is None:
                 line = Line().put("   ").put(w["label"].ljust(2), LABEL).put(" ")
@@ -1009,7 +1005,7 @@ def _card(view, i, cw, t, now, entry, fetching, working, dots=None, rows=3, pane
             tail_w = 12 if cw - 6 - 5 - 12 >= 6 else 0
             bar = min(40, cw - 6 - 5 - tail_w - 1)
             if bar >= 3:
-                active = (working if pools else CURSOR_POOLS.get(w["label"], 0)) if name == "Cursor" else working
+                active = CURSOR_POOLS.get(w["label"], 0) if name == "Cursor" else working
                 bar_t = t if view.anim and (active or name != "Cursor") else 0
                 draw_bar(line, w, bar, st, bar_t, bool(active and view.anim), stale, now,
                          0 if themed else i * 0.13,
@@ -1020,7 +1016,7 @@ def _card(view, i, cw, t, now, entry, fetching, working, dots=None, rows=3, pane
             if tail_w and tail:
                 line.put("  " + tail, CONCERN if concerning(w, now) else (TEXT if live else SOFT))
             lines.append(line.pad(cw))
-        raw_windows = only_pools((entry or {}).get("windows", []), pools)
+        raw_windows = (entry or {}).get("windows", [])
         credits = ap.credits_text(raw_windows[0]) if len(raw_windows) == 1 else None
         if credits:
             # a lone limit's spare row, lined up with the start of its bar
@@ -1072,6 +1068,42 @@ def only_pools(windows, pools):
     return [w for w in windows if w.get("label") in pools] if pools else windows
 
 
+def drained_lines(cw, t, now, anim, st, rainbow, target):
+    """Star's card body while StarCLI drains a provider: that provider's name where
+    the sigma was, then a bar for each of its limits (5h and wk, or Cursor's pool)."""
+    part, entry, pools = target
+    windows = only_pools(ap.display_windows(part["name"], entry), pools)
+    name = meter_short(part["name"])
+    pad = len(name) + 1
+    lines = []
+    for k, w in enumerate(windows[:2]):
+        w = dict(w)
+        line = Line().put("   ")
+        line.put(name if k == 0 else " " * len(name), part["agent"]["color"] if k == 0 else LABEL, bold=True)
+        line.put(" ").put(w["label"].ljust(2), LABEL).put(" ")
+        if w.get("pct") is None:
+            line.put("▱" * max(3, min(40, cw - 14 - pad)), TRACK).put("   —", SOFT)
+            lines.append(line.pad(cw))
+            continue
+        if w.get("resets") and w["resets"] < now:
+            w["pct"] = 0
+        tail_w = 12 if cw - 6 - pad - 5 - 12 >= 6 else 0
+        bar = min(40, cw - 7 - pad - 5 - tail_w - 1)
+        if bar >= 3:
+            draw_bar(line, w, bar, st, t if anim else 0.0, anim, False, now, 0, pulses=1)
+        pcol = WHITE if rainbow else pct_color(w, st, now)
+        line.put(f" {shown_pct(w['pct']):3.0f}%", pcol, bold=True)
+        if tail_w and w.get("resets"):
+            line.put("  ↻ " + until(w["resets"]), CONCERN if concerning(w, now) else TEXT)
+        lines.append(line.pad(cw))
+    return lines
+
+
+def meter_short(name):
+    import star_meter
+    return star_meter.SHORT.get(name, name)[:11]
+
+
 def star_lines(cw, t, now, live, anim, style=None, rainbow=False):
     """Star's card body: its estimated limit as one bar split by provider, in the
     order their limits reset and in their own colors (the providers StarCLI is
@@ -1115,15 +1147,8 @@ def compact_row(view, i, width, t, now):
         entry = USAGE.get(name)
         working = WORKING.get(name, 0)
         panes = PRESENT.get(name, 0)
-    pools = None
-    star_row = name == STAR
-    if star_row and working:
-        target = drain_target(now)
-        if target:   # show the provider being drained, with its own bars
-            part, entry, pools = target
-            agent, name = part["agent"], part["name"]
-            st = agent if brand else st
-            star_row = False
+    target = drain_target(now) if name == STAR and working else None
+    star_row = name == STAR and not target
     border_space = width >= 4
     if border_space:
         width -= 2
@@ -1152,8 +1177,13 @@ def compact_row(view, i, width, t, now):
                 line.put(glyph, color)
         shown = info["now"] if depleting() else 100 - info["now"]
         line.put(f"{shown:4.0f}%", WHITE if rainbow else meter.pct_color(), bold=True)
-    elif entry or only_pools(ap.display_windows(name, entry), pools):
-        windows = only_pools(ap.display_windows(name, entry), pools)
+    elif target or entry or ap.display_windows(name, entry):
+        if target:
+            part, entry, pools = target
+            line.put(" " + meter_short(part["name"]), part["agent"]["color"], bold=True)
+            windows = only_pools(ap.display_windows(part["name"], entry), pools)[:2]
+        else:
+            windows = ap.display_windows(name, entry)
         credits = ap.credits_text(windows[0]) if len(windows) == 1 else None
         share = (width - len(line.cells)) // max(2, len(windows))
         if credits:
@@ -1170,7 +1200,7 @@ def compact_row(view, i, width, t, now):
             line.put(" " + w["label"].ljust(2) + " ", LABEL)
             bar = min(16, share - 9)
             if bar >= 2:
-                active = (working if pools else CURSOR_POOLS.get(w["label"], 0)) if name == "Cursor" else working
+                active = CURSOR_POOLS.get(w["label"], 0) if name == "Cursor" else working
                 bar_t = t if view.anim and (active or name != "Cursor") else 0
                 draw_bar(line, w, bar, st, bar_t,
                          bool(active and view.anim and (rainbow or name == "Cursor")), False, now,
