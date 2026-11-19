@@ -274,30 +274,59 @@ def usage_claude():
 
 
 def usage_codex():
-    # Codex records its rate limits in every session log; read the newest one.
+    # Codex records its rate limits in every session log. Use the newest
+    # record, not the newest file: resuming or reading an old session bumps
+    # its mtime while its last record is weeks old.
     root = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")) / "sessions"
-    logs = sorted(root.glob("*/*/*/rollout-*.jsonl"), key=lambda f: f.stat().st_mtime, reverse=True)
-    for log in logs[:20]:
+    logs = []
+    for log in root.glob("*/*/*/rollout-*.jsonl"):
+        try:
+            logs.append((log.stat().st_mtime, log))
+        except OSError:
+            continue
+    logs.sort(key=lambda pair: pair[0], reverse=True)
+    best, best_stamp = None, None
+    for mtime, log in logs[:20]:
+        # A file's records are never newer than its last write.
+        if best_stamp is not None and mtime < best_stamp:
+            break
+        found = _codex_limits(log, mtime)
+        if found and (best_stamp is None or found[0] > best_stamp):
+            best_stamp, best = found
+    return best
+
+
+def _codex_limits(log, mtime):
+    """Return (record time, windows) for the last Codex rate-limit record in a log."""
+    try:
         with open(log, "rb") as handle:
             handle.seek(max(0, log.stat().st_size - 400_000))
             tail = handle.read().decode(errors="ignore")
-        for line in reversed(tail.splitlines()):
-            if '"rate_limits"' not in line:
-                continue
-            try:
-                limits = json.loads(line)["payload"]["rate_limits"]
-            except Exception:
-                continue
-            if not limits or limits.get("limit_id") not in (None, "codex"):
-                continue
-            windows = []
-            for key in ("primary", "secondary"):
-                w = limits.get(key)
-                if w:
-                    label = "5h" if w["window_minutes"] <= 300 else "wk"
-                    windows.append({"label": label, "pct": w["used_percent"], "resets": w["resets_at"]})
-            if windows:
-                return windows
+    except OSError:
+        return None
+    for line in reversed(tail.splitlines()):
+        if '"rate_limits"' not in line:
+            continue
+        try:
+            record = json.loads(line)
+            limits = record["payload"]["rate_limits"]
+        except Exception:
+            continue
+        if not limits or limits.get("limit_id") not in (None, "codex"):
+            continue
+        windows = []
+        for key in ("primary", "secondary"):
+            w = limits.get(key)
+            if w:
+                label = "5h" if w["window_minutes"] <= 300 else "wk"
+                windows.append({"label": label, "pct": w["used_percent"], "resets": w["resets_at"]})
+        if not windows:
+            continue
+        try:
+            stamp = _epoch(record["timestamp"])
+        except Exception:
+            stamp = mtime
+        return stamp, windows
     return None
 
 
