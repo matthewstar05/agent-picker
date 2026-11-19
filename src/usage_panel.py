@@ -1036,6 +1036,15 @@ def star_info(now):
     return star_meter, info, driving
 
 
+def drained(info, driving):
+    """The part of Star's meter for the provider StarCLI is draining right now (the
+    one with the least left when several run), or None when it is idle."""
+    if not info:
+        return None
+    active = [p for p in info["parts"] if p["name"] in driving]
+    return min(active, key=lambda p: p["now"]) if active else None
+
+
 def star_lines(cw, t, now, live, anim, style=None, rainbow=False):
     """Star's card body: its estimated limit as one bar split by provider, in the
     order their limits reset and in their own colors (the providers StarCLI is
@@ -1044,18 +1053,23 @@ def star_lines(cw, t, now, live, anim, style=None, rainbow=False):
     if not info:
         return [Line().put("   ").put(clip("no provider readings yet", cw - 4), SOFT).pad(cw)]
     left = depleting()
-    line = Line().put("   ").put("∑ ", LABEL).put(" ")
+    part = drained(info, driving)
+    shown_info = {**info, "now": part["now"]} if part else info
+    label = part["label"].ljust(2) if part else "∑ "
+    line = Line().put("   ").put(label, LABEL).put(" ")
     tail_w = 12 if cw - 6 - 5 - 12 >= 6 else 0
     bar = min(40, cw - 6 - 5 - tail_w - 1)
     sizes = None
     if bar >= 3:
-        cells, sizes = meter.bar(info, bar, left, t if anim else 0.0, driving, live and anim, style=style)
+        cells, sizes = meter.bar(shown_info, bar, left, t if anim else 0.0, driving, live and anim,
+                                 style=style or (part["agent"] if part else None))
         for glyph, color in cells:
             line.put(glyph, color)
-    shown = info["now"] if left else 100 - info["now"]
+    shown = shown_info["now"] if left else 100 - shown_info["now"]
     line.put(f" {shown:3.0f}%", WHITE if rainbow else meter.pct_color(-t * 0.1 if live and anim else 0.0), bold=True)
-    if tail_w and info["soonest"]:
-        line.put("  ↻ " + until(info["soonest"]["resets"]), TEXT if live else SOFT)
+    soon = part if part and part["resets"] else info["soonest"]
+    if tail_w and soon:
+        line.put("  ↻ " + until(soon["resets"]), TEXT if live else SOFT)
     if not ap.star_resets():   # the cooldown dots are opt-in (settings, Star section)
         return [line.pad(cw)]
     second = Line().put("      ")
@@ -1090,11 +1104,14 @@ def compact_row(view, i, width, t, now):
     line.pad(start + name_w)
     meter, info, driving = star_info(now) if name == STAR else (None, None, None)
     if info:
-        line.put(" ∑  ", LABEL)
+        part = drained(info, driving)
+        if part:
+            info = {**info, "now": part["now"]}
+        line.put(f" {part['label'].ljust(2)} " if part else " ∑  ", LABEL)
         bar = min(24, width - len(line.cells) - 6)
         if bar >= 3:
             cells, _ = meter.bar(info, bar, depleting(), t if view.anim else 0.0, driving, bool(working and view.anim),
-                                 style=None if brand else st)
+                                 style=None if brand and not part else part["agent"] if brand else st)
             for glyph, color in cells:
                 line.put(glyph, color)
         shown = info["now"] if depleting() else 100 - info["now"]
