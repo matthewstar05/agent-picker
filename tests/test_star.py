@@ -1154,7 +1154,7 @@ class StarMeterTests(unittest.TestCase):
         self.assertIn("●", ANSI.sub("", shown[1].paint()))
 
 class UsagePanelStarTests(unittest.TestCase):
-    def test_a_star_turn_lights_star_and_its_provider(self):
+    def test_a_star_turn_lights_star_and_notes_its_provider(self):
         with tempfile.TemporaryDirectory() as folder:
             live = Path(folder)
             (live / "1.json").write_text(json.dumps({"pid": os.getpid(), "provider": "Codex", "pane": None}))
@@ -1164,7 +1164,7 @@ class UsagePanelStarTests(unittest.TestCase):
             with patch.object(panel, "STAR_LIVE", live):
                 panel.add_star_turns(found, working)
             for scope in panel.SCOPE_ORDER:
-                self.assertEqual(found[scope]["Codex"], {"panes": 1, "working": 1})
+                self.assertNotIn("Codex", found[scope])   # shown inside Star's card
                 self.assertEqual(found[scope]["Star"], {"panes": 1, "working": 1})
                 self.assertNotIn("Claude", found[scope])
             self.assertEqual(panel.STAR_DRIVING, {"Codex"})

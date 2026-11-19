@@ -404,25 +404,17 @@ def grokbot_turns():
 
 
 def add_star_turns(found, working, reach=lambda pane: list(SCOPE_ORDER)):
-    """Light up both StarCLI and the provider it is driving: each counts as working
-    where StarCLI's pane is. The provider gains an agent; Star keeps its own pane
-    count, or one when its pane wasn't seen (StarCLI outside Herdr)."""
+    """Light up StarCLI where its pane is, and note the providers it is driving
+    (Star's card shows them). Star keeps its own pane count, or one when its pane
+    wasn't seen (StarCLI outside Herdr)."""
     driving = set()
     for provider, pane, pid in star_turns():
+        # The provider is shown inside Star's card, not as a card of its own.
         for scope in reach(pane):
-            for name in filter(None, (provider, STAR)):
-                slot = found[scope].setdefault(name, {"panes": 0, "working": 0})
-                slot["working"] += 1
-                if name == STAR:
-                    slot["panes"] = max(slot["panes"], 1)
-                else:
-                    slot["panes"] += 1
-                if name == "Cursor" and STAR_POOLS.get(pid):
-                    pools = slot.setdefault("pools", {})
-                    pool = STAR_POOLS[pid]
-                    pools[pool] = pools.get(pool, 0) + 1
-        for name in filter(None, (provider, STAR)):
-            working.setdefault(name, set()).add(f"star:{pid}")
+            slot = found[scope].setdefault(STAR, {"panes": 0, "working": 0})
+            slot["working"] += 1
+            slot["panes"] = max(slot["panes"], 1)
+        working.setdefault(STAR, set()).add(f"star:{pid}")
         if provider:
             driving.add(provider)
     with LOCK:
@@ -977,9 +969,9 @@ def _card(view, i, cw, t, now, entry, fetching, working, dots=None, rows=3, pane
     lines = [head.pad(cw)]
 
     if name == STAR:
-        target = drain_target(now) if live else None
-        if target:
-            lines += drained_lines(cw, t, now, view.anim, st if themed else target[0]["agent"], rainbow, target)
+        targets = drain_targets(now) if live else []
+        if targets:
+            lines += drained_lines(cw, t, now, view.anim, st, rainbow, targets)
         else:
             lines += star_lines(cw, t, now, live, view.anim, st if themed else None, rainbow)
     elif not entry and not ap.display_windows(name, entry):
@@ -1051,51 +1043,63 @@ def drained(info, driving):
     return min(active, key=lambda p: p["now"]) if active else None
 
 
-def drain_target(now):
-    """(part, usage entry, pools) for the provider StarCLI is draining, else None.
-    pools is the Cursor pools its turns use (empty for any other provider)."""
+def drain_targets(now):
+    """[(part, usage entry, pools)] for each provider StarCLI is draining right now,
+    in the meter's order. pools is the Cursor pools its turns use (else empty)."""
     _, info, driving = star_info(now)
-    part = drained(info, driving)
-    if not part:
-        return None
-    with LOCK:
-        entry = USAGE.get(part["name"])
-        pools = set(STAR_POOLS.values()) - {None} if part["name"] == "Cursor" else set()
-    return part, entry, pools
+    if not info:
+        return []
+    out = []
+    for part in info["parts"]:
+        if part["name"] not in driving:
+            continue
+        with LOCK:
+            entry = USAGE.get(part["name"])
+            pools = set(STAR_POOLS.values()) - {None} if part["name"] == "Cursor" else set()
+        out.append((part, entry, pools))
+    return out
 
 
 def only_pools(windows, pools):
     return [w for w in windows if w.get("label") in pools] if pools else windows
 
 
-def drained_lines(cw, t, now, anim, st, rainbow, target):
-    """Star's card body while StarCLI drains a provider: that provider's name where
-    the sigma was, then a bar for each of its limits (5h and wk, or Cursor's pool)."""
-    part, entry, pools = target
-    windows = only_pools(ap.display_windows(part["name"], entry), pools)
-    name = meter_short(part["name"])
-    pad = len(name) + 1
+def drained_lines(cw, t, now, anim, st, rainbow, targets):
+    """Star's card body while StarCLI drains providers: each one's name where the
+    sigma was, then a bar per limit (5h and wk, or Cursor's pool), in Star's colors
+    except Gemini, which keeps its own gradient."""
     lines = []
-    for k, w in enumerate(windows[:2]):
-        w = dict(w)
-        line = Line().put("   ")
-        line.put(name if k == 0 else " " * len(name), part["agent"]["color"] if k == 0 else LABEL, bold=True)
-        line.put(" ").put(w["label"].ljust(2), LABEL).put(" ")
-        if w.get("pct") is None:
-            line.put("▱" * max(3, min(40, cw - 14 - pad)), TRACK).put("   —", SOFT)
+    shorts = [meter_short(part["name"]) for part, _, _ in targets]
+    width = max(map(len, shorts))
+    for (part, entry, pools), short in zip(targets, shorts):
+        own = part["name"] == "Antigravity"
+        style = part["agent"] if own else st
+        windows = only_pools(ap.display_windows(part["name"], entry), pools)[:2]
+        pad = width + 1
+        for k, w in enumerate(windows):
+            w = dict(w)
+            line = Line().put("   ")
+            if k == 0:
+                for n, ch in enumerate(short.ljust(width)):
+                    line.put(ch, WHITE if rainbow else ap.grad(style, n / max(1, width) * 0.7 - t * 0.1 * anim), bold=True)
+            else:
+                line.put(" " * width)
+            line.put(" ").put(w["label"].ljust(2), LABEL).put(" ")
+            if w.get("pct") is None:
+                line.put("▱" * max(3, min(40, cw - 14 - pad)), TRACK).put("   —", SOFT)
+                lines.append(line.pad(cw))
+                continue
+            if w.get("resets") and w["resets"] < now:
+                w["pct"] = 0
+            tail_w = 12 if cw - 6 - pad - 5 - 12 >= 6 else 0
+            bar = min(40, cw - 7 - pad - 5 - tail_w - 1)
+            if bar >= 3:
+                draw_bar(line, w, bar, style, t if anim else 0.0, anim, False, now, 0, pulses=1)
+            pcol = WHITE if rainbow else pct_color(w, style, now)
+            line.put(f" {shown_pct(w['pct']):3.0f}%", pcol, bold=True)
+            if tail_w and w.get("resets"):
+                line.put("  ↻ " + until(w["resets"]), CONCERN if concerning(w, now) else TEXT)
             lines.append(line.pad(cw))
-            continue
-        if w.get("resets") and w["resets"] < now:
-            w["pct"] = 0
-        tail_w = 12 if cw - 6 - pad - 5 - 12 >= 6 else 0
-        bar = min(40, cw - 7 - pad - 5 - tail_w - 1)
-        if bar >= 3:
-            draw_bar(line, w, bar, st, t if anim else 0.0, anim, False, now, 0, pulses=1)
-        pcol = WHITE if rainbow else pct_color(w, st, now)
-        line.put(f" {shown_pct(w['pct']):3.0f}%", pcol, bold=True)
-        if tail_w and w.get("resets"):
-            line.put("  ↻ " + until(w["resets"]), CONCERN if concerning(w, now) else TEXT)
-        lines.append(line.pad(cw))
     return lines
 
 
@@ -1147,7 +1151,8 @@ def compact_row(view, i, width, t, now):
         entry = USAGE.get(name)
         working = WORKING.get(name, 0)
         panes = PRESENT.get(name, 0)
-    target = drain_target(now) if name == STAR and working else None
+    targets = drain_targets(now) if name == STAR and working else []
+    target = min(targets, key=lambda x: x[0]["now"]) if targets else None
     star_row = name == STAR and not target
     border_space = width >= 4
     if border_space:
@@ -1180,7 +1185,9 @@ def compact_row(view, i, width, t, now):
     elif target or entry or ap.display_windows(name, entry):
         if target:
             part, entry, pools = target
-            line.put(" " + meter_short(part["name"]), part["agent"]["color"], bold=True)
+            if part["name"] == "Antigravity":
+                st = part["agent"]
+            line.put(" " + meter_short(part["name"]), WHITE if rainbow else ap.grad(st, 0.2), bold=True)
             windows = only_pools(ap.display_windows(part["name"], entry), pools)[:2]
         else:
             windows = ap.display_windows(name, entry)
@@ -1268,6 +1275,9 @@ def working_card(view, i, width, t, now, lids=True, active=True, height=None):
 
 
 def card_rows(agent):
+    if agent["name"] == STAR:
+        targets = drain_targets(time.time()) if STAR_DRIVING else []
+        return max(3, 1 + sum(len(only_pools(ap.display_windows(p["name"], e), pl)[:2]) for p, e, pl in targets))
     windows = ap.display_windows(agent["name"], USAGE.get(agent["name"]))
     # Permanent mode reserves the third row even before the first read.
     return max(4 if agent["name"] == "Cursor" and preferences.get(CURSOR_GROK_TRANSIENT.key) is not True else 3,
