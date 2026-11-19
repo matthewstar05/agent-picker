@@ -430,7 +430,8 @@ class StarSessionTests(unittest.TestCase):
     def fake(self, name, fail=False):
         path = self.dir / f"fake-{name}"
         path.write_text(FAKE.format(python=sys.executable, log=str(self.dir / f"{name}.log"),
-                                   fail=bool(fail), failure=fail if isinstance(fail, str) else "auth expired"))
+                                   fail=bool(fail), failure=fail if isinstance(fail, str) else "auth expired"),
+                        encoding="utf-8")
         path.chmod(0o755)
         return str(path)
 
@@ -759,9 +760,9 @@ class StarSessionTests(unittest.TestCase):
                 patch.object(stdin, "isatty", return_value=True), patch.object(stdout, "isatty", return_value=True), \
                 patch.object(starcli.star_input, "supported", return_value=False), \
                 patch("builtins.input", side_effect=["", "12", "1"]) as decide:
-            self.assertEqual(star.run(message, allow_defer=True)[1], "failed")
+            self.assertEqual(star.run(message, allow_defer=True)[1], "failed", stdout.getvalue())
             self.assertFalse((self.dir / "Codex.log").exists())
-            self.assertEqual(star.run(message, allow_defer=True)[1], "ok")
+            self.assertEqual(star.run(message, allow_defer=True)[1], "ok", stdout.getvalue())
         self.assertEqual(decide.call_count, 3)
         self.assertIn("Usage limits blocked", stdout.getvalue())
         self.assertEqual(len((self.dir / "Claude.log").read_text().splitlines()), 1)
