@@ -485,7 +485,7 @@ class GrokBotUsageTests(unittest.TestCase):
             rendered = out.getvalue()
             self.assertIn("▄", rendered)
             self.assertIn("▀", rendered)
-            self.assertIn("→", rendered)
+            self.assertIn("›", rendered)
             if text == "/us":
                 self.assertIn("/usage", rendered)
 

@@ -45,7 +45,7 @@ class NullTerminal:
 class ReplyWrapTest(unittest.TestCase):
     def test_marker_and_hanging_indent_within_width(self):
         lines = ui.wrap("word " * 40, 40).splitlines()
-        self.assertTrue(lines[0].startswith("⏺ "))
+        self.assertTrue(lines[0].startswith("• "))
         self.assertTrue(all(line.startswith("  ") for line in lines[1:]))
         self.assertTrue(all(len(line) < 40 for line in lines))
 
@@ -283,45 +283,162 @@ class Pane(io.StringIO):
 
 
 class BannerTest(unittest.TestCase):
-    def test_narrow_panes_keep_every_logo_row_without_terminal_wrap(self):
+    def shown(self, width=100, tty=True, **kwargs):
+        import grokbot
+        pane = Pane(tty)
+        with patch.object(grokbot.shutil, "get_terminal_size", return_value=os.terminal_size((width, 12))):
+            grokbot.banner(kwargs.pop("cwd", "/work"), out=pane, **kwargs)
+        return pane.getvalue()
+
+    def test_no_line_reaches_the_last_column_at_any_width(self):
         import grokbot
         from star_input import cell_width
-        for width in (20, 32, 40, 64, 80):
-            with self.subTest(width=width), patch.object(grokbot.shutil, "get_terminal_size",
-                                                       return_value=os.terminal_size((width, 12))):
-                pane = Pane(True)
-                grokbot.banner("/projects/" + "界" * 80, session={"id": "x" * 36}, mode="auto", out=pane)
-                lines = grokbot.clean(pane.getvalue()).splitlines()[1:]
-                self.assertEqual([line[:len(grokbot.LOGO[0])] for line in lines[:3]], list(grokbot.LOGO))
+        for width in (20, 32, 40, 64, 80, 120):
+            with self.subTest(width=width):
+                shown = self.shown(width, cwd="/projects/" + "界" * 80, session={"id": "x" * 36}, mode="auto")
+                lines = grokbot.clean(shown).splitlines()
                 self.assertTrue(all(sum(cell_width(ch) for ch in line) < width for line in lines))
+                self.assertIn("╭", shown)
+                self.assertEqual(sum("▀" in line or "▄" in line for line in lines[:12]) >= 3, True)  # the mascot
 
     def test_header_returns_to_column_zero_even_without_terminal_newline_translation(self):
-        import grokbot
-        pane = Pane(True)
-        grokbot.banner("/work", out=pane)
-        self.assertNotIn("\n", pane.getvalue().replace("\r\n", ""))
+        self.assertNotIn("\n", self.shown().replace("\r\n", ""))
 
-    def test_header_starts_a_fresh_pane_with_the_mascot_beside_the_name(self):
+    def test_a_codex_style_card_holds_the_mascot_beside_name_model_and_folder(self):
         import grokbot
-        pane = Pane(True)
-        grokbot.banner(Path.home() / "project", mode="local", out=pane)
-        shown = pane.getvalue()
+        shown = self.shown(100, cwd=Path.home() / "project", mode="local")
         # Screen and scrollback cleared and the cursor homed before anything is drawn.
         self.assertTrue(shown.startswith(grokbot.FRESH_SCREEN))
         lines = grokbot.clean(shown[len(grokbot.FRESH_SCREEN):]).splitlines()
-        self.assertEqual(lines[0], "")      # headroom between the pane's top edge and the mascot
-        lines = lines[1:]
-        self.assertEqual([line[:len(grokbot.LOGO[0])] for line in lines[:3]], list(grokbot.LOGO))
-        self.assertIn("Grok Bot Agent v" + grokbot.VERSION, lines[0])
-        self.assertTrue(lines[2].endswith("~" + str(Path("/project"))))
+        self.assertEqual(lines[0], "")      # headroom between the pane's top edge and the card
+        self.assertTrue(lines[1].startswith("╭") and lines[1].endswith("╮"))
+        self.assertIn("Grok Bot Agent (v" + grokbot.VERSION + ")", lines[2])
+        self.assertTrue(any("model:" in line and "Grok Bot · Auto" in line for line in lines))
+        self.assertTrue(any("directory:" in line and "~" + str(Path("/project")) in line for line in lines))
+        art = [grokbot.clean(row) for row in grokbot.mascot()]
+        self.assertEqual(lines[2][2:2 + grokbot.MASCOT_WIDTH], art[0])     # beside the name
+        self.assertTrue(any(line.lstrip().startswith("/goal - ") for line in lines))
+
+    def test_a_narrow_pane_puts_the_mascot_above_the_card(self):
+        import grokbot
+        lines = grokbot.clean(self.shown(30)).splitlines()
+        self.assertEqual(lines[1:5], [grokbot.clean(row) for row in grokbot.mascot()])
+        self.assertTrue(lines[6].startswith("╭"))
 
     def test_piped_output_gets_no_escape_codes_and_keeps_the_session(self):
-        import grokbot
-        pane = Pane(False)
-        grokbot.banner("/work", session={"id": "abc"}, out=pane)
-        shown = pane.getvalue()
+        shown = self.shown(tty=False, session={"id": "abc"})
         self.assertNotIn("\x1b", shown)
-        lines = shown.splitlines()[1:]
-        self.assertEqual(lines[0], grokbot.LOGO[0] + "  Grok Bot Agent v" + grokbot.VERSION)
-        # Text past the mascot's three rows stays in the same column.
-        self.assertEqual(lines[3], " " * len(grokbot.LOGO[0]) + "  Session abc")
+        self.assertTrue(any("session:" in line and "abc" in line for line in shown.splitlines()))
+
+    def test_mascot_rows_are_even_and_mirror_symmetric(self):
+        import grokbot
+        self.assertEqual(len(grokbot.MASCOT) % 2, 0)
+        self.assertTrue(all(len(row) == grokbot.MASCOT_WIDTH and row == row[::-1] for row in grokbot.MASCOT))
+        self.assertTrue(set("".join(grokbot.MASCOT)) <= set(grokbot.MASCOT_COLORS) | {"."})
+
+
+class ResizeTest(unittest.TestCase):
+    """A narrower terminal rewraps the drawn box, so the next draw must climb the
+    rewrapped rows to reach its top instead of leaving old rows behind."""
+
+    def draw(self, editor, width):
+        out = io.StringIO()
+        with patch("sys.stdout", out), patch("shutil.get_terminal_size", return_value=os.terminal_size((width, 30))):
+            editor.draw()
+        return out.getvalue()
+
+    def editor(self):
+        editor = ui.CursorInput([])
+        editor.reading, editor.drawn_rows, editor.cursor_row = True, 0, 0
+        editor.hint, editor.notice = (lambda: ("Grok Bot · Auto", "Local · ask")), None
+        editor.text, editor.pos = "hello", 5
+        return editor
+
+    def test_rows_after_reflow(self):
+        from star_input import rows_after_reflow
+        # Three 99-cell lines above the cursor, on a 40-column terminal: 3 rows each.
+        self.assertEqual(rows_after_reflow([99, 99, 99, 99], 3, 7, 40), 9)
+        self.assertEqual(rows_after_reflow([99, 99, 99, 99], 3, 45, 40), 10)
+        self.assertEqual(rows_after_reflow([0, 10], 1, 0, 40), 1)    # an empty line still takes a row
+
+    def test_same_width_climbs_the_drawn_rows(self):
+        editor = self.editor()
+        self.draw(editor, 100)
+        self.assertTrue(self.draw(editor, 100).startswith(f"\x1b[{editor.cursor_row}A\r\x1b[J"))
+
+    def test_a_narrower_terminal_climbs_the_rewrapped_rows(self):
+        editor = self.editor()
+        self.draw(editor, 100)
+        above = editor.drawn_widths[:editor.cursor_row]
+        self.assertTrue(all(width == 99 for width in above))       # full-width edges and rows
+        expected = sum(-(-width // 40) for width in above) + editor.cursor_col // 40
+        self.assertTrue(self.draw(editor, 40).startswith(f"\x1b[{expected}A\r\x1b[J"))
+        self.assertEqual(editor.drawn_columns, 40)
+        self.assertTrue(all(width <= 39 for width in editor.drawn_widths))
+
+    def test_the_editor_redraws_on_resize_without_a_key(self):
+        editor = self.editor()
+        self.draw(editor, 100)
+        editor.terminal = ByteTerminal()
+        editor.terminal.eof = False
+        editor.terminal.wait = lambda _seconds: False
+        with patch("shutil.get_terminal_size", return_value=os.terminal_size((60, 30))):
+            self.assertEqual(next(editor.keys(0, None)), "resize")
+
+
+def plain(text):
+    from star_input import ANSI
+    return ANSI.sub("", text)
+
+
+class GoalHighlightTest(unittest.TestCase):
+    def test_goal_command_is_highlighted_in_the_box_and_menu(self):
+        editor = ui.CursorInput([("goal", "<objective>", "keep working"), ("help", "", "show commands")])
+        editor.text, editor.pos = "/goal fix the tests", 19
+        editor.wrap(2, 80)
+        painted = editor.paint(0, editor.text)
+        self.assertTrue(painted.startswith(ui.chip("/goal")))
+        self.assertIn("fix the tests", painted)
+        editor.text, editor.pos = "/goals", 6        # another word is not the command
+        self.assertFalse(editor.paint(0, "/goals").startswith(ui.chip("/goal")))
+        editor.text, editor.pos = "/help", 5
+        self.assertEqual(editor.paint(0, "/help"), editor.fg("text", "/help"))
+
+    def test_working_line_carries_the_goal_badge(self):
+        editor = ui.CursorInput([])
+        editor.working = time.monotonic()
+        self.assertNotIn("goal", plain(editor.working_line(80)))
+        editor.badge = "goal · step 3"
+        line = editor.working_line(80)
+        self.assertTrue(line.startswith(ui.chip(" ◎ goal · step 3 ")))
+        self.assertIn("Working", plain(line))
+
+    def test_goal_lines_fit_the_pane(self):
+        from star_input import visible_width
+        line = ui.goal_line(" ◎ /goal · step 1 ", "word " * 40, width=50)
+        self.assertTrue(line.startswith(ui.chip(" ◎ /goal · step 1 ")))
+        self.assertLess(visible_width(line), 50)
+        self.assertTrue(plain(line).endswith("…"))
+        self.assertEqual(plain(ui.goal_line(" ✓ done ", "short", width=80)), " ✓ done   short")
+
+    def test_route_details_wrap_under_an_indent_instead_of_the_terminal_edge(self):
+        import grokbot
+        route = {"served": {"grok-4.7": 2}, "models": {"grok-bot-default": 2}, "calls": 2,
+                 "usage": {"input": 92000, "cache_read": 200, "cache_write": 0, "output": 139}, "cents": 8.27}
+        lines = grokbot.route_line(route, color=False, width=68).splitlines()
+        self.assertEqual(len(lines), 2)
+        self.assertTrue(all(len(line) < 68 for line in lines))
+        self.assertTrue(lines[1].startswith("    ") and "8.27¢" in lines[1])
+        self.assertEqual(len(grokbot.route_line(route, color=False).splitlines()), 1)   # piped: one line
+
+    def test_footer_paints_the_goal_status(self):
+        editor = ui.CursorInput([])
+        editor.text, editor.notice, editor.working = "", None, None
+        editor.hint = lambda: ("Grok Bot · Auto · Goal running · step 2", "Local · ask")
+        self.assertIn(editor.fg("goal", "Goal running · step 2", True), editor.footer(100))
+        # A narrow pane keeps the goal's state and drops the model label first.
+        self.assertIn("Goal running · step 2", plain(editor.footer(44)))
+
+
+if __name__ == "__main__":
+    unittest.main()

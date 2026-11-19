@@ -79,6 +79,23 @@ def supported():
     return sys.stdin.isatty() and sys.stdout.isatty()
 
 
+ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07")
+
+
+def visible_width(line):
+    """Terminal cells a painted line covers, its escape sequences left out."""
+    return sum(cell_width(ch) for ch in ANSI.sub("", line))
+
+
+def rows_after_reflow(widths, cursor_row, cursor_col, columns):
+    """Rows between the top of a drawn block and the cursor once the terminal
+    is `columns` wide. A terminal that narrows rewraps each drawn line onto as
+    many rows as it now needs, so moving up by the rows that were drawn would
+    stop partway and leave the old block's top on screen."""
+    rows = sum(max(1, -(-width // columns)) for width in widths[:cursor_row])
+    return rows + cursor_col // columns
+
+
 def cell_width(ch):
     return 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 0 if unicodedata.combining(ch) else 1
 
@@ -162,6 +179,9 @@ class Editor:
         self.text_line = 1        # the box line holding the first text row
         self.pending = []         # mouse events waiting for that report
         self.last_click = (0.0, -1)
+        self.drawn_widths = []    # cells each drawn line covers, for rewinding after a resize
+        self.drawn_columns = 0    # the terminal's width when the block was drawn
+        self.cursor_col = 0
 
     # ---- painting helpers
     def fg(self, key, text, bold=False):
@@ -273,13 +293,33 @@ class Editor:
             index += 1   # the newline
         return rows, cur
 
+    def columns(self):
+        return max(20, shutil.get_terminal_size((100, 30)).columns)
+
+    def rewind(self):
+        """Move from the cursor to the first column of the drawn block's top row."""
+        if not self.drawn_rows:
+            return "\r"
+        columns = shutil.get_terminal_size((100, 30)).columns
+        up = self.cursor_row
+        if columns != self.drawn_columns and self.drawn_widths:
+            up = rows_after_reflow(self.drawn_widths, self.cursor_row, self.cursor_col, max(1, columns))
+        return (f"\x1b[{up}A" if up else "") + "\r"
+
+    def drew(self, lines, cursor_row, cursor_col, columns):
+        """Remember what is on screen so the next draw or erase can find its top."""
+        self.drawn_rows, self.cursor_row, self.cursor_col = len(lines), cursor_row, cursor_col
+        self.drawn_widths = [visible_width(line) for line in lines]
+        self.drawn_columns = columns
+
+    def resized(self):
+        """Whether the terminal's width changed since the block was drawn."""
+        return bool(self.drawn_rows) and shutil.get_terminal_size((100, 30)).columns != self.drawn_columns
+
     def draw(self, final=False):
         self.track_mouse(final)
-        w = max(20, shutil.get_terminal_size((100, 30)).columns)
-        out = []
-        if self.drawn_rows:
-            out.append(f"\x1b[{self.cursor_row}A" if self.cursor_row else "")
-        out.append("\r\x1b[J")
+        w = self.columns()
+        out = [self.rewind() + "\x1b[J"]
         rule = self.rule(w)
         items = [] if final else self.menu_items()
         if items:
@@ -337,8 +377,7 @@ class Editor:
         out.append(f"\r\x1b[{ccol}C" if ccol else "\r")
         sys.stdout.write("".join(out))
         sys.stdout.flush()
-        self.drawn_rows = len(lines)
-        self.cursor_row = 1 + crow
+        self.drew(lines, 1 + crow, ccol, shutil.get_terminal_size((100, 30)).columns)
 
     def rule(self, w):
         a, b = self.c.get("rule", (150, 120, 62)), self.c.get("rule_end", (88, 84, 76))
@@ -536,6 +575,8 @@ class Editor:
             if not buf:
                 ready = self.terminal.wait(1 / 30)
                 if not ready:
+                    if self.resized():
+                        yield "resize"
                     if idle:
                         woke = idle()
                         if woke:
@@ -630,6 +671,9 @@ class Editor:
             if on_ready:
                 on_ready(self.text)
             for key in self.keys(fd, idle):
+                if key == "resize":
+                    self.draw()
+                    continue
                 items = self.menu_items()
                 if isinstance(key, tuple) and key[0] == "wake":
                     raise Wake(key[1], self.text)
@@ -778,6 +822,6 @@ class Editor:
         return message
 
     def _erase(self):
-        sys.stdout.write((f"\x1b[{self.cursor_row}A" if self.cursor_row else "") + "\r\x1b[J")
+        sys.stdout.write(self.rewind() + "\x1b[J")
         sys.stdout.flush()
         self.drawn_rows = self.cursor_row = 0

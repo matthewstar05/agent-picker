@@ -1,13 +1,14 @@
-"""Cursor-like input painting on the shared, tested terminal line editor."""
+"""Codex-style input painting on the shared, tested terminal line editor."""
 
 import queue
+import re
 import shutil
 import sys
 import textwrap
 import threading
 import time
 
-from star_input import Editor, MENU_ROWS, Wake, cell_width
+from star_input import Editor, MENU_ROWS, Wake, cell_width, visible_width
 
 RESET = "\x1b[0m"
 GRAY = "\x1b[38;2;45;44;46m"
@@ -15,18 +16,72 @@ BACKGROUND = "\x1b[48;2;45;44;46m"
 COLORS = {"text": (225, 225, 230), "mark": (185, 185, 195), "ghost": (125, 125, 135),
           "label": (200, 200, 210), "note": (135, 135, 145), "mode": (225, 165, 190),
           "select": (45, 44, 46), "pick": (245, 245, 250),
-          "selection": (240, 240, 245), "selection_text": (30, 30, 34)}   # selected prompt text: dark on white
+          "selection": (240, 240, 245), "selection_text": (30, 30, 34),   # selected prompt text: dark on white
+          "goal": (240, 130, 175), "goal_text": (30, 18, 26), "rule": (70, 70, 76)}
 
-
-SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+# The command that keeps working toward an objective, highlighted wherever it shows.
+GOAL_COMMAND = re.compile(r"/goal(?=\s|$)")
 
 
 def fg(name, text, color=True):
     return f"\x1b[38;2;{';'.join(map(str, COLORS[name]))}m{text}{RESET}" if color else text
 
 
-def wrap(text, width, first="⏺ ", rest="  "):
-    """Claude Code-style reply block: a marker, word wrap with a hanging indent,
+def chip(text, color=True):
+    """A highlighted label, dark bold text on the goal's pink, as Codex marks a mode."""
+    if not color:
+        return text
+    back, ink = COLORS["goal"], COLORS["goal_text"]
+    return (f"\x1b[48;2;{';'.join(map(str, back))}m\x1b[38;2;{';'.join(map(str, ink))}m\x1b[1m"
+            + text + RESET)
+
+
+def shimmer(text, t, color=True):
+    """Codex's working text: a bright band sweeping across dim letters."""
+    if not color:
+        return text
+    low, high, band = (120, 120, 130), (250, 250, 255), 3.0
+    sweep = (t * 12) % (len(text) + 2 * band) - band
+    out = []
+    for i, ch in enumerate(text):
+        glow = max(0.0, 1 - abs(i - sweep) / band)
+        rgb = tuple(round(a + (b - a) * glow) for a, b in zip(low, high))
+        out.append(f"\x1b[38;2;{rgb[0]};{rgb[1]};{rgb[2]}m{ch}")
+    return "".join(out) + RESET
+
+
+def goal_line(label, summary, width=None, color=True):
+    """The highlighted /goal chip and the goal's first line, cut to fit the pane."""
+    width = width or max(20, shutil.get_terminal_size((100, 30)).columns)
+    room = width - 1 - cell_width_of(label) - 2
+    summary = summary if cell_width_of(summary) <= room else fit_cells(summary, room)
+    return chip(label, color) + ("  " + fg("note", summary, color) if room > 1 and summary else "")
+
+
+def cell_width_of(text):
+    return sum(cell_width(ch) for ch in text)
+
+
+def fit_cells(text, room):
+    """text cut to room cells, ending in … when cut."""
+    if room <= 1:
+        return ""
+    out, used = "", 0
+    for ch in text:
+        if used + cell_width(ch) > room - 1:
+            break
+        out, used = out + ch, used + cell_width(ch)
+    return out + "…"
+
+
+def worked_rule(took, width, color=True):
+    """Codex's divider after a turn: ─ Worked for 1m 05s · 3:04 PM ────────"""
+    label = "─ Worked for " + elapsed(took) + " · " + time.strftime("%I:%M %p").lstrip("0") + " "
+    return fg("note", label + "─" * max(0, width - 1 - len(label)), color)
+
+
+def wrap(text, width, first="• ", rest="  "):
+    """Codex-style reply block: a bullet, word wrap with a hanging indent,
     and code fences indented but never rewrapped."""
     width, lines, fenced = max(20, width - 1), [], False
     for line in text.splitlines() or [""]:
@@ -134,17 +189,22 @@ class Working:
             self.thread.join()
             self.flush(raw=False)
             took, self.editor.working = time.monotonic() - self.editor.working, None
-        self.out.write("\n" + fg("note", "─ Worked for " + elapsed(took) + " · "
-                                  + time.strftime("%I:%M %p").lstrip("0") + " ─") + "\n\n")
+        self.out.write("\n" + worked_rule(took, max(20, shutil.get_terminal_size((100, 30)).columns)) + "\n\n")
         self.out.flush()
         return text
 
 
 class CursorInput(Editor):
+    """Codex-style composer: a shaded box with a › prompt, the working line and
+    queued messages above it, and a footer or command menu below."""
+
+    PLACEHOLDER = "Ask Grok Bot to do anything"
+
     def __init__(self, commands, **kwargs):
         super().__init__(commands, colors=COLORS, mouse=True, **kwargs)
         self.working = None     # when the running turn started; None between turns
         self.queued = []        # messages to send after it, in order
+        self.badge = None       # "goal · step 3" while a /goal runs, shown on the working line
 
     def keys(self, fd, idle):
         for key in super().keys(fd, idle):
@@ -155,19 +215,60 @@ class CursorInput(Editor):
                     key = ("wake", "interrupt")
             yield key
 
+    def paint(self, row, piece):
+        """The row's text, with /goal at the start of the message highlighted."""
+        match = GOAL_COMMAND.match(self.text) if row == 0 else None
+        if not match or self.selection() or not piece.startswith(match.group()):
+            return super().paint(row, piece)
+        size = len(match.group())
+        return chip(piece[:size]) + super().paint(row, piece[size:]) if piece[size:] else chip(piece[:size])
+
     def echo(self, text):
         """Show a sent message in the transcript the way a submitted prompt is left."""
         self.text, self.pos, self.drawn_rows, self.cursor_row = text, len(text), 0, 0
         self.draw(final=True)
         self.text, self.pos = "", 0
 
+    def block(self, rows, width, ghost=""):
+        """The shaded message block: half-block edges around › rows, each padded to width."""
+        lines = [GRAY + "▄" * (width - 1) + RESET]
+        for index, (kind, piece) in enumerate(rows):
+            body = ("› " if kind == "first" else "  ") + piece
+            occupied = sum(cell_width(ch) for ch in body)
+            extra = ghost[:max(0, width - 1 - occupied)] if index == len(rows) - 1 else ""
+            text = self.fg("mark", body[:2], True) + self.paint(index, piece) + self.fg("ghost", extra)
+            text += " " * max(0, width - 1 - occupied - len(extra))
+            lines.append(BACKGROUND + text.replace(RESET, RESET + BACKGROUND) + RESET)
+        lines.append(GRAY + "▀" * (width - 1) + RESET)
+        return lines
+
+    def working_line(self, width):
+        took = time.monotonic() - self.working
+        line = self.fg("text", "• ") + shimmer("Working", took)
+        line += self.fg("note", " (" + elapsed(took) + " • ") + self.fg("text", "esc") + self.fg("note", " to interrupt)")
+        if self.badge:
+            line = chip(" ◎ " + self.badge + " ") + " " + line
+        return line
+
+    def footer(self, width):
+        left, right = self.hint()
+        if self.working is not None and self.text.strip():
+            left = "tab to queue message"
+        if self.notice and time.time() < self.notice[1]:
+            left = self.notice[0]
+        room = max(0, width - len(right) - 4)
+        if len(left) > room and "Goal " in left:
+            left = left[left.index("Goal "):]      # the goal's state matters more than the model label
+        left = left if len(left) <= room else left[:max(0, room - 1)] + "…"
+        goal = left.find("Goal ")
+        painted = (self.fg("note", left[:goal]) + self.fg("goal", left[goal:], True)) if goal >= 0 \
+            else self.fg("note", left)
+        return "  " + painted + " " * max(1, width - 3 - len(left) - len(right)) + self.fg("mode", right)
+
     def draw(self, final=False):
         self.track_mouse(final)
-        width = max(20, shutil.get_terminal_size((100, 30)).columns)
-        out = []
-        if self.drawn_rows:
-            out.append(f"\x1b[{self.cursor_row}A" if self.cursor_row else "")
-        out.append("\r\x1b[J")
+        width = self.columns()
+        out = [self.rewind() + "\x1b[J"]
         rows, (cursor_row, cursor_col) = self.wrap(2, width)
         if final and self.working is not None:
             sys.stdout.write("".join(out))     # a queued message shows above the box, not as sent
@@ -175,54 +276,36 @@ class CursorInput(Editor):
             self.drawn_rows = self.cursor_row = 0
             return
         if final:
-            lines = [("→ " if kind == "first" else "  ") + self.fg("text", piece) for kind, piece in rows]
-            sys.stdout.write("".join(out) + "\n".join(lines) + "\n")
+            sys.stdout.write("".join(out) + "\r\n".join(self.block(rows, width)) + "\r\n")
             sys.stdout.flush()
             self.drawn_rows = self.cursor_row = 0
             return
         items = self.menu_items()
         self.sel = max(0, min(self.sel, len(items) - 1)) if items else 0
-        ghost = self.ghost(items)
-        if not self.text:
-            ghost = "Plan, search, build anything"
+        ghost = self.ghost(items) if self.text else self.PLACEHOLDER
         head = []   # the working line and queued messages, above the box
         if self.working is not None:
-            took = time.monotonic() - self.working
-            head += ["", self.fg("mode", SPINNER[int(took * 10) % len(SPINNER)] + " ") + self.fg("note", "Working (" + elapsed(took))
-                    + self.fg("note", " · ") + self.fg("text", "esc") + self.fg("note", " to interrupt)")]
+            head += ["", self.working_line(width)]
             for message in self.queued[-4:]:
                 first = message.splitlines()[0]
                 head.append(self.fg("ghost", "  ↳ " + first[:width - 8] + (" …" if len(first) > width - 8 or "\n" in message else "")))
             if len(self.queued) > 4:
                 head.append(self.fg("ghost", f"    and {len(self.queued) - 4} more queued"))
             head.append("")
-        lines = head + [GRAY + "▄" * (width - 1) + RESET]
+        lines = head + self.block(rows, width, ghost)
         self.text_line = len(head) + 1
-        for index, (kind, piece) in enumerate(rows):
-            body = ("→ " if kind == "first" else "  ") + piece
-            occupied = sum(cell_width(ch) for ch in body)
-            extra = ghost[:max(0, width - 1 - occupied)] if index == len(rows) - 1 else ""
-            text = self.fg("mark", body[:2]) + self.paint(index, piece)
-            text += self.fg("ghost", extra)
-            text += " " * max(0, width - 1 - occupied - len(extra))
-            lines.append(BACKGROUND + text.replace(RESET, RESET + BACKGROUND) + RESET)
-        lines.append(GRAY + "▀" * (width - 1) + RESET)
         if items:
             top = max(0, min(self.sel - MENU_ROWS // 2, len(items) - MENU_ROWS))
             for index, (_, label, note) in enumerate(items[top:top + MENU_ROWS], top):
                 text = ("  " + label.ljust(20) + note)[:width - 1]
-                lines.append(self.bg("select", self.fg("pick", text.ljust(width - 1))) if index == self.sel
-                             else self.fg("label", text))
+                if index == self.sel:
+                    lines.append(self.bg("select", self.fg("pick", text.ljust(width - 1))))
+                elif GOAL_COMMAND.match(label):
+                    lines.append("  " + self.fg("goal", label.ljust(20), True) + self.fg("label", note[:max(0, width - 23)]))
+                else:
+                    lines.append(self.fg("label", text))
         else:
-            left, right = self.hint()
-            if self.working is not None and self.text.strip():
-                left = "tab to queue message"
-            if self.notice:
-                if time.time() < self.notice[1]:
-                    left = self.notice[0]
-            left = left[:max(0, width - len(right) - 4)]
-            lines.append("  " + self.fg("note", left) + " " * max(1, width - 3 - len(left) - len(right))
-                         + self.fg("mode", right))
+            lines.append(self.footer(width))
         out.append("\r\n".join(lines))
         up = len(lines) - 1 - (len(head) + 1 + cursor_row)
         if up > 0:
@@ -230,4 +313,4 @@ class CursorInput(Editor):
         out.append("\r" + (f"\x1b[{cursor_col}C" if cursor_col else ""))
         sys.stdout.write("".join(out))
         sys.stdout.flush()
-        self.drawn_rows, self.cursor_row = len(lines), len(head) + 1 + cursor_row
+        self.drew(lines, len(head) + 1 + cursor_row, cursor_col, shutil.get_terminal_size((100, 30)).columns)

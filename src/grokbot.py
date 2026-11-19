@@ -111,8 +111,9 @@ def tokens(count):
     return f"{count / 1000:.1f}k" if count >= 1000 else str(count)
 
 
-def route_line(route, color=True):
-    """The starcli-style line under a reply: the model(s) that served it, calls, tokens, and cost."""
+def route_line(route, color=True, width=None):
+    """The starcli-style line under a reply: the model(s) that served it, calls, tokens, and cost.
+    With width, details that would run past the pane go on indented lines below."""
     def paint(text, rgb):
         return f"\x1b[38;2;{';'.join(map(str, rgb))}m{text}\x1b[0m" if color else text
     def listing(counts):
@@ -128,8 +129,19 @@ def route_line(route, color=True):
         detail.append(f"{tokens(usage['input'] + usage['cache_read'] + usage['cache_write'])} in · {tokens(usage['output'])} out")
     if route["cents"]:
         detail.append(f"{route['cents']:.2f}¢")
-    return (f"  {paint('◆', (240, 130, 175))} {paint('Grok Bot', (255, 190, 215))} {paint(models, (196, 230, 255))}   "
-            + paint(" · ".join(detail), (135, 135, 145)))
+    head = f"  {paint('◆', (240, 130, 175))} {paint('Grok Bot', (255, 190, 215))} {paint(models, (196, 230, 255))}   "
+    used = len("  ◆ Grok Bot " + models + "   ")
+    if width is None or used + len(" · ".join(detail)) <= width - 1:
+        return head + paint(" · ".join(detail), (135, 135, 145))
+    lines, line = [], []
+    for part in detail:
+        if line and used + len(" · ".join(line + [part])) > width - 1:
+            lines.append(line)
+            line, used = [], 4
+        line.append(part)
+    lines.append(line)
+    return "\n".join((head if i == 0 else "    ") + paint(" · ".join(parts), (135, 135, 145))
+                     for i, parts in enumerate(lines))
 
 
 def this_mac(machine):
@@ -262,12 +274,18 @@ class Output:
                     text = "\n" + wrap(text, shutil.get_terminal_size((100, 30)).columns)
                 self.show(text)
             elif event["type"] == "tool_call" and (self.interactive or self.verbose):
-                self.show("  ⎿ " + clean(event["label"])[:180], err=not self.interactive)
+                if self.interactive:
+                    from grokbot_ui import fg as ui_fg
+                    self.show(ui_fg("note", "• ") + ui_fg("label", clean(event["label"])[:180]))
+                else:
+                    self.show("  ⎿ " + clean(event["label"])[:180], err=True)
             elif event["type"] == "notice":
                 self.show(("  " if self.interactive else "") + clean(event["text"]), err=True)
             elif event["type"] == "system" and event.get("subtype") == "model":
                 # stdout keeps only the answer in -p text mode, so the route line goes to stderr there.
-                self.show(route_line(event, color=sys.stderr.isatty() or self.interactive), err=not self.interactive)
+                self.show(route_line(event, color=sys.stderr.isatty() or self.interactive,
+                                     width=shutil.get_terminal_size((100, 30)).columns if self.interactive else None),
+                          err=not self.interactive)
 
     def text(self, text, final=True):
         self.answer += ("\n\n" if self.answer else "") + text
@@ -745,11 +763,48 @@ def list_sessions(cwd):
         print("No saved conversations in this project.")
 
 
-# The Grok Bot mascot, a small round bot drawn with quadrant blocks (8 columns, 3 rows).
-LOGO = (" ▗▄██▄▖ ", " █▌▐▌▐█ ", " ▝█▀▀█▘ ")
+# The Grok Bot mascot: a round bot with an antenna and a dark visor, as pixel art.
+# Each terminal row shows two pixel rows with half blocks, so 8 rows draw in 4.
+MASCOT = ("......E......",
+          "......S......",
+          "..PHHHHHHHP..",
+          ".PHDDDDDDDHP.",
+          "SPDEEDDDEEDPS",
+          "SPDEEDDDEEDPS",
+          ".PPDDDDDDDPP.",
+          "..SSSSSSSSS..")
+MASCOT_COLORS = {"P": (240, 130, 175), "H": (255, 190, 215), "D": (44, 22, 52),
+                 "E": (80, 230, 255), "S": (196, 84, 138)}
+MASCOT_WIDTH = len(MASCOT[0])
 # Clear the screen and the terminal's scrollback, then home the cursor, so the header
 # and prompt start at the top of the pane with nothing older to scroll back to.
 FRESH_SCREEN = "\x1b[2J\x1b[3J\x1b[H"
+TIPS = (("/goal", "keep working until a task is done"),
+        ("/resume", "pick up a saved conversation"),
+        ("/where", "choose where Grok Bot works"),
+        ("/usage", "show Cursor's usage"))
+
+
+def mascot(color=True):
+    """The mascot's four rows, each MASCOT_WIDTH cells. Without color, the
+    same shape in plain block characters."""
+    rows = []
+    for top, bottom in zip(MASCOT[::2], MASCOT[1::2]):
+        line = ""
+        for upper, lower in zip(top, bottom):
+            a, b = MASCOT_COLORS.get(upper), MASCOT_COLORS.get(lower)
+            if not color:
+                line += "█" if a and b else "▀" if a else "▄" if b else " "
+            elif a and b:
+                line += f"\x1b[38;2;{a[0]};{a[1]};{a[2]}m\x1b[48;2;{b[0]};{b[1]};{b[2]}m▀\x1b[0m"
+            elif a:
+                line += f"\x1b[38;2;{a[0]};{a[1]};{a[2]}m▀\x1b[0m"
+            elif b:
+                line += f"\x1b[38;2;{b[0]};{b[1]};{b[2]}m▄\x1b[0m"
+            else:
+                line += " "
+        rows.append(line)
+    return rows
 
 
 def home(path):
@@ -759,48 +814,66 @@ def home(path):
 
 
 def banner(cwd, session=None, mode=None, out=None):
-    """Claude Code-style header: the mascot on the left, name, account and folder beside it."""
+    """Codex-style header: a rounded card with the mascot, the name and version,
+    and the model, folder and session, then a few commands to try."""
+    from star_input import cell_width
     out = out or sys.stdout
     tty = out.isatty()
+    columns = shutil.get_terminal_size((100, 30)).columns if tty else 100
+
     def paint(text, rgb, bold=False):
         return (("\x1b[1m" if bold else "") + f"\x1b[38;2;{';'.join(map(str, rgb))}m{text}\x1b[0m") if tty else text
-    # Leave the last terminal cell unused: wrapping a detail line displaces the
-    # next mascot row and can scroll its top out of a short pane.
-    width = max(1, shutil.get_terminal_size((100, 30)).columns - 1) if tty else None
-    stacked = width is not None and width < len(LOGO[0]) + 2 + len("Grok Bot")
-    available = width if stacked else width - len(LOGO[0]) - 2 if width is not None else None
 
-    def fit(text):
-        if available is None:
+    def cells(text):
+        return sum(cell_width(ch) for ch in text)
+
+    def fit(text, room):
+        if cells(text) <= room:
             return text
-        from star_input import cell_width
-        if sum(cell_width(ch) for ch in text) <= available:
-            return text
-        result, cells = "", 0
+        result = ""
         for ch in text:
-            if cells + cell_width(ch) > available - 1:
+            if cells(result) + cell_width(ch) > room - 1:
                 break
             result += ch
-            cells += cell_width(ch)
         return result + "…"
 
-    name = "Grok Bot Agent"
-    if available is not None and available < len(name):
-        name = "Grok Bot"
-    title = paint(fit(name), (255, 190, 215), bold=True)
-    if available is None or len(name) + len(VERSION) + 2 <= available:
-        title += " " + paint("v" + VERSION, (135, 135, 145))
-    detail = "Cursor Grok Bot usage · " + (where.WHERE.show(mode) + " · " if mode else "") + "/help for commands"
-    if available is not None and len(detail) > available:
-        detail = (where.WHERE.show(mode) + " · " if mode else "") + "/help"
-    text = [title, paint(fit(detail), (135, 135, 145)),
-            paint(fit(clean(home(cwd))), (135, 135, 145))]
+    dim, ink, pink = (135, 135, 145), (225, 225, 230), (255, 190, 215)
+    rows = [(("Grok Bot Agent", pink, True), (" (v" + VERSION + ")", dim, False)), ()]
+    fields = [("model:", "Grok Bot · Auto"), ("directory:", clean(home(cwd)))]
+    if mode:
+        fields.append(("where:", where.WHERE.show(mode)))
     if session:
-        text.append(paint(fit("Session " + session["id"]), (135, 135, 145)))
-    logo = list(LOGO) + [" " * len(LOGO[0])] * (len(text) - len(LOGO))
-    lines = [paint(art, (240, 130, 175)) + "  " + line for art, line in zip(logo, text)]
-    if stacked:
-        lines = [paint(fit(art.strip()), (240, 130, 175)) for art in LOGO] + text
+        fields.append(("session:", session["id"]))
+    label = max(len(name) for name, _ in fields) + 1
+    rows += [((name.ljust(label), dim, False), (value, ink, False)) for name, value in fields]
+
+    # Leave the last terminal cell unused so no line wraps; the card holds the
+    # mascot beside the text when there is room for both.
+    inner = max(8, columns - 1 - 4)
+    beside = inner >= MASCOT_WIDTH + 2 + 24
+    art = mascot(tty) if beside or columns - 1 >= MASCOT_WIDTH else []
+    gutter = MASCOT_WIDTH + 2 if beside else 0
+    text_width = min(inner - gutter, max(sum(cells(part[0]) for part in row) for row in rows))
+    lines = []
+    if art and not beside:
+        lines += art + [""]          # a narrow pane: the mascot above the card
+    border = (90, 90, 100)
+    lines.append(paint("╭" + "─" * (gutter + text_width + 2) + "╮", border))
+    for index in range(max(len(rows), len(art) if beside else 0)):
+        left = (art[index] if index < len(art) else " " * MASCOT_WIDTH) + "  " if beside else ""
+        room, body, used = text_width, "", 0
+        for text, rgb, bold in (rows[index] if index < len(rows) else ()):
+            piece = fit(text, room - used) if room - used > 0 else ""
+            body += paint(piece, rgb, bold) if piece else ""
+            used += cells(piece)
+        lines.append(paint("│", border) + " " + left + body + " " * (text_width - used) + " " + paint("│", border))
+    lines.append(paint("╰" + "─" * (gutter + text_width + 2) + "╯", border))
+    room = columns - 1 - 2
+    lines += ["", "  " + paint(fit("To get started, describe a task or try one of these commands:", room), dim), ""]
+    for name, desc in TIPS:
+        tip = fit(name + " - " + desc, room)
+        head, rest = tip[:len(name)], tip[len(name):]
+        lines.append("  " + (paint(head, (240, 130, 175), True) if name == "/goal" else paint(head, ink)) + paint(rest, dim))
     # Explicit carriage returns also work when the previous CLI left ONLCR off.
     newline = "\r\n" if tty else "\n"
     out.write((FRESH_SCREEN if tty else "") + newline + newline.join(lines) + newline * 2)
@@ -911,7 +984,7 @@ def main(argv=None):
             return 0
         if not sys.stdin.isatty():
             raise GrokError("Use --print for non-interactive tasks.")
-        from grokbot_ui import CursorInput, Working, fg as ui_fg
+        from grokbot_ui import CursorInput, Working, chip as ui_chip, fg as ui_fg, goal_line
         banner(cwd, session, mode)
         editor = CursorInput(COMMANDS, history=[m["user"] for m in (session or {}).get("messages", [])],
                              image_dir=str(store.directory().parent / "attachments"))
@@ -930,32 +1003,38 @@ def main(argv=None):
                 store.save(conversation.session)
 
         def pursue():
-            """Take turns toward the goal until the bot reports it complete or blocked."""
-            while goal.state == "running":
-                if editor.queued:
-                    goal.pause("for your queued message")
-                    break
-                text = goal.prompt()
-                print(ui_fg("mode", f"◎ goal · step {goal.step}") + ui_fg("note", "  " + goal.text.splitlines()[0][:70]))
-                output.answer = ""
-                try:
-                    interrupted = working(text)
-                except GrokError as exc:
-                    print(clean(str(exc)), file=sys.stderr)
-                    goal.pause("after an error")
-                    break
-                if interrupted:
-                    goal.pause("interrupted")
-                    break
-                goal.finish(output.answer)
-                save_goal()
+            """Take turns toward the goal until the bot reports it complete or blocked.
+            Each step is marked with the highlighted /goal chip, as is the working line."""
+            summary = clean(goal.text.splitlines()[0])
+            try:
+                while goal.state == "running":
+                    if editor.queued:
+                        goal.pause("for your queued message")
+                        break
+                    text = goal.prompt()
+                    editor.badge = f"goal · step {goal.step}"
+                    print(goal_line(f" ◎ /goal · step {goal.step} ", summary))
+                    output.answer = ""
+                    try:
+                        interrupted = working(text)
+                    except GrokError as exc:
+                        print(clean(str(exc)), file=sys.stderr)
+                        goal.pause("after an error")
+                        break
+                    if interrupted:
+                        goal.pause("interrupted")
+                        break
+                    goal.finish(output.answer)
+                    save_goal()
+            finally:
+                editor.badge = None
             save_goal()
             if goal.state == "complete":
-                print(ui_fg("mode", "✓ " + goal.status()) + ui_fg("note", "  " + goal.text.splitlines()[0][:70]) + "\n")
+                print(goal_line(" ✓ " + goal.status() + " ", summary) + "\n")
             elif goal.state == "blocked":
-                print(ui_fg("mode", "Goal blocked: ") + clean(goal.detail) + ui_fg("note", "  (reply, then /goal resume)") + "\n")
+                print(ui_chip(" ◎ Goal blocked ") + " " + clean(goal.detail) + ui_fg("note", "  (reply, then /goal resume)") + "\n")
             elif goal.state == "paused":
-                print(ui_fg("note", "Goal paused " + goal.detail + ". /goal resume continues it.") + "\n")
+                print(ui_fg("goal", "◎ Goal paused", True) + ui_fg("note", " " + goal.detail + ". /goal resume continues it.") + "\n")
 
         def working(text=None):
             """One turn on a thread with the input box still live (Codex style)."""
