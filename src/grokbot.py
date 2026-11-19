@@ -347,11 +347,15 @@ class Conversation:
                 raise GrokError("This session belongs to " + self.session["cwd"] + ". Use --workspace with that directory.")
             if self.machine and self.session.get("machine") != self.machine["machineId"]:
                 raise GrokError("The selected machine differs from this conversation's saved machine.")
+            if self.session.get("harness") == "temporal":
+                self.gateway.temporal_agents.add(self.session["id"])
             return
         row = self.gateway.create("CLI · " + Path(self.cwd).name, sections.DESCRIPTION)
         self.session = {"id": row["id"], "cwd": self.cwd, "machine": self.machine["machineId"] if self.machine else None,
                         "machine_label": self.machine.get("label") if self.machine else "cloud", "where": self.where,
                         "created": time.time(), "messages": [], "pending": None, "system": self.system}
+        if row.get("harness") == "temporal":
+            self.session["harness"] = "temporal"
         store.save(self.session)
         # File the new bot under this week's sidebar section without delaying the first turn.
         threading.Thread(target=file_by_week, args=(self.gateway,)).start()

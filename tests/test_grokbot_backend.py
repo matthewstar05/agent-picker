@@ -125,7 +125,7 @@ class HibernationTests(unittest.TestCase):
     def test_a_conversation_created_while_the_pod_sleeps_is_asked_again_once(self):
         calls, request = self.server("createAgent", self.asleep())
         self.assertEqual(gateway.Gateway(token="account", request=request).create("CLI", "")["id"], "bot")
-        self.assertEqual(calls, ["EnsureSandBox", "createAgent", "EnsureSandBox", "createAgent"])
+        self.assertEqual(calls, ["GetGrokBotRuntimeCapabilities", "EnsureSandBox", "createAgent", "EnsureSandBox", "createAgent"])
 
     def test_a_write_still_asleep_after_waking_is_not_repeated_again(self):
         calls, request = self.server("createAgent", self.asleep(), self.asleep())

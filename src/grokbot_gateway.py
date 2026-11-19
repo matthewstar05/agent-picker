@@ -4,6 +4,7 @@ No model API key, Cursor Agent turn, or background relay is involved. Secrets
 stay in memory; only the provider's HTTPS hosts may receive them.
 """
 
+import base64
 import http.client
 import json
 import os
@@ -96,8 +97,9 @@ def cursor_token():
 
 # Requests that change nothing when repeated. Only these are resent after a pooled
 # connection turns out to have been closed by the server while it sat idle.
+ACCOUNT_READS = {"GetGrokBotRuntimeCapabilities", "ListGrokBotAgentStatuses", "ListGrokBotTranscriptEntries"}
 IDEMPOTENT = {"listAgents", "getAgentTranscriptTail", "getAgentThread", "getHostSettings", "EnsureSandBox",
-              "ListSandMachines", "GetFilteredUsageEvents", "GetGrokBotSendStatus"}
+              "ListSandMachines", "GetFilteredUsageEvents", "GetGrokBotSendStatus"} | ACCOUNT_READS
 # Idle HTTPS connections, shared by every thread: the interactive CLI runs each turn
 # on a new thread, and a new TLS handshake costs 100 to 300 ms per host. Both Cursor
 # hosts kept an idle connection open for over a minute when measured (November 2026).
@@ -280,6 +282,7 @@ class Gateway:
         self.token = token
         self.request = request
         self.session = None
+        self.temporal_agents = set()
         self.sleep = sleep or time.sleep
         self.lock = threading.RLock()   # one EnsureSandBox at a time, shared by warm() and the turn
 
@@ -302,6 +305,17 @@ class Gateway:
             raise GrokError("No Cursor account session. Run cursor-cli login, then grokbot status.")
         return self.request(BACKEND + "/aiserver.v1." + service + "/" + method, body or {},
                             dict(headers or {}, **{"Authorization": "Bearer " + self.token, "Connect-Protocol-Version": "1"}))
+
+    def account_read(self, method, body=None):
+        if method not in ACCOUNT_READS:
+            raise ValueError("Only read-only Grok Bot methods can be retried here")
+        for attempt in range(len(RETRY_DELAYS) + 1):
+            try:
+                return self.account(method, body)
+            except GrokError as exc:
+                if not exc.transient or attempt == len(RETRY_DELAYS):
+                    raise
+                self.sleep(RETRY_DELAYS[attempt])
 
     def connect(self):
         if self.session:
@@ -368,9 +382,37 @@ class Gateway:
         return [row for row in rows if isinstance(row, dict) and row.get("id")]
 
     def agent(self, ident):
+        if ident in self.temporal_agents:
+            data = self.account_read("ListGrokBotAgentStatuses", {"agentIds": [ident]})
+            rows = data.get("statuses", []) if isinstance(data, dict) else None
+            if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
+                raise GrokError("Invalid Grok Bot conversation status.")
+            row = next((row for row in rows if row.get("agentId") == ident), None)
+            if row is None:
+                return None
+            return {"id": ident, "isRunningTurn": bool(row.get("isRunning"))}
         return next((row for row in self.agents() if row["id"] == ident), None)
 
     def create(self, name, description):
+        try:
+            data = self.account_read("GetGrokBotRuntimeCapabilities")
+        except GrokError as exc:
+            if exc.status not in (404, 501):
+                raise
+            data = {}
+        capabilities = data.get("capabilities", {}) if isinstance(data, dict) else {}
+        if isinstance(capabilities, dict) and capabilities.get("temporalCreationEnabled") is True:
+            ident = request_id()
+            data = self.account("CreateGrokBotTemporalAgent", {
+                "agentId": ident, "name": name, "description": description, "avatarShape": "gem",
+                "avatarColor": "black", "harness": 2, "kickstartRequested": False, "introductionSuppressed": True,
+            })
+            row = data.get("agent") if isinstance(data, dict) else None
+            if not isinstance(row, dict) or row.get("agentId") != ident:
+                raise GrokError("Grok Bot did not confirm the created conversation. Check the app before creating another.", "unknown")
+            self.temporal_agents.add(ident)
+            return {**row, "id": ident, "harness": "temporal"}
+
         data = self.call("createAgent", {"name": name, "description": description,
                                          "title": "", "avatarShape": "gem", "avatarColor": "black", "origin": "user"})
         row = data.get("agent", data) if isinstance(data, dict) else None
@@ -425,6 +467,10 @@ class Gateway:
         return enum(data.get("status") if isinstance(data, dict) else None, "GROK_BOT_SEND_STATUS_", SEND_STATUS)
 
     def transcript(self, ident):
+        if ident in self.temporal_agents:
+            data = self.account_read("ListGrokBotTranscriptEntries", {"agentId": ident, "limit": TRANSCRIPT_TAIL})
+            rows = data.get("entries", []) if isinstance(data, dict) else None
+            return temporal_transcript(rows)
         data = self.call("getAgentTranscriptTail", {"id": ident, "limit": TRANSCRIPT_TAIL})
         rows = data.get("entries", []) if isinstance(data, dict) else []
         if not isinstance(rows, list) or not all(isinstance(e, dict) for e in rows):
@@ -529,6 +575,29 @@ def entry_text(entry):
             return text
     msg = entry.get("message") or {}
     return msg.get("content", "") if isinstance(msg, dict) and isinstance(msg.get("content"), str) else ""
+
+
+def temporal_transcript(rows):
+    """Translate the account service's newest-first transcript into CLI entries."""
+    if not isinstance(rows, list):
+        raise GrokError("Invalid Grok Bot transcript.")
+    entries = []
+    try:
+        for row in rows:
+            body = row.get("body")
+            entry = json.loads(base64.b64decode(body, validate=True)) if body else {}
+            if not isinstance(entry, dict):
+                raise ValueError("Invalid transcript entry body")
+            entry.setdefault("id", row.get("entryId"))
+            entry.setdefault("kind", row.get("entryKind"))
+            entry["seq"] = int(row["seq"])
+            if "updatedSeq" in row:
+                entry["updatedSeq"] = row["updatedSeq"]
+            entry["updatedAt"] = row.get("updatedAt", entry.get("updatedAt", row.get("updatedSeq", row["seq"])))
+            entries.append(entry)
+    except (AttributeError, KeyError, TypeError, ValueError):
+        raise GrokError("Invalid Grok Bot transcript.") from None
+    return sorted(entries, key=lambda entry: entry["seq"])
 
 
 def request_id():
