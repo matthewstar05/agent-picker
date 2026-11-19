@@ -7,8 +7,8 @@
       "cost": 1.0,
       "tiers": {
         "light": {"model": "gpt-6-luna", "effort": "medium"},
-        "standard": {"model": "gpt-6.1-sol", "effort": "medium"},
-        "heavy": {"model": "gpt-6.1-sol", "effort": "high"}
+        "standard": {"model": "gpt-6.2-sol", "effort": "medium"},
+        "heavy": {"model": "gpt-6.2-sol", "effort": "high"}
       },
       "quality": {"chat": 0.8, "search": 0.85, "mechanical": 0.9, "edit": 0.95, "build": 0.95,
                   "debug": 0.96, "review": 0.88, "design": 0.86, "write": 0.75, "web": 0.8}
@@ -47,6 +47,14 @@
       },
       "quality": {"chat": 0.8, "search": 0.82, "mechanical": 0.85, "edit": 0.86, "build": 0.86,
                   "debug": 0.84, "review": 0.8, "design": 0.8, "write": 0.76, "web": 0.72}
+    },
+    "Grok Bot": {
+      "explicit_only": true,
+      "usage_provider": "Cursor",
+      "tiers": {
+        "standard": {"model": "provider-managed", "pool": "gb"}
+      },
+      "quality": {}
     },
     "Antigravity": {
       "capacity": 0.3,

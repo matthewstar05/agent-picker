@@ -42,6 +42,7 @@ import threading
 import time
 import star_sessions
 from contextlib import ExitStack
+from dataclasses import replace
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -53,6 +54,8 @@ import star_input
 import star_mesh
 import herdr_agent_context
 import star_meter
+import star_model_intent
+import star_model_routes
 import star_router
 
 VERSION = "0.2"
@@ -247,8 +250,14 @@ def agent(name):
 
 
 def bypass_enabled(name):
+    if name == "Grok Bot":
+        return star_engines.GrokBotEngine.bypass(agent(name))
     settings = ap.provider_defaults.current(agent(name))
     return bool(settings and settings.get("bypass_permissions"))
+
+
+def usage_provider(name):
+    return agent(name).get("usage_provider", name)
 
 
 def meter_bar(left, cells=5):
@@ -272,7 +281,7 @@ def star_bar(info, cells):
 def refresh_meters(names, older_than=300, wait=0.0):
     """Re-read stale meters in the background; readers spend no model tokens."""
     now, threads = time.time(), []
-    for name in names:
+    for name in dict.fromkeys(usage_provider(name) for name in names):
         with ap.USAGE_LOCK:
             entry = ap.USAGE.get(name) or {}
             busy = name in ap.PENDING
@@ -313,8 +322,10 @@ def print_usage(names):
         print()
     for name in names:
         with ap.USAGE_LOCK:
-            entry = ap.USAGE.get(name)
-        found = star_router.windows(entry, now)
+            entry = ap.USAGE.get(usage_provider(name))
+        spec = star_meter.config().get(name, {})
+        pools = {model["pool"] for model in spec.get("tiers", {}).values() if model.get("pool")}
+        found = [w for w in star_router.windows(entry, now) or [] if not pools or w[0] in pools]
         head = f"  {paint('●', tuple(agent(name)['color']))} {paint(name.ljust(12), INK)}"
         if not found:
             print(head + paint("no reading", FAINT))
@@ -908,7 +919,7 @@ class Star:
         self.member = member
         self.down = {}            # provider -> why it failed this session
         self.approved = set()     # tools the user allowed for the rest of this session ("a")
-        self.quota_failures = {}  # known quota windows, so reset pools can rejoin
+        self.quota_failures = {}  # (provider, pool) -> failed allowance and its last known windows
         self.last = None          # (task, choices, skipped) of the last routing
         self.totals = {}          # provider -> {"turns", "input", "cached", "output", "credits", "seconds"}
         self.running = None       # the Turn in progress, for Esc
@@ -955,42 +966,61 @@ class Star:
         task = star_router.classify(text, tier)
         if self.tier is None and tier == "heavy":
             task.reasons[-1] = "mesh lead uses a strong orchestration model"
+        intent = star_model_intent.parse(text)
+        task.intent = intent
+        if intent and intent.error:
+            self.last = (task, [], {"Request": intent.error})
+            return self.last
+        if self.plan and (intent.provider if intent else self.pinned) == "Grok Bot":
+            self.last = (task, [], {"Grok Bot": "Grok Bot does not provide a read-only plan mode"})
+            return self.last
+        models = None
+        if intent:
+            task.reasons.append(f"requested {intent.label}")
+            models = star_model_routes.resolve(self.config, task.tier, intent, installed=self.engines)
         with ap.USAGE_LOCK:
             usage = dict(ap.USAGE)
         self.recover_quota_windows(usage)
         choices, skipped = star_router.rank(task, usage, set(self.engines), self.config,
-                                            current=self.convo.current, pinned=self.pinned, down=self.down,
-                                            images=bool(images))
+                                            current=self.convo.current, pinned=None if intent else self.pinned,
+                                            down=self.down, images=bool(images), models=models,
+                                            preferred=intent.provider if intent else None,
+                                            quota_failures=self.quota_failures)
+        if intent and not choices and not skipped:
+            skipped[intent.label] = "no installed provider supports the requested model and settings"
         self.last = (task, choices, skipped)
         return task, choices, skipped
 
     def mark_failure(self, choice, error):
         name = choice.provider
-        self.down[name] = error
-        self.quota_failures.pop(name, None)
-        if not re.search(r"quota|rate.?limit|usage.?limit|limit (?:reached|exceeded)|too many requests|"
-                         r"(?:out of|exhausted) credits|credits exhausted", error, re.I):
+        if not star_router.quota_error(error):
+            self.down[name] = error
             return
         now = time.time()
         with ap.USAGE_LOCK:
-            found = star_router.windows(ap.USAGE.get(name), now, choice.pool)
-        if found:
-            # A failure can arrive before a meter reaches its routing cutoff.
-            # Track the tightest observed window, without inventing a reset.
-            tight = max(w[1] for w in found)
-            self.quota_failures[name] = {"at": now, "pool": choice.pool,
-                                         "windows": [w for w in found if w[1] == tight]}
+            found = star_router.windows(ap.USAGE.get(usage_provider(name)), now, choice.pool)
+        # A hard error can arrive while the meter still looks usable.
+        found = [w for w in found or [] if w[2] is None or w[2] > now]
+        tight = max((w[1] for w in found), default=0)
+        self.quota_failures[name, choice.pool] = {"at": now, "windows": [w for w in found if w[1] == tight]}
+
+    def clear_failures(self, provider=None):
+        if provider is None:
+            self.down.clear()
+            self.quota_failures.clear()
+        else:
+            self.down.pop(provider, None)
+            for key in list(self.quota_failures):
+                if key[0] == provider:
+                    del self.quota_failures[key]
 
     def recover_quota_windows(self, usage):
         now = time.time()
-        for name, failed in list(self.quota_failures.items()):
-            if name not in self.down:
-                self.quota_failures.pop(name, None)
-                continue
+        for (name, pool), failed in list(self.quota_failures.items()):
             windows = failed["windows"]
-            reset = all(w[2] and w[2] <= now for w in windows)
-            entry = usage.get(name) or {}
-            current = star_router.windows(entry, now, failed["pool"])
+            reset = bool(windows) and all(w[2] and w[2] <= now for w in windows)
+            entry = usage.get(usage_provider(name)) or {}
+            current = star_router.windows(entry, now, pool)
             try:
                 newer = float(entry.get("fetched", 0)) > failed["at"]
             except (TypeError, ValueError):
@@ -998,12 +1028,12 @@ class Star:
             recovered = newer and current and not star_router.blocked(current, now) and all(
                 any(new[0] == old[0] and new[1] < old[1] for new in current) for old in windows)
             if reset or recovered:
-                self.down.pop(name, None)
-                self.quota_failures.pop(name, None)
+                self.quota_failures.pop((name, pool), None)
 
     def route_line(self, task, choice, note=""):
         dot = paint("◆", tuple(agent(choice.provider)["color"]))
-        model = choice.model + (f" · {choice.effort}" if choice.effort else "")
+        model = (choice.model + (f" · {choice.effort}" if choice.effort else "")
+                 + (" · Ultracode" if choice.ultracode else ""))
         meter = f"   {paint(choice.meter, FAINT)}" if choice.meter else ""
         plan = paint("  plan", PLAN) if self.plan else ""
         return (f"  {dot} {gold(choice.provider)} {paint(model, SKY)}   "
@@ -1020,7 +1050,8 @@ class Star:
         for k, c in enumerate(choices):
             mark = gold("✦") if k == 0 else paint("·", FAINT)
             print(f"  {mark} {paint(f'{c.score:.2f}', BRIGHT if k == 0 else SOFT)}  "
-                  f"{paint(c.provider.ljust(11), INK)} {paint((c.model + ' ' + c.effort).ljust(28), SOFT)} "
+                  f"{paint(c.provider.ljust(11), INK)} "
+                  f"{paint((c.model + ' ' + c.effort + (' · Ultracode' if c.ultracode else '')).ljust(28), SOFT)} "
                   f"{paint(c.why, FAINT)}")
         for name, why in skipped.items():
             print(f"  {paint('×', FAINT)}       {paint(name.ljust(11), FAINT)} {paint(why, FAINT)}")
@@ -1031,7 +1062,7 @@ class Star:
         details = "; ".join(f"{name}: {why}" for name, why in skipped.items())
         return "no provider can take this task" + (": " + details if details else "")
 
-    def run(self, prompt, route_text=None, images=()):
+    def run(self, prompt, route_text=None, images=(), allow_defer=False):
         """One turn on the best provider, rerouted on failure. Returns (reply, status):
         status is "ok", "interrupted", "blocked", "failed" or "none" (nobody could take it).
         images: attached image files; only providers that can see them take the turn."""
@@ -1060,55 +1091,127 @@ class Star:
             prompt += ("\n\n[StarCLI] Attached image" + ("s" if len(images) > 1 else "") + " (look at "
                        + ("them" if len(images) > 1 else "it") + " with your file-reading tool if you cannot "
                        "see it already): " + ", ".join(images))
-        if not choices:
+        if choices:
+            reply, status, limited = self.run_choices(task, choices, prompt, images)
+        else:
             print("  " + paint("✗ " + self.routing_failure(), BAD))
-            return "", "none"
+            reply, status, limited = "", "none", any(star_router.quota_error(reason) for reason in skipped.values())
+        if (task.intent and task.intent.provider != "Grok Bot" and limited
+                and all(star_router.quota_error(reason) or reason == "can't look at attached images"
+                        for reason in skipped.values())):
+            if not allow_defer:
+                say("The requested routes reached their usage limits. Resubmit with a different model to switch.", DIM)
+                return reply, status
+            selection = self.defer_choice(task, choices, images)
+            if selection:
+                model = f"{selection.provider} {selection.model}"
+                approved = (f"[StarCLI] The user approved continuing this request on {model} because the requested "
+                            "routes reached their usage limits. Carry out the task using this approved model.")
+                if status == "failed":
+                    approved += " Verify the state left by earlier attempts before repeating any action."
+                reply, status, _ = self.run_choices(task, [selection], prompt, images, prefix=approved + "\n\n")
+        return reply, status
+
+    def can_run(self, choice):
+        return self.plan or bypass_enabled(choice.provider) or self.engines[choice.provider].asks
+
+    def defer_choice(self, task, attempted, images):
+        if not sys.stdin.isatty() or not sys.stdout.isatty():
+            say("The requested routes reached their usage limits. Resubmit with a different model to switch.", DIM)
+            return None
+        with ap.USAGE_LOCK:
+            usage = dict(ap.USAGE)
+        self.recover_quota_windows(usage)
+        tried = {(c.provider, c.model, c.effort) for c in attempted}
+        options = {}
+        tiers = sorted(star_router.TIERS, key=lambda tier: abs(
+            star_router.TIERS.index(tier) - star_router.TIERS.index(task.tier)))
+        for tier in tiers:
+            models = {provider: spec["tiers"][tier] for provider, spec in self.config.items()
+                      if tier in spec["tiers"] and not spec.get("explicit_only")}
+            choices, _ = star_router.rank(replace(task, tier=tier), usage, set(self.engines), self.config,
+                                          current=self.convo.current, down=self.down, images=bool(images),
+                                          models=models, quota_failures=self.quota_failures)
+            for choice in choices:
+                if self.can_run(choice) and (choice.provider, choice.model, choice.effort) not in tried:
+                    options.setdefault((choice.provider, choice.pool), choice)
+        if not options:
+            say("The requested routes reached their usage limits. No other route is currently available.", DIM)
+            return None
+        say(f"Usage limits blocked {task.intent.label}. Continue this request on another model?", BRIGHT)
+        options = list(options.values())
+        for index, choice in enumerate(options, 1):
+            print(f"  {index}." + self.route_line(task, choice))
+        label = "choose a fallback model"
+        if self.member:
+            self.member.beat(status="blocked", task=label, ready=False, draft=False)
+        report_herdr("blocked", label)
+        try:
+            while True:
+                answer = input("  Select a model number or press Enter to skip: ").strip()
+                if not answer:
+                    return None
+                if answer.isascii() and answer.isdecimal() and len(answer) < 3:
+                    index = int(answer)
+                    if 1 <= index <= len(options):
+                        return options[index - 1]
+                say("Choose one of the listed model numbers.", DIM)
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return None
+        finally:
+            if self.member:
+                self.show_goal_state()
+            else:
+                report_herdr("idle")
+
+    def run_choices(self, task, choices, prompt, images, prefix=""):
         note = ""
-        if not self.plan:
-            # A profile that requires approvals runs only where StarCLI can ask them.
-            unable = [c.provider for c in choices
-                      if not bypass_enabled(c.provider) and not self.engines[c.provider].asks]
-            choices = [c for c in choices if c.provider not in unable]
-            if unable and not choices:
-                reason = (f"{unable[0]}'s picker profile requires approvals. This headless adapter cannot "
-                          f"show its approval UI; use /open {unable[0]} for native approval controls, "
-                          "or use plan mode for read-only analysis.")
-                say(reason, BAD)
-                self.convo.notes.append("[StarCLI] This request was not executed because native approval is "
-                                        "required:\n" + prompt)
-                self.convo.save()
-                return "", "blocked"
-            if unable:
-                note = f"{', '.join(unable)} need{'s' * (len(unable) == 1)} native approvals"
+        unable = [c.provider for c in choices if not self.can_run(c)]
+        choices = [c for c in choices if c.provider not in unable]
+        limited = not unable
+        if unable and not choices:
+            reason = (f"{unable[0]}'s picker profile requires approvals. This headless adapter cannot "
+                      f"show its approval UI. Use /open {unable[0]} for native approval controls.")
+            if unable[0] != "Grok Bot":
+                reason += " You can also use plan mode for read-only analysis."
+            say(reason, BAD)
+            self.convo.notes.append("[StarCLI] This request was not executed because native approval is "
+                                    "required:\n" + prompt)
+            self.convo.save()
+            return "", "blocked", False
+        if unable:
+            note = f"{', '.join(unable)} need{'s' * (len(unable) == 1)} native approvals"
         for attempt, choice in enumerate(choices):
             self.convo.inflight = {"provider": choice.provider, "prompt": prompt, "started": time.time()}
             if not self.save_progress():
-                return "", "blocked"
-            reply, session, error, interrupted, brief = self.turn(task, choice, prompt, note, images)
+                return "", "blocked", False
+            reply, session, error, interrupted, brief = self.turn(task, choice, prefix + prompt, note, images)
             if interrupted:
                 self.convo.record(choice.provider, prompt, reply + "\n[interrupted by the user]", session, brief,
                                   status="interrupted")
                 if not self.save_progress():
-                    return reply, "blocked"
-                return reply, "interrupted"
+                    return reply, "blocked", False
+                return reply, "interrupted", False
             if error:
                 self.mark_failure(choice, error)
+                limited = limited and star_router.quota_error(error)
                 print("  " + paint(f"✗ {choice.provider}: {error}", BAD))
                 partial = (f"[StarCLI] This attempt failed: {error}. Work may already have changed files or run "
                            "commands. Inspect the current state before continuing; do not assume this task is done.\n\n"
                            + reply)
                 self.convo.record(choice.provider, prompt, partial, session, brief, status="failed", error=error)
                 if not self.save_progress():
-                    return reply, "blocked"
+                    return reply, "blocked", False
                 if attempt + 1 >= len(choices):
-                    return reply, "failed"
+                    return reply, "failed", limited
                 note = f"after {choice.provider} failed"
                 continue
             self.convo.record(choice.provider, prompt, reply, session, brief)
             if not self.save_progress():
-                return reply, "blocked"
-            return reply, "ok"
-        return "", "failed"
+                return reply, "blocked", False
+            return reply, "ok", False
+        return "", "failed", limited
 
     def save_progress(self):
         if self.convo.save():
@@ -1125,7 +1228,7 @@ class Star:
         text = (PLAN_NOTE + "\n\n" + prompt) if self.plan else prompt
         argv = engine.argv(self.convo.prompt_for(choice.provider, text, brief), choice.model, choice.effort,
                            session, plan=self.plan, images=images, tier=choice.tier,
-                           needs_mcp=task.needs_mcp,
+                           needs_mcp=task.needs_mcp, ultracode=choice.ultracode,
                            mesh=bool(self.member and (self.member.role in ("lead", "crew") or self.member.peers())))
         folder = None
         if not self.plan and not bypass_enabled(choice.provider):
@@ -1279,7 +1382,7 @@ class Star:
             self.member.beat(status="idle", task="", provider="")
             report_herdr("idle")
 
-    def pursue(self, goal, start=1, steps=None):
+    def pursue(self, goal, start=1, steps=None, allow_defer=False):
         """Take turns toward goal until a provider says it is done or blocked."""
         self.convo.goal = goal
         self.convo.goal_state = "running"
@@ -1306,7 +1409,7 @@ class Star:
                 print("  " + paint(crew_line, FAINT))
             idle = [m["name"] for m in self.member.peers() if m.get("status") not in {"working", "blocked"}] \
                 if self.member and self.member.role == "lead" else []
-            reply, status = self.run(goal_prompt(goal, step, idle), route_text=goal)
+            reply, status = self.run(goal_prompt(goal, step, idle), route_text=goal, allow_defer=allow_defer)
             if status == "none":
                 say(self.routing_failure() + "; /goal resume retries routing", BAD)
                 outcome = status
@@ -1477,7 +1580,7 @@ COMMANDS = [
     ("cost", "", "tokens, credits and time this session, per provider"),
     ("route", "<prompt>", "how a prompt would be routed, without running it"),
     ("why", "", "the scores behind the last turn"),
-    ("use", "<provider>", "pin every turn to one provider (/auto undoes it)"),
+    ("use", "<provider>", "set the default provider (/auto undoes it)"),
     ("model", "<provider> [tier]", "pin a provider and, optionally, its tier"),
     ("tier", "<light|standard|heavy>", "pin the model tier (/tier alone resets it)"),
     ("auto", "", "route every turn automatically again"),
@@ -1551,7 +1654,8 @@ class Commands:
         if command in ("use", "model", "open"):
             out = []
             for name in star.names:
-                found = star_router.windows(ap.USAGE.get(name), time.time())
+                pool = "gb" if name == "Grok Bot" else None
+                found = star_router.windows(ap.USAGE.get(usage_provider(name)), time.time(), pool)
                 note = ""
                 if found:
                     label, pct, resets, _ = max(found, key=lambda w: w[1])
@@ -1601,6 +1705,7 @@ class Commands:
     def do_help(self, rest):
         print()
         print("  " + gold("Star CLI") + paint("  type a request; StarCLI picks the provider and model for each turn", SOFT))
+        say('Try "fix the bug using opus 5.5" or "review it using sol xhigh" to choose a model for one turn.')
         print()
         for name, args, desc in COMMANDS:
             if name == "exit":
@@ -1639,10 +1744,10 @@ class Commands:
                 say("no goal to resume")
                 return
             steps = sum(1 for t in star.convo.turns if t["user"].startswith("[StarCLI goal"))
-            star.down.clear()  # an explicit retry may follow a quota reset or a repaired login
-            star.pursue(star.convo.goal, start=steps + 1)
+            star.clear_failures()  # an explicit retry may follow a quota reset or a repaired login
+            star.pursue(star.convo.goal, start=steps + 1, allow_defer=True)
             return
-        star.pursue(rest)
+        star.pursue(rest, allow_defer=True)
 
     def do_plan(self, rest):
         say(self.star.toggle_plan(), PLAN if self.star.plan else SOFT)
@@ -1651,12 +1756,15 @@ class Commands:
         star, convo = self.star, self.star.convo
         rows = [("version", f"Star CLI {VERSION}"), ("folder", tilde(convo.cwd)),
                 ("mode", "plan (read only)" if star.plan else star.permissions_label()),
-                ("routing", f"pinned to {star.pinned}" if star.pinned else "automatic"),
+                ("routing", f"default: {star.pinned}" if star.pinned else "automatic"),
                 ("tier", star.tier or "chosen per prompt"),
                 ("conversation", f"{convo.title}  ·  {len(convo.turns)} turns  ·  {convo.id}"),
                 ("goal", convo.goal or "none"),
                 ("sessions", ", ".join(f"{p} {s[:8]}…" for p, s in convo.sessions.items()) or "none yet"),
                 ("providers", ", ".join(star.names) + (f"  (set aside: {', '.join(star.down)})" if star.down else ""))]
+        if star.quota_failures:
+            pools = (f"{provider} ({pool})" if pool else provider for provider, pool in star.quota_failures)
+            rows.append(("quota blocked", ", ".join(pools)))
         if star.member:
             peers = star.member.peers()
             rows.append(("mesh", f"{star.member.name} ({star.member.role})" +
@@ -1689,24 +1797,26 @@ class Commands:
         self.star.explain()
 
     def provider(self, word):
-        return next((n for n in self.star.names if n.lower() == word.lower()
-                     or SHORT.get(n, "").lower() == word.lower()), None)
+        name = star_model_intent.provider_name(word)
+        return name if name in self.star.names else None
 
     def do_use(self, rest):
-        name = self.provider(rest.split(" ")[0]) if rest else None
+        name = (self.provider(rest) or self.provider(rest.split()[0])) if rest.strip() else None
         if not name:
             say("use one of: " + ", ".join(self.star.names))
             return
         self.star.pinned = name
-        self.star.down.pop(name, None)
+        self.star.clear_failures(name)
         self.star.convo.save()
-        say(f"every turn runs on {name} until /auto")
+        say(f"default provider is {name} until /auto or a prompt requests another model")
 
     def do_model(self, rest):
-        words = rest.split()
-        self.do_use(words[0] if words else "")
-        if len(words) > 1:
-            self.do_tier(words[1])
+        provider, _, tier = rest.rpartition(" ")
+        if tier in star_router.TIERS:
+            self.do_use(provider)
+            self.do_tier(tier)
+        else:
+            self.do_use(rest)
 
     def do_tier(self, rest):
         self.star.tier = rest if rest in star_router.TIERS else None
@@ -1715,7 +1825,7 @@ class Commands:
 
     def do_auto(self, rest):
         self.star.pinned, self.star.tier = None, None
-        self.star.down.clear()
+        self.star.clear_failures()
         self.star.convo.save()
         say("routing every turn automatically")
 
@@ -1846,7 +1956,7 @@ class Commands:
         cwd = self.star.convo.cwd
         self.star.convo.save()
         self.star.bind(Conversation({"cwd": cwd}))
-        self.star.down.clear()
+        self.star.clear_failures()
         say("new conversation")
 
     def do_clear(self, rest):
@@ -1948,7 +2058,7 @@ class Commands:
         for name in star.config:
             engine = star.engines.get(name)
             with ap.USAGE_LOCK:
-                entry = ap.USAGE.get(name)
+                entry = ap.USAGE.get(usage_provider(name))
             if not engine:
                 print(f"  {paint('·', FAINT)} {paint(name.ljust(12), FAINT)}{paint('not installed', FAINT)}")
                 continue
@@ -2095,7 +2205,8 @@ def interactive(star, first=None, goal=None):
                                  + "- " + message[1:].strip() + "\n")
                 say(f"noted in {path.name}")
             else:
-                star.run(message, images=editor.attached(message) if editor else star_input.image_paths(message))
+                star.run(message, images=editor.attached(message) if editor else star_input.image_paths(message),
+                         allow_defer=True)
             print()
     except EOFError:
         pass
@@ -2163,7 +2274,7 @@ def cli_main(argv=None, lease=None):
     parser.add_argument("--goal", metavar="OBJECTIVE", help="start working toward a goal")
     parser.add_argument("--route", action="store_true", help="show how the prompt would be routed and exit")
     parser.add_argument("--usage", action="store_true", help="show the meters and exit")
-    parser.add_argument("--use", metavar="PROVIDER", help="pin every turn to one provider")
+    parser.add_argument("--use", metavar="PROVIDER", help="set the default provider for the conversation")
     parser.add_argument("--tier", choices=star_router.TIERS, help="pin the model tier")
     parser.add_argument("--plan", action="store_true", help="start in plan mode (read only)")
     parser.add_argument("--name", help="this terminal's name in the mesh")
@@ -2209,16 +2320,20 @@ def cli_main(argv=None, lease=None):
     if (args.resume or args.resume_id) and convo.cwd and Path(convo.cwd).is_dir():
         os.chdir(convo.cwd)
     star = Star(convo, tier=args.tier, plan=args.plan, lease=None if args.usage or args.route else lease)
-    resumed = bool(args.resume or args.resume_id) and apply_saved_routing(star)
-    if args.use and not resumed:
+    if args.resume or args.resume_id:
+        apply_saved_routing(star)
+    if args.use:
+        commands = Commands(star)
+        name = commands.provider(args.use)
+        if not name:
+            requested = star_model_intent.provider_name(args.use)
+            sys.exit(f"star: {requested} is not installed" if requested else f"star: unknown provider {args.use}")
         if args.usage or args.route:
-            star.pinned = Commands(star).provider(args.use)
-            if not star.pinned:
-                sys.exit("star: unknown provider " + args.use)
+            star.pinned = name
         else:
-            Commands(star)("/use " + args.use)
+            commands.do_use(name)
     if not star.names:
-        sys.exit("star: no supported provider CLI is installed (Claude, Codex, Cursor, Kiro, Antigravity).")
+        sys.exit("star: no supported provider CLI is installed (Claude, Codex, Cursor, Kiro, Antigravity, Grok Bot).")
 
     if args.usage:
         refresh_meters(star.names, older_than=60, wait=4.0)
@@ -2239,9 +2354,9 @@ def cli_main(argv=None, lease=None):
             os.environ["STAR_NAME"] = star.member.name
         try:
             if args.goal:
-                status = star.pursue(args.goal)
+                status = star.pursue(args.goal, allow_defer=True)
             else:
-                _, status = star.run(prompt)
+                _, status = star.run(prompt, allow_defer=True)
         finally:
             star.convo.save()
             if star.member:

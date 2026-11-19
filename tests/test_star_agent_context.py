@@ -22,7 +22,8 @@ class StarAgentContextTests(unittest.TestCase):
                 engine = Mock()
                 engine.argv.return_value = ["fake-provider"]
                 star.engines = {"Codex": engine}
-                choice = SimpleNamespace(provider="Codex", model="fixture", effort="low", tier="standard")
+                choice = SimpleNamespace(provider="Codex", model="fixture", effort="low", tier="standard",
+                                         ultracode=False)
                 task = SimpleNamespace(needs_mcp=False)
 
                 with patch.object(starcli.herdr_agent_context, "brief", side_effect=["agent 2 = pane-a", "agent 2 = pane-b"]), \

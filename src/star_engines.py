@@ -81,6 +81,7 @@ class Engine:
     name = ""
     resume_flag = None
     asks = False   # its headless mode can put permission prompts to StarCLI
+    requires_result = False
 
     def __init__(self, agent):
         self.agent = agent
@@ -90,7 +91,8 @@ class Engine:
     def ready(self):
         return bool(self.exe)
 
-    def argv(self, prompt, model, effort, session=None, plan=False, images=(), tier=None, mesh=False, needs_mcp=False):
+    def argv(self, prompt, model, effort, session=None, plan=False, images=(), tier=None, mesh=False,
+             needs_mcp=False, ultracode=False):
         """plan: read-only, so the provider can analyze and propose but not edit.
         images: image files the user attached (their paths are in the prompt too).
         tier: light, standard, or heavy; a light turn can skip heavy startup.
@@ -124,7 +126,8 @@ class ClaudeEngine(Engine):
     name, resume_flag = "Claude", "--resume"
     asks = True
 
-    def argv(self, prompt, model, effort, session=None, plan=False, images=(), tier=None, mesh=False, needs_mcp=False):
+    def argv(self, prompt, model, effort, session=None, plan=False, images=(), tier=None, mesh=False,
+             needs_mcp=False, ultracode=False):
         argv = [self.exe, "-p", prompt, "--output-format", "stream-json", "--verbose",
                 "--include-partial-messages", "--model", model]
         argv += ["--permission-mode", "plan"] if plan else ["--dangerously-skip-permissions"]
@@ -139,7 +142,15 @@ class ClaudeEngine(Engine):
             argv += ["--effort", effort]
         if session:
             argv += ["--resume", session]
-        return argv
+        # Ultracode is a Claude-only workflow. Use a temporary launch profile
+        # so prompt directives never change the user's saved preference.
+        import claude_ultracode
+        profile = dict(self.agent or {})
+        defaults = dict(profile.get("defaults") or {})
+        if ultracode:
+            defaults["ultracode"] = True
+        profile["defaults"] = defaults
+        return claude_ultracode.prepare(profile, argv)
 
     def with_approvals(self, argv, folder):
         """argv that asks the StarCLI user, through star_approve, wherever the
@@ -193,8 +204,14 @@ class ClaudeEngine(Engine):
                    {"kind": "usage", "input": (u.get("input_tokens", 0) + u.get("cache_creation_input_tokens", 0)
                                                + u.get("cache_read_input_tokens", 0)),
                     "cached": u.get("cache_read_input_tokens", 0), "output": u.get("output_tokens", 0)}]
-            if d.get("is_error"):
-                out.append({"kind": "error", "text": first_line(d.get("result") or d.get("subtype"), 200)})
+            if d.get("is_error") or d.get("api_error_status") == 429:
+                errors = d.get("errors")
+                detail = next((error for error in errors if isinstance(error, str) and error.strip()), "") \
+                    if isinstance(errors, list) else ""
+                message = first_line(d.get("result") or detail or d.get("subtype"), 200)
+                if d.get("api_error_status") == 429:
+                    message = f"HTTP 429: {message}"
+                out.append({"kind": "error", "text": message})
             return out
         return []
 
@@ -278,7 +295,8 @@ class CodexEngine(Engine):
                     config[key] = profile[profile.index(flag) + 1]
         return [sys.executable, str(Path(__file__).with_name("star_codex_app.py")), json.dumps(config)]
 
-    def argv(self, prompt, model, effort, session=None, plan=False, images=(), tier=None, mesh=False, needs_mcp=False):
+    def argv(self, prompt, model, effort, session=None, plan=False, images=(), tier=None, mesh=False,
+             needs_mcp=False, ultracode=False):
         argv = [self.exe, "exec"]
         if session:
             argv += ["resume", session]
@@ -339,13 +357,15 @@ class CodexEngine(Engine):
 class CursorEngine(Engine):
     name, resume_flag = "Cursor", "--resume"
 
-    def argv(self, prompt, model, effort, session=None, plan=False, images=(), tier=None, mesh=False, needs_mcp=False):
+    def argv(self, prompt, model, effort, session=None, plan=False, images=(), tier=None, mesh=False,
+             needs_mcp=False, ultracode=False):
         argv = [self.exe, "-p", "--output-format", "stream-json", "--stream-partial-output",
                 "--model", model, "--trust"]
         argv += ["--mode", "plan"] if plan else ["--yolo"]
         if session:
             argv += ["--resume", session]
         import system_prompts
+        # Cursor models encode supported effort variants in the model ID.
         return system_prompts.prepare(self.agent, argv + [prompt])
 
     def parse(self, d, state):
@@ -462,7 +482,8 @@ class KiroEngine(Engine):
                 config["flags"] += [word, profile[i + 1]]
         return [sys.executable, str(Path(__file__).with_name("star_kiro_acp.py")), json.dumps(config)]
 
-    def argv(self, prompt, model, effort, session=None, plan=False, images=(), tier=None, mesh=False, needs_mcp=False):
+    def argv(self, prompt, model, effort, session=None, plan=False, images=(), tier=None, mesh=False,
+             needs_mcp=False, ultracode=False):
         argv = [self.exe, "chat", "--output-format", "stream-json", "--model", model]
         # Kiro has no plan mode: trust only reading, and StarCLI's prompt asks for a plan
         argv += ["--trust-tools=fs_read"] if plan else ["--trust-all-tools"]
@@ -507,8 +528,11 @@ class KiroEngine(Engine):
 class AntigravityEngine(Engine):
     name, resume_flag = "Antigravity", "--conversation"
 
-    def argv(self, prompt, model, effort, session=None, plan=False, images=(), tier=None, mesh=False, needs_mcp=False):
+    def argv(self, prompt, model, effort, session=None, plan=False, images=(), tier=None, mesh=False,
+             needs_mcp=False, ultracode=False):
         argv = [self.exe, "-p", prompt, "--output-format", "stream-json", "--model", model]
+        if effort:
+            argv += ["--effort", effort]
         argv += ["--mode", "plan"] if plan else ["--dangerously-skip-permissions"]
         if session:
             argv += ["--conversation", session]
@@ -540,7 +564,59 @@ class AntigravityEngine(Engine):
         return []
 
 
-ENGINES = {e.name: e for e in (ClaudeEngine, CodexEngine, CursorEngine, KiroEngine, AntigravityEngine)}
+class GrokBotEngine(Engine):
+    name, resume_flag = "Grok Bot", "--resume"
+    requires_result = True
+    BYPASS_FLAGS = ("--dangerously-skip-permissions", "--yolo")
+
+    @classmethod
+    def bypass(cls, agent):
+        return any(flag in agent.get("argv", ())[1:] for flag in cls.BYPASS_FLAGS)
+
+    def argv(self, prompt, model, effort, session=None, plan=False, images=(), tier=None, mesh=False,
+             needs_mcp=False, ultracode=False):
+        # The Grok Bot service chooses its own model and execution location.
+        argv = [self.exe, "-p", "--output-format", "stream-json", "--stream-partial-output"]
+        if not plan and self.bypass(self.agent):
+            argv.append("--dangerously-skip-permissions")
+        if session:
+            argv += [self.resume_flag, session]
+        return argv + ["--", prompt]
+
+    def parse(self, data, state):
+        kind = data.get("type")
+        if kind == "system" and data.get("subtype") == "init":
+            return [{"kind": "session", "id": data.get("session_id")}]
+        if kind == "assistant":
+            text = "".join(block.get("text", "") for block in ((data.get("message") or {}).get("content") or [])
+                           if isinstance(block, dict) and block.get("type") == "text")
+            if text:
+                separator = "\n\n" if state.get("last_text") else ""
+                state["last_text"] = text
+                return [{"kind": "text", "text": separator + text}]
+        if kind == "tool_call" and data.get("subtype") == "started":
+            return [{"kind": "tool", "label": first_line(data.get("label"))}]
+        if kind == "result":
+            state["finished"] = True
+            out = [{"kind": "session", "id": data.get("session_id")}]
+            usage = data.get("usage") or {}
+            cached = usage.get("cache_read", 0) or 0
+            out.append({"kind": "usage", "input": (usage.get("input", 0) or 0) + cached
+                        + (usage.get("cache_write", 0) or 0),
+                        "cached": cached, "output": usage.get("output", 0)})
+            if data.get("is_error"):
+                out.append({"kind": "error", "text": first_line(data.get("result") or data.get("subtype"), 200)})
+            elif data.get("result") and data["result"] != state.get("last_text"):
+                separator = "\n\n" if state.get("last_text") else ""
+                out.append({"kind": "text", "text": separator + data["result"]})
+            return out
+        return []
+
+
+ENGINES = {
+    engine.name: engine
+    for engine in (ClaudeEngine, CodexEngine, CursorEngine, KiroEngine, AntigravityEngine, GrokBotEngine)
+}
 
 # A provider run headless inside StarCLI must not report itself to herdr: its
 # herdr integration would claim StarCLI's pane, mark it working and never let
@@ -619,6 +695,8 @@ class Turn:
                 tail = [l.strip() for l in self.stderr if l.strip() and "no stdin data" not in l
                         and "Reading additional input" not in l]
                 yield {"kind": "error", "text": first_line(tail[-1] if tail else f"exit status {code}", 200)}
+            elif getattr(self.engine, "requires_result", False) and not (failed or self.interrupted or state.get("finished")):
+                yield {"kind": "error", "text": "Grok Bot exited before confirming a result"}
         finally:
             self.close()
 

@@ -24,6 +24,9 @@ import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Optional
+
+from star_model_intent import Intent
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / "star.json"
@@ -37,7 +40,7 @@ EXPIRY_HORIZON = 3 * 3600   # "soon" for any window: within three hours of its r
 TIGHT = 75          # percent of a window: route there only when it is clearly best
 STICKY = 0.08
 QUALITY_WEIGHT = {"light": 0.45, "standard": 0.6, "heavy": 0.72}
-WINDOW = {"5h": 5 * 3600, "wk": 7 * 86400}   # anything else is a monthly plan
+WINDOW = {"5h": 5 * 3600, "wk": 7 * 86400, "gb": 7 * 86400}   # other windows are monthly
 MONTH = 30 * 86400
 STALE = 86400       # meters older than a day count as unknown
 
@@ -101,6 +104,7 @@ class Task:
     tier: str
     reasons: list = field(default_factory=list)
     needs_mcp: bool = False
+    intent: Optional[Intent] = None
 
 
 @dataclass
@@ -115,6 +119,7 @@ class Choice:
     why: str
     meter: str = ""
     pool: str = ""
+    ultracode: bool = False
 
 
 def load_config(path=CONFIG):
@@ -253,13 +258,28 @@ def blocked(found, now=None):
     return None
 
 
-def rank(task, usage, installed, config=None, now=None, current=None, pinned=None, down=(), images=False):
+def quota_error(text):
+    """Recognize quota reports in provider errors, plus limits from the meter."""
+    return bool(re.search(r"\b(?:(?:insufficient|exceeded|exhausted) (?:your current )?quota|"
+                          r"quota (?:limit|(?:has been )?(?:reached|exceeded|exhausted))|"
+                          r"(?:rate|usage)[ _-]?limit(?:[ _-](?:reached|exceeded|error))?|"
+                          r"limit (?:reached|exceeded)|(?:hit|reached|exceeded) (?:your|the) "
+                          r"(?:(?:session|weekly|daily|hourly|monthly) )?limit|"
+                          r"too many requests|resource[ _-]exhausted|http(?: status)?[ :]+429|"
+                          r"(?:out of|exhausted) credits|(?:no credits remaining|credits exhausted)|"
+                          r"\d+(?:\.\d+)?% of its [\w-]+ limit used)\b", text, re.I))
+
+
+def rank(task, usage, installed, config=None, now=None, current=None, pinned=None, down=(), images=False,
+         models=None, preferred=None, quota_failures=None):
     """Every usable provider for the task, best first, and why each was skipped.
 
     usage: the agent-picker usage cache ({name: {"windows": [...], "fetched": t}}).
     current: the provider holding this conversation's context. pinned: route
     only there. down: providers that failed this session. images: the turn has
-    attached images, so only providers marked "images" in star.json take it."""
+    attached images, so only providers marked "images" in star.json take it.
+    models restricts explicit selection to the supplied per-provider routes.
+    quota_failures is keyed by (provider, usage pool)."""
     config = config or load_config()
     now = time.time() if now is None else now
     choices, skipped = [], {}
@@ -268,6 +288,10 @@ def rank(task, usage, installed, config=None, now=None, current=None, pinned=Non
             continue
         if pinned and name != pinned:
             continue
+        if spec.get("explicit_only") and not pinned and models is None:
+            continue
+        if models is not None and name not in models:
+            continue
         if name in down:
             skipped[name] = "failed earlier this session"
             continue
@@ -275,20 +299,25 @@ def rank(task, usage, installed, config=None, now=None, current=None, pinned=Non
             skipped[name] = "can't look at attached images"
             continue
         only = spec.get("only")
-        if only and task.kind not in only and not pinned:
+        if only and task.kind not in only and not pinned and models is None:
             skipped[name] = f"kept for {', '.join(only)} work"
             continue
         tiers = spec["tiers"]
-        tier = task.tier if task.tier in tiers else None
+        tier = task.tier if task.tier in tiers or models is not None else None
         if tier is None:
             if pinned:
                 tier = max(tiers, key=TIERS.index)
             else:
                 skipped[name] = f"no {task.tier} model"
                 continue
-        model = tiers[tier]
-        found = windows(usage.get(name), now, model.get("pool"))
+        model = tiers[tier] if models is None else models[name]
+        pool = model.get("pool", "")
+        found = windows(usage.get(spec.get("usage_provider", name)), now, pool)
         stop = blocked(found, now)
+        if not stop and quota_failures:
+            # A report without a separate pool is provider-wide.
+            if (name, "") in quota_failures or (name, pool) in quota_failures:
+                stop = "usage limit reported by provider"
         if stop:
             skipped[name] = stop
             continue
@@ -300,10 +329,14 @@ def rank(task, usage, installed, config=None, now=None, current=None, pinned=Non
         q = QUALITY_WEIGHT[task.tier]
         score = q * quality + (1 - q) * (0.7 * balance + 0.3 * (1 - cost))
         bits = [f"{task.kind} fit {quality:.2f}", meter]
+        if preferred == name:
+            bits.append("preferred provider")
         if current == name:
-            score += STICKY
+            # Keep the context advantage, but reduce it as usable quota shrinks.
+            context_bonus = STICKY * min(1.0, balance / 0.7) if found else STICKY
+            score += context_bonus
             bits.append("holds this conversation")
         choices.append(Choice(name, tier, model["model"], model.get("effort", ""), round(score, 4),
-                              quality, balance, " · ".join(bits), meter, model.get("pool", "")))
-    choices.sort(key=lambda c: -c.score)
+                              quality, balance, " · ".join(bits), meter, pool, model.get("ultracode", False)))
+    choices.sort(key=lambda c: (c.provider != preferred, -c.score))
     return choices, skipped

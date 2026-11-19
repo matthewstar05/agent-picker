@@ -143,6 +143,25 @@ class RankTests(unittest.TestCase):
         score = lambda cs: next(c.score for c in cs if c.provider == "Kiro")
         self.assertAlmostEqual(score(sticky) - score(plain), star_router.STICKY, places=3)
 
+    def test_context_bonus_shrinks_when_quota_is_tight(self):
+        usage = fresh()
+        usage["Codex"] = meter(("5h", 89, 4 * HOUR), ("wk", 10, 6 * DAY))
+        plain, _ = self.rank("fix the bug", usage)
+        sticky, _ = self.rank("fix the bug", usage, current="Codex")
+        score = lambda rows: next(choice.score for choice in rows if choice.provider == "Codex")
+        self.assertGreater(score(sticky), score(plain))
+        self.assertLess(score(sticky) - score(plain), star_router.STICKY / 2)
+        self.assertNotEqual(sticky[0].provider, "Codex")
+
+    def test_provider_error_blocks_only_the_matching_cursor_pool(self):
+        failed = {("Cursor", "ex"): {}}
+        heavy, blocked = self.rank("design the whole architecture", fresh(), pinned="Cursor",
+                                   quota_failures=failed)
+        self.assertFalse(heavy)
+        self.assertIn("usage limit", blocked["Cursor"])
+        light, _ = self.rank("run the tests", fresh(), pinned="Cursor", quota_failures=failed)
+        self.assertEqual(light[0].pool, "cr")
+
     def test_unknown_meters_still_route(self):
         choices, _ = self.rank("fix the bug", {})
         self.assertTrue(choices)
@@ -269,7 +288,7 @@ import json, sys
 argv = sys.argv[1:]
 open({log!r}, "a").write(json.dumps(argv) + "\\n")
 if {fail}:
-    print("auth expired", file=sys.stderr)
+    print({failure!r}, file=sys.stderr)
     sys.exit(1)
 print(json.dumps({{"type": "system", "subtype": "init", "session_id": "sess-1"}}))
 print(json.dumps({{"type": "stream_event", "event": {{"type": "content_block_delta",
@@ -401,6 +420,8 @@ class StarSessionTests(unittest.TestCase):
                         patch.object(starcli, "report_herdr", lambda *a, **k: None),
                         patch.object(ap, "load_usage", lambda: None),
                         patch.dict(ap.USAGE, fresh(), clear=True),
+                        patch.object(starcli.star_model_routes.model_catalog, "_live", {}),
+                        patch.object(starcli.star_model_routes.model_catalog, "cached_entry", return_value={}),
                         patch.object(star_router.time, "time", return_value=NOW)]
         for p in self.patches:
             p.start()
@@ -408,7 +429,8 @@ class StarSessionTests(unittest.TestCase):
 
     def fake(self, name, fail=False):
         path = self.dir / f"fake-{name}"
-        path.write_text(FAKE.format(python=sys.executable, log=str(self.dir / f"{name}.log"), fail=fail))
+        path.write_text(FAKE.format(python=sys.executable, log=str(self.dir / f"{name}.log"),
+                                   fail=bool(fail), failure=fail if isinstance(fail, str) else "auth expired"))
         path.chmod(0o755)
         return str(path)
 
@@ -709,6 +731,91 @@ class StarSessionTests(unittest.TestCase):
         last = json.loads((self.dir / "Claude.log").read_text().splitlines()[-1])
         self.assertEqual(last[last.index("--resume") + 1], "sess-1")
 
+    def test_explicit_sol_and_effort_override_conversation_default(self):
+        star = self.star({"Claude": False, "Codex": False})
+        star.pinned = "Claude"
+        with redirect_stdout(io.StringIO()):
+            reply, status = star.run("using sol xhigh, fix the failing test")
+        self.assertEqual(status, "ok")
+        args = json.loads((self.dir / "Codex.log").read_text())
+        self.assertEqual(args[args.index("--model") + 1], "gpt-6.2-sol")
+        self.assertEqual(args[args.index("--effort") + 1], "xhigh")
+        self.assertEqual(star.pinned, "Claude")
+        self.assertFalse((self.dir / "Claude.log").exists())
+
+    def test_conflicting_model_instructions_do_not_start_a_provider(self):
+        star = self.star({"Claude": False, "Codex": False})
+        out = io.StringIO()
+        with redirect_stdout(out):
+            self.assertEqual(star.run("Use Claude, then use Codex to review the source"), ("", "none"))
+        self.assertIn("conflicting", out.getvalue())
+        self.assertFalse(list(self.dir.glob("*.log")))
+
+    def test_runtime_quota_offers_a_choice_and_never_auto_switches_family(self):
+        star = self.star({"Claude": "You've hit your limit · resets soon", "Codex": False})
+        message = "use opus 55 to fix the bug"
+        stdout, stdin = io.StringIO(), io.StringIO()
+        with redirect_stdout(stdout), patch.object(starcli.sys, "stdin", stdin), \
+                patch.object(stdin, "isatty", return_value=True), patch.object(stdout, "isatty", return_value=True), \
+                patch.object(starcli.star_input, "supported", return_value=False), \
+                patch("builtins.input", side_effect=["", "12", "1"]) as decide:
+            self.assertEqual(star.run(message, allow_defer=True)[1], "failed")
+            self.assertFalse((self.dir / "Codex.log").exists())
+            self.assertEqual(star.run(message, allow_defer=True)[1], "ok")
+        self.assertEqual(decide.call_count, 3)
+        self.assertIn("Usage limits blocked", stdout.getvalue())
+        self.assertEqual(len((self.dir / "Claude.log").read_text().splitlines()), 1)
+        args = json.loads((self.dir / "Codex.log").read_text())
+        self.assertIn("user approved continuing this request", args[args.index("-p") + 1])
+        self.assertEqual(star.convo.turns[-1]["user"], message)
+
+    def test_compatible_provider_fallback_keeps_requested_opus(self):
+        star = self.star({"Claude": False, "Cursor": False, "Codex": False})
+        ap.USAGE["Claude"] = meter(("5h", 100, HOUR))
+        ap.USAGE["Cursor"] = meter(("cr", 100, DAY), ("ex", 10, DAY))
+        with redirect_stdout(io.StringIO()), patch("builtins.input") as decide:
+            self.assertEqual(star.run("use opus 5.5 to fix the bug", allow_defer=True)[1], "ok")
+        decide.assert_not_called()
+        args = json.loads((self.dir / "Cursor.log").read_text())
+        self.assertRegex(args[args.index("--model") + 1], r"opus[-.]5[-.]5")
+        self.assertFalse((self.dir / "Codex.log").exists())
+
+    def test_gemini_alias_can_use_cursors_external_pool(self):
+        star = self.star({"Antigravity": False, "Cursor": False})
+        ap.USAGE["Antigravity"] = meter(("5h", 100, HOUR))
+        ap.USAGE["Cursor"] = meter(("cr", 100, DAY), ("ex", 10, DAY))
+        with redirect_stdout(io.StringIO()), patch("builtins.input") as decide:
+            self.assertEqual(star.run("use agy to check this typo", allow_defer=True)[1], "ok")
+        decide.assert_not_called()
+        args = json.loads((self.dir / "Cursor.log").read_text())
+        self.assertRegex(args[args.index("--model") + 1], r"^gemini-")
+        self.assertFalse((self.dir / "Antigravity.log").exists())
+
+    def test_explicit_grok_bot_never_defers_its_separate_quota_to_another_cli(self):
+        star = self.star({"Grok Bot": False, "Cursor": False, "Codex": False})
+        ap.USAGE["Cursor"] = meter(("cr", 5, DAY), ("ex", 5, DAY), ("gb", 100, DAY))
+        out = io.StringIO()
+        with redirect_stdout(out), patch.object(star, "defer_choice") as decide:
+            self.assertEqual(star.run("@grokbot check the synthetic fixture", allow_defer=True)[1], "none")
+        decide.assert_not_called()
+        self.assertIn("100% of its gb limit used", out.getvalue())
+        self.assertFalse(list(self.dir.glob("*.log")))
+
+    def test_grok_bot_route_requires_an_explicit_request_and_write_mode(self):
+        star = self.star({"Grok Bot": False, "Cursor": False})
+        self.assertNotIn("Grok Bot", [choice.provider for choice in star.route("check the fixture")[1]])
+        star.plan = True
+        _, routes, skipped = star.route("Have Grok Bot check the synthetic fixture")
+        self.assertFalse(routes)
+        self.assertIn("read-only plan mode", skipped["Grok Bot"])
+
+    def test_print_mode_rejects_explicitly_selected_absent_provider(self):
+        star = self.star({"Codex": False})
+        with patch.object(starcli, "Star", return_value=star), \
+                self.assertRaisesRegex(SystemExit, "Grok Bot is not installed"):
+            starcli.cli_main(["--use", "grok-bot", "-p", "check the synthetic fixture"])
+        self.assertFalse(list(self.dir.glob("*.log")))
+
     def test_quota_failure_rejoins_after_reset_but_auth_failure_does_not(self):
         star = self.star({"Claude": False, "Codex": False})
         star.pinned = "Claude"
@@ -757,7 +864,7 @@ class StarSessionTests(unittest.TestCase):
             reply, status = star.run("fix the failing test")
         self.assertEqual(status, "ok")
         self.assertIn("fixed **it**", reply)
-        self.assertIn("Codex", star.down)
+        self.assertIn(("Codex", ""), star.quota_failures)
         failed = star.convo.turns[-2]
         self.assertEqual(failed["status"], "failed")
         self.assertEqual(failed["error"], "quota exhausted")
@@ -1478,7 +1585,7 @@ class GoalTests(unittest.TestCase):
                 lead.member = Box("lead")
                 seen = []
 
-                def run(prompt, route_text=None, images=()):
+                def run(prompt, route_text=None, images=(), allow_defer=False):
                     seen.append(prompt)
                     if len(seen) == 1:
                         lead.member.mail.append({"kind": "reply", "from": "crew1", "text": "found the parser",
