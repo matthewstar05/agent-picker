@@ -33,6 +33,7 @@ from platform_runtime import Terminal
 MENU_ROWS = 7
 IMAGE = re.compile(r"\.(png|jpe?g|gif|webp|heic|bmp|tiff?)$", re.I)
 TOKEN = re.compile(r"\[Image #(\d+)\]")
+GOAL_MARKER = re.compile(r"(?<!\S)(/goal)(?!\S)[ \t]*", re.IGNORECASE)
 # shift+move extends a selection by the plain move
 SELECT = {"shift-left": "left", "shift-right": "right", "shift-up": "up", "shift-down": "down",
           "shift-home": "home", "shift-end": "end", "shift-word-left": "word-left", "shift-word-right": "word-right"}
@@ -85,6 +86,26 @@ ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07")
 def visible_width(line):
     """Terminal cells a painted line covers, its escape sequences left out."""
     return sum(cell_width(ch) for ch in ANSI.sub("", line))
+
+
+def paint_goal_markers(text, paint, start=0, end=None):
+    """Paint a slice of the prompt, including markers split across wrapped rows."""
+    end = len(text) if end is None else end
+    parts = []
+    # Look beyond the slice for a marker crossing its edge and its word boundary.
+    for match in GOAL_MARKER.finditer(text, max(0, start - 4), end + 5):
+        left, right = match.span(1)
+        if left >= end:
+            break
+        if right <= start:
+            continue
+        if left > start:
+            parts.append(paint("text", text[start:left]))
+        parts.append(paint("goal_command", text[max(start, left):min(end, right)]))
+        start = right
+    if start < end:
+        parts.append(paint("text", text[start:end]))
+    return "".join(parts)
 
 
 def rows_after_reflow(widths, cursor_row, cursor_col, columns):
@@ -199,12 +220,17 @@ class Editor:
         span = self.selection()
         start = self.row_starts[row] if row < len(self.row_starts) else 0
         a, b = (max(0, span[0] - start), min(len(piece), span[1] - start)) if span else (0, 0)
+
+        def paint_text(left, right):
+            if "goal_command" in self.c:
+                return paint_goal_markers(self.text, self.fg, start + left, start + right)
+            return self.fg("text", piece[left:right])
+
         if a >= b:
-            return self.fg("text", piece) if self.c else piece
+            return paint_text(0, len(piece))
         mark = "selection" if "selection" in self.c else "select"
         ink = "selection_text" if "selection_text" in self.c else "pick"
-        return (self.fg("text", piece[:a]) + self.bg(mark, self.fg(ink, piece[a:b]))
-                + self.fg("text", piece[b:]))
+        return paint_text(0, a) + self.bg(mark, self.fg(ink, piece[a:b])) + paint_text(b, len(piece))
 
     # ---- suggestions
     def token(self):

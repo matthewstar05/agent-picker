@@ -81,6 +81,7 @@ FAINT = (98, 94, 88)
 CODE = (232, 210, 160)
 BAD = (236, 112, 98)
 PLAN = (150, 205, 250)
+GOAL_COMMAND_COLOR = (240, 130, 175)
 RESET, BOLD = ap.RESET, ap.BOLD
 SHORT = {"Antigravity": "Gemini"}
 
@@ -899,6 +900,18 @@ def goal_verdict(reply):
     return (match.group(1), match.group(2) or "") if match else ("CONTINUES", "")
 
 
+def prompt_goal(message):
+    """Extract an inline goal objective while keeping standalone controls as commands."""
+    leading = star_input.GOAL_MARKER.match(message)
+    if leading:
+        if message[leading.end():].strip() in ("", "status", "resume", "clear"):
+            return None
+    elif message.startswith(("/", "!", "#")):
+        return None
+    objective, markers = star_input.GOAL_MARKER.subn("", message)
+    return objective.strip() if markers else None
+
+
 def goal_prompt(goal, step, crew=()):
     rule = ("End your reply with exactly one of these lines: `GOAL COMPLETE` once the goal is fully done and "
             "verified; `GOAL BLOCKED: <what you need from the user>` if you cannot go on without them; or "
@@ -1393,7 +1406,7 @@ class Star:
             self.member.beat(status="idle", task="", provider="")
             report_herdr("idle")
 
-    def pursue(self, goal, start=1, steps=None, allow_defer=False):
+    def pursue(self, goal, start=1, steps=None, allow_defer=False, images=()):
         """Take turns toward goal until a provider says it is done or blocked."""
         self.convo.goal = goal
         self.convo.goal_state = "running"
@@ -1420,7 +1433,8 @@ class Star:
                 print("  " + paint(crew_line, FAINT))
             idle = [m["name"] for m in self.member.peers() if m.get("status") not in {"working", "blocked"}] \
                 if self.member and self.member.role == "lead" else []
-            reply, status = self.run(goal_prompt(goal, step, idle), route_text=goal, allow_defer=allow_defer)
+            reply, status = self.run(goal_prompt(goal, step, idle), route_text=goal, allow_defer=allow_defer,
+                                     images=images if step == start else ())
             if status == "none":
                 say(self.routing_failure() + "; /goal resume retries routing", BAD)
                 outcome = status
@@ -1691,8 +1705,8 @@ class Commands:
     def __call__(self, line):
         """Handle a /command. Returns False to quit."""
         star = self.star
-        word, _, rest = line[1:].partition(" ")
-        word, rest = word.lower(), rest.strip()
+        word, *args = line[1:].split(maxsplit=1) or [""]
+        word, rest = word.lower(), args[0].strip() if args else ""
         handler = getattr(self, "do_" + word, None)
         if word in ("q", "quit", "exit"):
             return False
@@ -2133,7 +2147,8 @@ def interactive(star, first=None, goal=None):
     counts = load_counts()
     history = load_history()
     colors = {"mark": GOLD[0], "text": INK, "ghost": (110, 104, 92), "rule": DIM, "rule_end": (70, 66, 60),
-              "note": FAINT, "mode": SOFT, "label": BRIGHT, "pick": (30, 26, 18), "select": (240, 200, 110)} if COLOR else {}
+              "note": FAINT, "mode": SOFT, "label": BRIGHT, "pick": (30, 26, 18), "select": (240, 200, 110),
+              "goal_command": GOAL_COMMAND_COLOR} if COLOR else {}
     builtin = {n for n, _, _ in COMMANDS}
     custom = [(n, "[request]", star_commands.describe(kind, path))
               for n, (kind, path) in sorted(star_commands.find(star.convo.cwd).items()) if n not in builtin]
@@ -2216,11 +2231,15 @@ def interactive(star, first=None, goal=None):
             if not message:
                 continue
             add_history(message)
-            if message.startswith("/"):
-                name = message[1:].split(" ")[0].lower()
+            objective = prompt_goal(message)
+            if objective is not None or message.startswith("/"):
+                name = "goal" if objective is not None else message.split(maxsplit=1)[0][1:].lower()
                 counts[name] = counts.get(name, 0) + 1
                 save_counts(counts)
-                if not commands(message):
+                if objective is not None:
+                    images = editor.attached(objective) if editor else star_input.image_paths(objective)
+                    star.pursue(objective, allow_defer=True, images=images)
+                elif not commands(message):
                     break
             elif message.startswith("!"):
                 subprocess.call(message[1:], shell=True, cwd=star.convo.cwd)
@@ -2278,9 +2297,11 @@ def apply_saved_routing(star):
 
 def star_input_echo(message):
     lines = message.split("\n")
-    print(paint("› ", GOLD[0], True) + paint(lines[0], INK))
-    for line in lines[1:]:
-        print("  " + paint(line, INK))
+    for index, line in enumerate(lines):
+        prefix = paint("› ", GOLD[0], True) if index == 0 else "  "
+        text = star_input.paint_goal_markers(
+            line, lambda key, part: paint(part, GOAL_COMMAND_COLOR if key == "goal_command" else INK))
+        print(prefix + text)
 
 
 # ---- command line -------------------------------------------------------------------
@@ -2377,7 +2398,7 @@ def cli_main(argv=None, lease=None):
         if not prompt:
             sys.exit("star --route needs a prompt")
         refresh_meters(star.names, wait=2.0)
-        star.explain(prompt)
+        star.explain(prompt_goal(prompt) or prompt)
         return 0
     refresh_meters(star.names, wait=1.5 if args.once else 0.0)
     if args.once:
@@ -2387,8 +2408,9 @@ def cli_main(argv=None, lease=None):
             star.member = star_mesh.Member(args.name, args.role, star.convo.cwd)
             os.environ["STAR_NAME"] = star.member.name
         try:
-            if args.goal:
-                status = star.pursue(args.goal, allow_defer=True)
+            goal = args.goal or prompt_goal(prompt)
+            if goal:
+                status = star.pursue(goal, allow_defer=True, images=star_input.image_paths(goal))
             else:
                 _, status = star.run(prompt, allow_defer=True)
         finally:

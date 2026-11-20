@@ -1041,6 +1041,32 @@ class StarSessionTests(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertEqual(starcli.Conversation.load(star.convo.id).goal, "fix the bug")
 
+    def test_print_inline_goal_runs_the_entire_objective(self):
+        star = self.star({"Codex": False})
+        path = Path(star.engines["Codex"].exe)
+        path.write_text(path.read_text().replace('"# Done\\n- fixed **it**\\n"', '"GOAL BLOCKED: need a login"'))
+        with patch.object(starcli, "Star", return_value=star), redirect_stdout(io.StringIO()):
+            self.assertEqual(starcli.main(["-p", "Fix the bug /goal and verify the result"]), 2)
+        self.assertEqual(starcli.Conversation.load(star.convo.id).goal, "Fix the bug and verify the result")
+
+    def test_interactive_inline_goal_attaches_images_and_keeps_goal_controls(self):
+        star = self.star({"Claude": False})
+        image = self.dir / "screenshot.png"
+        image.touch()
+        image_arg = f'"{image}"'
+        prompts = [f"Review {image_arg} /goal and confirm the layout", "/goal clear", "/quit"]
+        with patch.object(starcli, "HISTORY", self.dir / "history"), \
+                patch.object(starcli, "COUNTS", self.dir / "counts"), \
+                patch.object(starcli.star_input, "supported", return_value=False), \
+                patch.object(starcli, "plain_input", side_effect=prompts), \
+                patch.object(star, "run", return_value=("GOAL BLOCKED: waiting", "ok")) as run, \
+                redirect_stdout(io.StringIO()):
+            starcli.interactive(star)
+        run.assert_called_once()
+        self.assertEqual(run.call_args.kwargs["route_text"], f"Review {image_arg} and confirm the layout")
+        self.assertEqual(run.call_args.kwargs["images"], [str(image)])
+        self.assertEqual(star.convo.goal, "")
+
     def test_print_mode_honors_an_explicit_mesh_role(self):
         import star_mesh
         star = self.star({"Codex": False})
@@ -1425,6 +1451,20 @@ class EditorTests(unittest.TestCase):
         self.assertEqual(len(rows), 3)       # 30 chars wrap at 19, then the second line
         self.assertEqual((row, col), (2, 2 + len("second")))
 
+    def test_goal_markers_stay_colored_across_wrapped_rows_and_selection(self):
+        ed = self.editor("a" * 16 + " /goal continue\nthen /goal verify /goals")
+        ed.c = {"goal_command": (240, 130, 175)}
+        rows, _ = ed.wrap(2, 22)
+        ed.anchor, ed.pos = 1, 3
+        rendered = "".join(ed.paint(row, piece) for row, (_, piece) in enumerate(rows))
+        pink = re.findall(r"\x1b\[38;2;240;130;175m([^\x1b]+)", rendered)
+        self.assertEqual(pink, ["/g", "oal", "/goal"])
+        self.assertIn("\x1b[7maa", rendered)
+        self.assertEqual(ANSI.sub("", rendered), ed.text.replace("\n", ""))
+        ed.c, ed.anchor = {}, None
+        self.assertEqual("".join(ed.paint(row, piece) for row, (_, piece) in enumerate(rows)),
+                         ed.text.replace("\n", ""))
+
     def test_clipboard_image_writes_the_png_osascript_returns(self):
         import star_input
         from unittest.mock import patch
@@ -1539,6 +1579,16 @@ class GoalTests(unittest.TestCase):
         reports = patch.object(starcli, "report_herdr")
         self.reports = reports.start()
         self.addCleanup(reports.stop)
+
+    def test_goal_marker_preserves_multiline_text_and_ignores_literals(self):
+        self.assertEqual(starcli.prompt_goal("Fix this /GOAL and verify\n/goal Include tests."),
+                         "Fix this and verify\nInclude tests.")
+        self.assertEqual(starcli.prompt_goal("Finish the cleanup /goal"), "Finish the cleanup")
+        self.assertEqual(starcli.prompt_goal("Resume the migration /goal"), "Resume the migration")
+        for message in ("/goal", "/goal status", "/GOAL clear", "/goal\tresume", "Read `/goal` and /goals",
+                        "Read https://example.test/goal", "Read /goal.md", "!echo /goal", "/help /goal"):
+            with self.subTest(message=message):
+                self.assertIsNone(starcli.prompt_goal(message))
 
     def test_blocked_goal_lifecycle_survives_refresh_and_clears_with_the_goal(self):
         from unittest.mock import Mock
