@@ -31,6 +31,8 @@ class RexScopeTests(unittest.TestCase):
                 return {"sessions": [{"session_id": s} for s in views]}
             if args[:2] == ("session", "inspect"):
                 return views[args[2]]
+            if args[-1] == "program_status":
+                return {"records": [{"state": "working" if args[5] == "block:b" else "idle"}]}
             return {"child": {"pid": roots[args[5]]}}
 
         names = {"codex": "Codex", "claude": "Claude", "agy": "Antigravity", "cursor-agent": "Cursor"}
@@ -39,10 +41,15 @@ class RexScopeTests(unittest.TestCase):
                 mock.patch.object(usage_panel, "processes", return_value=procs), \
                 mock.patch.object(usage_panel, "provider_of", side_effect=lambda p: names.get(p)), \
                 mock.patch.object(usage_panel, "star_turns", return_value=[]):
-            found = usage_panel.rex_sessions("block:usage", {})
+            working = {}
+            found = usage_panel.rex_sessions("block:usage", working)
         self.assertEqual(set(found["tab"]), {"Codex", "Claude"})
         self.assertEqual(set(found["workspace"]), {"Codex", "Claude", "Antigravity"})
         self.assertEqual(set(found["all"]), {"Codex", "Claude", "Antigravity", "Cursor"})
+        # Claude's pane tells Rex it is working, so its card animates.
+        self.assertEqual(working, {"Claude": {"block:b"}})
+        self.assertEqual(found["tab"]["Claude"]["working"], 1)
+        self.assertEqual(found["tab"]["Codex"]["working"], 0)
 
 
 if __name__ == "__main__":

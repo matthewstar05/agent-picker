@@ -53,6 +53,14 @@ def windows(blocks):
 
 
 class RexAiTests(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        self.state = tempfile.TemporaryDirectory()
+        patcher = mock.patch.dict(os.environ, {"AGENT_PICKER_STATE_HOME": self.state.name})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.addCleanup(self.state.cleanup)
+
     def run_main(self, rex, argv=(), env=None, tty=False):
         env = {"REXAI_DRY": "0", **(env or {})}
         with mock.patch.dict(os.environ, env, clear=False), \
@@ -120,6 +128,19 @@ class RexAiTests(unittest.TestCase):
                             wait=0, sleep=lambda _: None)
         self.assertEqual(rex.resizes, [])
 
+    def test_measured_chrome_is_remembered_for_the_next_layout(self):
+        sizes = {"block:agy": 26, "block:picker": 26, "block:terminal": 11, "block:claude": 49, "block:usage": 17}
+
+        class Drawn(FakeRex):
+            def __call__(self, *args, json_out=True, parse=False):
+                if args[:2] == ("block", "call") and args[-1] == "size":
+                    return {"rows": sizes[args[5]], "desired": [{}]}
+                return super().__call__(*args, json_out=json_out, parse=parse)
+
+        panes = {r: "block:" + r for r in ("agy", "picker", "codex", "cursor", "claude", "usage", "terminal")}
+        rex_ai.fit_terminal(Drawn(), "session:s", panes, 0.8, sleep=lambda _: None)
+        self.assertEqual(rex_ai.chrome(), 3)
+
     def test_unknown_height_falls_back_to_a_fixed_share(self):
         rex = FakeRex()
         rex.rows = 0
@@ -147,18 +168,25 @@ class RexAiTests(unittest.TestCase):
         self.assertIn(("new", "demo", "-c", "/work/proj", "--window", "demo"), rex.calls)
         self.assertTrue(any(c[0] == "do" and c[1] == "session.select" for c in rex.calls))
 
-    def test_busy_tab_gets_a_new_tab(self):
+    def test_busy_tab_gets_a_new_tab_built_out_of_sight(self):
         rex = FakeRex(windows(["block:me", "block:other"]))
         self.run_main(rex, env={"REX_SESSION": "session:s", "REX_BLOCK": "block:me"}, tty=True)
-        self.assertIn(("window", "new", "-s", "session:s", "proj", "-c", "/work/proj"), rex.calls)
+        self.assertIn(("window", "new", "-s", "session:s", "proj", "-c", "/work/proj", "--focus=false"), rex.calls)
         self.assertEqual(rex.splits[0]["anchor_id"], "block:root")
+        # Shown only once it is finished, so Autobalance never sees panes open.
+        self.assertEqual(rex.calls[-1], ("focus", "-s", "session:s", "window:new"))
+        self.assertFalse(any(c[0] == "swap" for c in rex.calls))
 
-    def test_single_pane_tab_is_laid_out_in_place(self):
+    def test_single_pane_tab_moves_its_pane_into_the_finished_layout(self):
         rex = FakeRex(windows(["block:me"]))
         self.run_main(rex, env={"REX_SESSION": "session:s", "REX_BLOCK": "block:me"}, tty=True)
-        self.assertFalse(any(c[:2] == ("window", "new") for c in rex.calls))
-        self.assertEqual(rex.splits[0]["anchor_id"], "block:me")
-        self.assertIn(("window", "rename", "-s", "session:s", "window:me", "proj"), rex.calls)
+        order = [c[:2] for c in rex.calls]
+        self.assertIn(("swap", "-s"), order)
+        self.assertIn(("swap", "-s", "session:s", "block:me", "block:root"), rex.calls)
+        self.assertIn(("window", "close", "-s", "session:s", "window:me"), rex.calls)
+        self.assertLess(order.index(("swap", "-s")), order.index(("focus", "-s")))
+        self.assertLess(order.index(("focus", "-s")), order.index(("window", "close")))
+        self.assertEqual(self.spawned.call_args[0][2]["terminal"], "block:me")
 
     def test_fs_row_is_fitted_after_the_layout(self):
         rex = FakeRex()

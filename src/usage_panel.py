@@ -454,29 +454,61 @@ def descendants(roots, procs):
     return seen
 
 
+def rex_working(session, block):
+    """Whether the block's program tells Rex it is working (Rex's program
+    status, which Claude, Codex and Antigravity report)."""
+    try:
+        records = rex_json("block", "call", "-s", session, "-b", block, "program_status").get("records") or []
+    except (OSError, ValueError, AttributeError, subprocess.SubprocessError):
+        return False
+    return any(r.get("state") == "working" for r in records)
+
+
 def rex_sessions(me, working):
     """{scope: agents in this pane's Rex tab, its session, every session}, from
-    the process tree under each block; Rex can't say which are working."""
+    the process tree under each block, each working while its program tells
+    Rex so. working collects the working blocks per provider."""
     here = os.environ.get("REX_SESSION")
-    roots = {s: [] for s in SCOPE_ORDER}
-    live = set()
+    placed, live = [], set()
     for entry in rex_json("ls", "--json").get("sessions", []):
         session = entry["session_id"]
         for window in rex_json("session", "inspect", session, "--json").get("windows", []):
             blocks = [b["block_id"] for layer in window.get("layers", []) for b in layer.get("blocks", [])]
             live.update(blocks)
             scopes = ["all"] + ["workspace"] * (session == here) + ["tab"] * (me in blocks)
-            for block in blocks:
-                pid = None if block == me else rex_root(session, block)
-                if pid is not None:
-                    for scope in scopes:
-                        roots[scope].append(pid)
+            placed.extend((session, block, scopes) for block in blocks if block != me)
     for block in set(_rex_roots) - live:
         del _rex_roots[block]
     procs = processes()
-    found = {scope: {name: {"panes": n, "working": 0} for name, n in agents_under(r, procs).items()}
-             for scope, r in roots.items()}
-    under = {scope: descendants(r, procs) for scope, r in roots.items()}
+    by_pid = {pid: argv for pid, _, argv in procs}
+    found = {scope: {} for scope in SCOPE_ORDER}
+    under = {scope: set() for scope in SCOPE_ORDER}
+    for session, block, scopes in placed:
+        root = rex_root(session, block)
+        if root is None:
+            continue
+        tree = descendants([root], procs)
+        for scope in scopes:
+            under[scope] |= tree
+        agents = agents_under([root], procs)
+        if not agents:
+            continue
+        busy = rex_working(session, block)
+        pool = None
+        if busy and "Cursor" in agents:
+            argv = next((by_pid[pid] for pid in tree if from_argv(by_pid.get(pid, [])) == "Cursor"), None)
+            if argv:
+                pool = "gb" if "grokbot" in " ".join(argv[:3]).lower() else cursor_pools.argv_pool(argv)
+        for name, count in agents.items():
+            if busy:
+                working.setdefault(name, set()).add(block)
+            for scope in scopes:
+                slot = found[scope].setdefault(name, {"panes": 0, "working": 0})
+                slot["panes"] += count
+                slot["working"] += busy
+                if pool and name == "Cursor":
+                    pools = slot.setdefault("pools", {})
+                    pools[pool] = pools.get(pool, 0) + 1
     # A StarCLI turn lights Star's card only where its process runs.
     add_star_turns(found, working, lambda pane, pid=None: [s for s in SCOPE_ORDER if pid in under[s]] or ["all"])
     return found

@@ -18,8 +18,8 @@ permission flags follow your picker defaults, and quitting one reopens the
 selector in its pane. The terminal pane runs the fs file browser in icon view
 (Shift+Q drops to its shell), opening where fs's "Opens in" setting says.
 
-Run inside Rex from a tab with a single pane and that tab becomes the
-workbench, the pane you ran it in becoming the terminal. From a tab that
+Run inside Rex from a tab with a single pane and the pane you ran it in
+becomes the workbench's terminal, in a tab that replaces its own. From a tab that
 already has other panes it opens a new tab, and outside Rex a new session.
 
 Herdr-only features stay with herdr-ai: provider teams and Star, refresh in
@@ -72,7 +72,8 @@ SIZES = {"side": 0.6667, "usage": 0.72, "terminal": 0.85, "columns": 0.5, "rows"
 # so 11 rows show it whole with a little room around it.
 FS_ROWS = 11
 # Rows each Rex pane spends on its title bar and gaps (a lone pane of a 74-row
-# tab shows 70); a starting estimate that fit_terminal then corrects.
+# tab shows 70). fit_terminal measures it on every drawn tab and remembers it
+# in CHROME_FILE, so the next layout starts at the right height.
 CHROME = 4
 
 
@@ -93,6 +94,30 @@ class Rex:
         if out.returncode != 0:
             raise RuntimeError(f"rex {method}: {(out.stderr or out.stdout).strip()}")
         return json.loads(out.stdout)
+
+
+def chrome_file():
+    from platform_runtime import state_dir
+    return state_dir() / "rexai.json"
+
+
+def chrome():
+    try:
+        value = json.loads(chrome_file().read_text(encoding="utf-8"))["chrome"]
+        return value if isinstance(value, int) and 0 <= value <= 12 else CHROME
+    except (OSError, ValueError, KeyError, TypeError):
+        return CHROME
+
+
+def remember_chrome(value):
+    if not (isinstance(value, int) and 0 <= value <= 12) or value == chrome():
+        return
+    try:
+        path = chrome_file()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"chrome": value}), encoding="utf-8")
+    except OSError:
+        pass
 
 
 def find_rex():
@@ -180,8 +205,9 @@ def terminal_ratio(rex, session, root):
         rows = tab_rows(rex, *here)
     if not rows or rows < 3 * FS_ROWS:
         return SIZES["terminal"]
-    # rows is what one pane shows; the tab is CHROME taller, and fs pays CHROME too.
-    return round(1 - (FS_ROWS + CHROME) / (rows + CHROME), 4)
+    # rows is what one pane shows; the tab is one pane's chrome taller, and fs pays it too.
+    extra = chrome()
+    return round(1 - (FS_ROWS + extra) / (rows + extra), 4)
 
 
 def drawn_rows(rex, session, block):
@@ -225,6 +251,10 @@ def fit_terminal(rex, session, panes, ratio, wait=1.5, sleep=time.sleep):
         rows = measure()
     if None in rows:
         return ratio
+    right = [drawn_rows(rex, session, panes[r]) for r in ("claude", "usage")] if "claude" in panes else [None]
+    if None not in right:
+        # Both columns fill the tab: two panes on the right, three on the left.
+        remember_chrome(sum(right) - sum(rows))
     sleep(0.5)
     for _ in range(2):
         for border in borders(panes, ratio):
@@ -258,7 +288,7 @@ def fit_main(argv):
 
 def build(rex, session, root, cwd, commands=None, labels=None):
     """Split root into the workbench. root stays the terminal, bottom left.
-    Returns {role: block_id}."""
+    Returns {role: block_id}, with the fs border's share under "ratio"."""
     commands = commands or PANES
     labels = labels or LABELS
     panes = {"terminal": root}
@@ -279,8 +309,8 @@ def build(rex, session, root, cwd, commands=None, labels=None):
         "anchor_id": root, "direction": "vertical", "side": "before", "ratio": ratio,
         "layout": grid})
     panes["agy"], panes["picker"], panes["codex"], panes["cursor"] = out["block_ids"]
+    panes["ratio"] = ratio
     if not dry():
-        spawn_fit(rex, session, panes, ratio)
         for role, args in commands.items():
             type_line(rex, session, panes[role], picker_command(args))
     return panes
@@ -337,11 +367,11 @@ def main(argv=None, rex=None, cwd=None):
             session = None
     in_place = bool(here) and sys.stdin.isatty() and sys.stdout.isatty()
 
-    if in_place:
-        window, root = here, block
-        rex("window", "rename", "-s", session, window, label, json_out=False)
-    elif session:
-        out = rex("window", "new", "-s", session, label, "-c", cwd)
+    # Build in a tab no app shows yet: Rex's Autobalance Splits evens out a
+    # tab as panes open in it on screen, which would show every pane jumping
+    # to its size. The finished tab is then shown in one step.
+    if session:
+        out = rex("window", "new", "-s", session, label, "-c", cwd, "--focus=false")
         window, root = out["window_id"], out["block_ids"][0]
     else:
         out = rex("new", label, "-c", cwd, "--window", label)
@@ -349,7 +379,20 @@ def main(argv=None, rex=None, cwd=None):
         first = out["initial_windows"][0]
         window, root = first["window_id"], first["block_ids"][0]
 
-    build(rex, session, root, cwd, commands, labels)
+    panes = build(rex, session, root, cwd, commands, labels)
+    ratio = panes.pop("ratio")
+    if in_place:
+        # The pane rexai runs in takes the terminal's place, keeping its
+        # history, and its old tab closes with the spare shell.
+        rex("swap", "-s", session, block, root, json_out=False)
+        rex("block", "rename", "-s", session, block, labels["terminal"], json_out=False)
+        panes["terminal"] = block
+    if os.environ.get("REX_SESSION"):
+        rex("focus", "-s", session, window, json_out=False)
+    if in_place:
+        rex("window", "close", "-s", session, here, json_out=False)
+    if not dry():
+        spawn_fit(rex, session, {k: v for k, v in panes.items()}, ratio)
     print(f"rexai: laid out {label} in {cwd}")
     if in_place:
         if fs:
