@@ -36,7 +36,7 @@ class FakeRex:
             return {"session_id": "session:new",
                     "initial_windows": [{"window_id": "window:first", "block_ids": ["block:root"]}]}
         if args[0] == "send":
-            self.typed.setdefault(args[4], []).append(args[5])
+            self.typed.setdefault(args[4], []).append(args[5].lstrip("\x15"))
         return {}
 
     def api(self, session, method, payload):
@@ -90,8 +90,8 @@ class RexAiTests(unittest.TestCase):
             self.run_main(rex)
             self.assertEqual(rex.splits[1]["ratio"], want)
 
-    def test_fs_border_moves_until_fs_has_its_rows(self):
-        heights = iter([8, 10, 11])
+    def test_drawn_tab_gets_every_border_back_and_fs_its_rows(self):
+        heights = iter([8, 8, 10, 11, 11, 11])
 
         class Drawn(FakeRex):
             def __call__(self, *args, json_out=True, parse=False):
@@ -101,11 +101,17 @@ class RexAiTests(unittest.TestCase):
                 return super().__call__(*args, json_out=json_out, parse=parse)
 
         rex = Drawn()
-        panes = {"agy": "block:a", "picker": "block:p", "terminal": "block:fs"}
+        panes = {r: "block:" + r for r in ("agy", "picker", "codex", "cursor", "claude", "usage", "terminal")}
         ratio = rex_ai.fit_terminal(rex, "session:s", panes, 0.84, sleep=lambda _: None)
-        self.assertEqual(len(rex.resizes), 2)
         self.assertLess(ratio, 0.84)
-        self.assertEqual(rex.resizes[0]["before_block_id"], "block:a")
+        # Autobalance evened the tab out: the side column and usage come back.
+        side = [r for r in rex.resizes if r["after_block_id"] == "block:claude"]
+        usage = [r for r in rex.resizes if r["after_block_id"] == "block:usage"]
+        self.assertEqual({r["ratio"] for r in side}, {rex_ai.SIZES["side"]})
+        self.assertEqual({r["ratio"] for r in usage}, {rex_ai.SIZES["usage"]})
+        self.assertEqual(len(side), 2)   # once, then again for a late rebalance
+        fs = [r for r in rex.resizes if r["after_block_id"] == "block:terminal"]
+        self.assertEqual(fs[-1]["ratio"], ratio)
 
     def test_undrawn_tab_is_left_alone(self):
         rex = FakeRex()

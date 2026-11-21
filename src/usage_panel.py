@@ -347,7 +347,7 @@ def herdr_sessions(me):
                 pools = slot.setdefault("pools", {})
                 pools[pool] = pools.get(pool, 0) + 1
 
-    def reach(pane_id):
+    def reach(pane_id, pid=None):
         pane = next((p for p in panes if p.get("pane_id") == pane_id), None)
         if pane is None:
             return ["all"]
@@ -403,14 +403,14 @@ def grokbot_turns():
     return panes
 
 
-def add_star_turns(found, working, reach=lambda pane: list(SCOPE_ORDER)):
+def add_star_turns(found, working, reach=lambda pane, pid=None: list(SCOPE_ORDER)):
     """Light up StarCLI where its pane is, and note the providers it is driving
     (Star's card shows them). Star keeps its own pane count, or one when its pane
     wasn't seen (StarCLI outside Herdr)."""
     driving = set()
     for provider, pane, pid in star_turns():
         # The provider is shown inside Star's card, not as a card of its own.
-        for scope in reach(pane):
+        for scope in reach(pane, pid):
             slot = found[scope].setdefault(STAR, {"panes": 0, "working": 0})
             slot["working"] += 1
             slot["panes"] = max(slot["panes"], 1)
@@ -420,6 +420,66 @@ def add_star_turns(found, working, reach=lambda pane: list(SCOPE_ORDER)):
     with LOCK:
         STAR_DRIVING.clear()
         STAR_DRIVING.update(driving)
+
+
+REX = os.environ.get("REX_BIN_PATH") or "rex"
+_rex_roots = {}   # Rex block id -> the pid its terminal started, which lasts the block's life
+
+
+def rex_json(*args):
+    out = subprocess.run([REX, *args], capture_output=True, text=True, encoding="utf-8",
+                         errors="replace", timeout=5)
+    return json.loads(out.stdout)
+
+
+def rex_root(session, block):
+    if block not in _rex_roots:
+        try:
+            _rex_roots[block] = int(rex_json("block", "call", "-s", session, "-b", block, "process")["child"]["pid"])
+        except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+            return None
+    return _rex_roots[block]
+
+
+def descendants(roots, procs):
+    children = {}
+    for pid, ppid, _ in procs:
+        children.setdefault(ppid, []).append(pid)
+    seen, stack = set(), list(roots)
+    while stack:
+        pid = stack.pop()
+        if pid not in seen:
+            seen.add(pid)
+            stack.extend(children.get(pid, ()))
+    return seen
+
+
+def rex_sessions(me, working):
+    """{scope: agents in this pane's Rex tab, its session, every session}, from
+    the process tree under each block; Rex can't say which are working."""
+    here = os.environ.get("REX_SESSION")
+    roots = {s: [] for s in SCOPE_ORDER}
+    live = set()
+    for entry in rex_json("ls", "--json").get("sessions", []):
+        session = entry["session_id"]
+        for window in rex_json("session", "inspect", session, "--json").get("windows", []):
+            blocks = [b["block_id"] for layer in window.get("layers", []) for b in layer.get("blocks", [])]
+            live.update(blocks)
+            scopes = ["all"] + ["workspace"] * (session == here) + ["tab"] * (me in blocks)
+            for block in blocks:
+                pid = None if block == me else rex_root(session, block)
+                if pid is not None:
+                    for scope in scopes:
+                        roots[scope].append(pid)
+    for block in set(_rex_roots) - live:
+        del _rex_roots[block]
+    procs = processes()
+    found = {scope: {name: {"panes": n, "working": 0} for name, n in agents_under(r, procs).items()}
+             for scope, r in roots.items()}
+    under = {scope: descendants(r, procs) for scope, r in roots.items()}
+    # A StarCLI turn lights Star's card only where its process runs.
+    add_star_turns(found, working, lambda pane, pid=None: [s for s in SCOPE_ORDER if pid in under[s]] or ["all"])
+    return found
 
 
 def tmux_sessions():
@@ -456,6 +516,9 @@ def watch_sessions(stop):
             if me:
                 found, now_working = herdr_sessions(me)
                 scopes, herdr = {"tab": "this tab", "workspace": "this workspace", "all": "any workspace"}, True
+            elif os.environ.get("REX_BLOCK") and os.environ.get("REX_SESSION"):
+                found = rex_sessions(os.environ["REX_BLOCK"], now_working)
+                scopes = {"tab": "this tab", "workspace": "this session", "all": "any session"}
             elif os.environ.get("TMUX"):
                 found = tmux_sessions()
                 scopes = {"tab": "this window", "workspace": "this session", "all": "any session"}

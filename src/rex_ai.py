@@ -193,41 +193,66 @@ def drawn_rows(rex, session, block):
         return None
 
 
+def borders(panes, terminal):
+    """Every border rexai sets, as session.resize_pane takes them: the blocks
+    on either side, the direction, and the share of the part before it."""
+    return [("terminal", "claude", "horizontal", SIZES["side"]),
+            ("claude", "usage", "vertical", SIZES["usage"]),
+            ("agy", "codex", "horizontal", SIZES["columns"]),
+            ("agy", "picker", "vertical", SIZES["rows"]),
+            ("codex", "cursor", "vertical", SIZES["rows"]),
+            ("agy", "terminal", "vertical", terminal)]
+
+
+def resize(rex, session, panes, before, after, direction, ratio):
+    rex.api(session, "session.resize_pane", {"session_id": session, "before_block_id": panes[before],
+                                             "after_block_id": panes[after], "direction": direction,
+                                             "ratio": ratio})
+
+
 def fit_terminal(rex, session, panes, ratio, wait=1.5, sleep=time.sleep):
-    """Move the border above fs until it has FS_ROWS rows. Each pane's title
-    bar and gaps take rows a ratio does not see, so measure and correct. Gives
-    up quietly when no app draws the tab within wait seconds: the app draws
-    a tab only while it shows it."""
+    """Once an app draws the tab, set every border again and move the one
+    above fs until it has FS_ROWS rows. Rex's Autobalance Splits setting
+    evens out a tab's panes as the app shows them, and each pane's title bar
+    and gaps take rows a ratio does not see. A second pass a moment later
+    catches a late rebalance. Gives up quietly when no app draws the tab
+    within wait seconds: the app draws a tab only while it shows it."""
+    measure = lambda: [drawn_rows(rex, session, panes[r]) for r in ("agy", "picker", "terminal")]
     deadline = time.monotonic() + wait
-    for _ in range(4):
-        rows = [drawn_rows(rex, session, panes[r]) for r in ("agy", "picker", "terminal")]
-        while None in rows and time.monotonic() < deadline:
-            sleep(0.5)
-            rows = [drawn_rows(rex, session, panes[r]) for r in ("agy", "picker", "terminal")]
-        if None in rows or rows[2] == FS_ROWS:
-            return ratio
-        ratio = round(min(0.95, max(0.5, ratio - (FS_ROWS - rows[2]) / max(1, sum(rows)))), 4)
-        rex.api(session, "session.resize_pane", {"session_id": session, "before_block_id": panes["agy"],
-                                                 "after_block_id": panes["terminal"], "direction": "vertical",
-                                                 "ratio": ratio})
-        sleep(0.25)
+    rows = measure()
+    while None in rows and time.monotonic() < deadline:
+        sleep(0.5)
+        rows = measure()
+    if None in rows:
+        return ratio
+    sleep(0.5)
+    for _ in range(2):
+        for border in borders(panes, ratio):
+            resize(rex, session, panes, *border)
+        for _ in range(4):
+            sleep(0.25)
+            rows = measure()
+            if None in rows or rows[2] == FS_ROWS:
+                break
+            ratio = round(min(0.95, max(0.5, ratio - (FS_ROWS - rows[2]) / max(1, sum(rows)))), 4)
+            resize(rex, session, panes, "agy", "terminal", "vertical", ratio)
+        sleep(1)
     return ratio
 
 
 def spawn_fit(rex, session, panes, ratio):
-    """Fit the fs row in the background: an app draws a new tab only once it
+    """Fit the tab in the background: an app draws a new tab only once it
     shows it, which can be after rexai has returned."""
     argv = [sys.executable, str(Path(__file__).resolve()), "--fit", rex.binary, session,
-            panes["agy"], panes["picker"], panes["terminal"], str(ratio)]
+            json.dumps(panes), str(ratio)]
     kwargs = {"creationflags": 0x00000008} if sys.platform == "win32" else {"start_new_session": True}
     subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                      stderr=subprocess.DEVNULL, **kwargs)
 
 
 def fit_main(argv):
-    binary, session, agy, picker, terminal, ratio = argv
-    fit_terminal(Rex(binary), session, {"agy": agy, "picker": picker, "terminal": terminal},
-                 float(ratio), wait=600)
+    binary, session, panes, ratio = argv
+    fit_terminal(Rex(binary), session, json.loads(panes), float(ratio), wait=600)
     return 0
 
 
@@ -264,7 +289,9 @@ def build(rex, session, root, cwd, commands=None, labels=None):
 def type_line(rex, session, block, line):
     """Type line at the block's shell and press Return, as herdr-ai's pane run
     does, so quitting the program leaves the pane at its shell."""
-    rex("send", "-s", session, "-b", block, line, json_out=False)
+    # Ctrl+U first drops whatever a quit program left on the input line, such
+    # as late replies to its keyboard-protocol queries.
+    rex("send", "-s", session, "-b", block, "\x15" + line, json_out=False)
     rex("send-key", "-s", session, "-b", block, "enter", json_out=False)
 
 
