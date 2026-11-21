@@ -52,5 +52,40 @@ class RexScopeTests(unittest.TestCase):
         self.assertEqual(found["tab"]["Codex"]["working"], 0)
 
 
+class RexScreenWorkingTests(unittest.TestCase):
+    """Cursor and Kiro don't report their state to Rex, so their screens are
+    read the way Herdr's detection rules read them."""
+
+    def test_cursor_working_lines(self):
+        read = usage_panel.cursor_screen_working
+        self.assertTrue(read("plan\n  ⠋ Generating\n  ctrl+c to stop\n"))
+        self.assertTrue(read("  ⠙ Reading files\n"))
+        self.assertTrue(read("2 background tasks\n"))
+        self.assertFalse(read("  → Add a follow-up\n  Claude Opus 5.5 300K Medium\n"))
+
+    def test_an_approval_prompt_is_not_working(self):
+        self.assertFalse(usage_panel.cursor_screen_working("⠋ Running\nRun this command?\nSkip (esc or n)\n"))
+
+    def test_kiro_working_by_footer_or_title(self):
+        self.assertTrue(usage_panel.kiro_screen_working("Kiro is working · type to steer\n"))
+        self.assertTrue(usage_panel.kiro_screen_working("", "◐ kiro: thinking"))
+        self.assertFalse(usage_panel.kiro_screen_working("> \n", "kiro"))
+
+    def test_screen_is_read_only_without_a_working_status(self):
+        calls = []
+
+        def text(*args):
+            calls.append(args)
+            return "  ⠋ Generating\n"
+
+        status = {"records": [{"state": "done", "app": "claude-code"}]}   # left by an earlier program
+        with mock.patch.object(usage_panel, "rex_json", side_effect=lambda *a: status if a[-1] == "program_status"
+                               else {"title": ""}), \
+                mock.patch.object(usage_panel, "rex_text", side_effect=text):
+            self.assertTrue(usage_panel.rex_working("s", "b", {"Cursor": 1}))
+            self.assertFalse(usage_panel.rex_working("s", "b", {"Codex": 1}))
+        self.assertEqual(len(calls), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

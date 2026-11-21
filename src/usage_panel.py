@@ -30,6 +30,7 @@ u or Esc back to the agents, q quit.
 
 import json
 import math
+import re
 import os
 import subprocess
 import threading
@@ -454,14 +455,60 @@ def descendants(roots, procs):
     return seen
 
 
-def rex_working(session, block):
-    """Whether the block's program tells Rex it is working (Rex's program
-    status, which Claude, Codex and Antigravity report)."""
+def rex_text(*args):
+    out = subprocess.run([REX, *args], capture_output=True, text=True, encoding="utf-8",
+                         errors="replace", timeout=5)
+    return out.stdout if out.returncode == 0 else ""
+
+
+def bottom(screen, n):
+    return [line.lower() for line in screen.splitlines() if line.strip()][-n:]
+
+
+# Herdr's screen rules (herdr/distribution/agent-detection) for agents that do
+# not report their state to Rex. An approval prompt on screen means blocked.
+BLOCKED_HINTS = ("write to this file?", "run this command?", "(y) (enter)", "skip (esc or n)", "keep (n)")
+SPINNER_WORKING = re.compile(r"^\s*(⬡|⬢|[\u2800-\u28ff]+)\s+[^\W\d_]\w*ing\b")
+BACKGROUND_WORKING = re.compile(r"\b[1-9][0-9]*\s+background\s+tasks?\b")
+KIRO_TITLE = re.compile(r"(?i)^[◐◓◑◒/|\\-]\s+kiro:")
+
+
+def cursor_screen_working(screen, title=""):
+    if any(hint in line for line in bottom(screen, 12) for hint in BLOCKED_HINTS):
+        return False
+    return (any("ctrl+c to stop" in line for line in bottom(screen, 6))
+            or any(BACKGROUND_WORKING.search(line) for line in bottom(screen, 5))
+            or any(SPINNER_WORKING.search(line) for line in bottom(screen, 8)))
+
+
+def kiro_screen_working(screen, title=""):
+    if any(hint in line for line in bottom(screen, 12) for hint in BLOCKED_HINTS):
+        return False
+    return bool(KIRO_TITLE.search(title or "")) or any("kiro is working" in line for line in bottom(screen, 4))
+
+
+SCREEN_WORKING = {"Cursor": cursor_screen_working, "Kiro": kiro_screen_working}
+
+
+def rex_working(session, block, agents=()):
+    """Whether the block's agent is working: its program tells Rex so (Claude,
+    Codex and Antigravity report Rex's program status), or, for agents that do
+    not, its screen shows it the way Herdr's detection reads it."""
     try:
         records = rex_json("block", "call", "-s", session, "-b", block, "program_status").get("records") or []
     except (OSError, ValueError, AttributeError, subprocess.SubprocessError):
+        records = []
+    if any(r.get("state") == "working" for r in records):
+        return True
+    readers = [SCREEN_WORKING[name] for name in agents if name in SCREEN_WORKING]
+    if not readers:
         return False
-    return any(r.get("state") == "working" for r in records)
+    try:
+        screen = rex_text("capture", "-s", session, "-b", block, "--trim")
+        title = rex_json("block", "call", "-s", session, "-b", block, "title").get("title", "")
+    except (OSError, ValueError, AttributeError, subprocess.SubprocessError):
+        return False
+    return any(read(screen, title) for read in readers)
 
 
 def rex_sessions(me, working):
@@ -493,7 +540,7 @@ def rex_sessions(me, working):
         agents = agents_under([root], procs)
         if not agents:
             continue
-        busy = rex_working(session, block)
+        busy = rex_working(session, block, agents)
         pool = None
         if busy and "Cursor" in agents:
             argv = next((by_pid[pid] for pid in tree if from_argv(by_pid.get(pid, [])) == "Cursor"), None)
