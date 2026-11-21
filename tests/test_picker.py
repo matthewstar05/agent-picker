@@ -86,6 +86,20 @@ class PickerTests(unittest.TestCase):
                         for line in lines:
                             self.assertLessEqual(picker.visible_len(line), cols, (cols, rows, selected))
 
+    def test_light_selection_uses_a_pastel_background_and_dark_ink(self):
+        claude = next(a for a in picker.AGENTS if a["name"] == "Claude")
+        light = (250, 246, 238)
+        dark_row = picker.render(0, [True], 0.3, 80, 24, agents=[claude])
+        for cols, rows in ((17, 24), (24, 2), (80, 24)):
+            frame = picker.render(0, [True], 0.3, cols, rows, agents=[claude], light_background=light)
+            row = next(line for line in frame if "❯" in line)
+            self.assertLessEqual(picker.visible_len(row), cols)
+            self.assertNotIn(picker.fg((255, 255, 255)), row)
+            if cols >= 18:
+                self.assertIn(picker.fg(picker.light_ink((255, 255, 255))), row)
+                self.assertFalse(any(char in row for char in picker.BLOCKS))
+        self.assertIn(picker.fg((255, 255, 255)), next(line for line in dark_row if "❯" in line))
+
     def test_catalog_profiles_are_complete(self):
         for agent in settings.load_agents():
             for key in ("name", "color", "pastel", "gradient", "short", "detail", "argv", "detect"):

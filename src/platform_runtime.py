@@ -1,6 +1,7 @@
 """Terminal and process handling, kept out of the shared renderer."""
 
 import os
+import re
 import shutil
 import sys
 import time
@@ -72,6 +73,9 @@ class Terminal:
     shift = None
     # Whether Tab is held as the terminal last reported it, None until known.
     tab = None
+    _background = None
+    _light_scheme = False
+    _background_query_at = None
 
     def __init__(self, raw=False):
         self.raw = raw
@@ -160,6 +164,54 @@ class Terminal:
                 time.sleep(min(0.01, remaining))
         import select
         return bool(select.select([self.fd], [], [], max(0, seconds))[0])
+
+    @property
+    def light_background(self):
+        """The reported light canvas, or a neutral light color for a scheme-only reply."""
+        if self._background is None:
+            return (250, 249, 247) if self._light_scheme else None
+        r, g, b = self._background
+        return self._background if 299 * r + 587 * g + 114 * b >= 128_000 else None
+
+    def poll_background(self):
+        """Refresh the host colors without blocking the animation or keyboard."""
+        now = time.monotonic()
+        if self._background_query_at is None or now >= self._background_query_at:
+            self._background_query_at = now + 2
+            self.write("\x1b]11;?\x07\x1b[?996n")
+
+    def _read_background(self):
+        # Only claim OSC 11. Preserve ordinary Escape followed by typed text.
+        prefix = b"]"
+        for expected in b"11;":
+            byte = self._byte() if self.wait(0.03) else b""
+            prefix += byte
+            if byte != bytes((expected,)):
+                self._pending = prefix + self._pending
+                return "esc"
+        value = b""
+        for _ in range(24):
+            if not self.wait(0.03):
+                return ""
+            byte = self._byte()
+            if byte == b"\x1b":
+                if self.wait(0.03):
+                    end = self._byte()
+                    if end != b"\\":
+                        self._pending = byte + end + self._pending
+                        return ""
+                else:
+                    return ""
+                break
+            if byte == b"\x07":
+                break
+            value += byte
+        else:
+            return ""
+        match = re.fullmatch(rb"rgb:([0-9a-f]{1,4})/([0-9a-f]{1,4})/([0-9a-f]{1,4})", value, re.I)
+        if match:
+            self._background = tuple(round(int(c, 16) * 255 / (16 ** len(c) - 1)) for c in match.groups())
+        return ""
 
     def keyboard(self, enhanced, flags=11):
         """Turn the kitty keyboard protocol on or off: every key as an escape code,
@@ -334,6 +386,8 @@ class Terminal:
         if not self.wait(0.1):
             return "esc"
         prefix = self._byte()
+        if prefix == b"]" and self._background_query_at is not None:
+            return self._read_background()
         if self.extended and prefix in (b"\r", b"\n"):
             # ESC CR: what terminals set up for Shift+Enter, and Windows consoles, send.
             return "shift-enter"
@@ -374,6 +428,9 @@ class Terminal:
             return "paste:" + (pasted + tail).decode("utf-8", errors="replace")
         if not seq:
             return "esc"
+        if self._background_query_at is not None and prefix == b"[" and seq in (b"?997;1n", b"?997;2n"):
+            self._light_scheme = seq == b"?997;2n"
+            return ""
         text = seq.decode(errors="ignore")
         key, event = decode_key(prefix, text, self.extended, getattr(self, "mouse_reports", False))
         if self.extended:

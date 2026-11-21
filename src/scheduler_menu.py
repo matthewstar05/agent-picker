@@ -390,7 +390,7 @@ class Menu:
         return lines, hints
 
 
-def render(menu, cols, rows, t):
+def render(menu, cols, rows, t, *, light_background=None):
     import agent_picker as ap
     import usage_panel
     if not preferences.get(usage_panel.ANIMATE.key):
@@ -417,8 +417,8 @@ def render(menu, cols, rows, t):
                     line.put("   ")
                 line.pad(bw)
             if selected:
-                entries += ap.ringed(style, [line], t, bw)
+                entries += ap.ringed(style, [line], t, bw, light_background=light_background)
             else:
-                entries.append(("gap" if not text else "normal", "  " + line.paint(), bw + 2))
+                entries.append(ap.flat(line, bw, "gap" if not text else "normal", light=light_background is not None))
         return entries
     return ap.panel("prompt scheduler", body, hints, cols, rows, t, lines)

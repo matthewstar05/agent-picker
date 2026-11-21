@@ -501,12 +501,21 @@ OK, WARN, HOT = (120, 205, 145), (235, 185, 85), (240, 105, 95)
 TRACK = (72, 72, 80)
 LABEL = (150, 150, 160)
 SOFT = (125, 125, 135)
+LIGHT_INK = (32, 30, 42)
 
 
 def mix(a, b, amount):
     return (round(a[0] + (b[0] - a[0]) * amount),
             round(a[1] + (b[1] - a[1]) * amount),
             round(a[2] + (b[2] - a[2]) * amount))
+
+
+def light_ink(color):
+    """Keep accents recognizable and give the light canvas a dark text hierarchy."""
+    peak = max(color)
+    if peak - min(color) <= 24:
+        return mix((127, 124, 136), LIGHT_INK, 0.15 + 0.7 * peak / 255)
+    return mix(LIGHT_INK, color, 0.34)
 
 
 def fade(amount):
@@ -572,11 +581,13 @@ class Line:
             self.cells[col + i] = (ch, color, bold)
         return self
 
-    def paint(self, back=None):
+    def paint(self, back=None, *, light=False):
         out = []
         for x, (ch, color, bold) in enumerate(self.cells):
             b = bg(back(x)) if back else ""
-            out.append(f"{b}{fg(color or (0, 0, 0)) if color else ''}{BOLD if bold else ''}{ch}{RESET}")
+            if color is not None and light:
+                color = light_ink(color)
+            out.append(f"{b}{fg(color) if color else ''}{BOLD if bold else ''}{ch}{RESET}")
         return "".join(out)
 
 
@@ -720,13 +731,13 @@ def layout(width, spark_ok):
     return width - 5, None, False, False
 
 
-def agent_rows(agent, ok, width, t, selected):
+def agent_rows(agent, ok, width, t, selected, *, light=False):
     """An agent's two lines: name over model, a divider, then its limits.
 
     Every row uses the same layout (sized as if it had the block wave), so the
     columns line up; only the selected row draws the wave."""
     color = agent["color"]
-    left, bar, reset, spark = layout(width, True)
+    left, bar, reset, spark = layout(width, not light)
     spark = spark and selected and not agent.get("aside")
     l1, l2 = Line(), Line()
     if selected:
@@ -770,10 +781,12 @@ def agent_rows(agent, ok, width, t, selected):
     return [l1.pad(width), l2.pad(width)]
 
 
-def lit(lines, agent, t, sweep=None):
+def lit(lines, agent, t, sweep=None, *, light_background=None):
     """Paint the selected rows: the agent's gradient flowing across them under a
     rolling glow, or the launch bars."""
     width = len(lines[0].cells)
+    light = light_background is not None
+    surface = mix(light_background, (222, 218, 227), 0.2) if light else None
     out = []
     for y, line in enumerate(lines):
         if sweep is not None:
@@ -786,13 +799,15 @@ def lit(lines, agent, t, sweep=None):
         def back(x, y=y):
             hue = grad(agent, x / width * 0.9 - y * 0.04 - t * 0.12)
             strength = agent.get("glow", 1.0)
+            if surface is not None:
+                return mix(surface, hue, strength * (0.07 + 0.06 * wave(x - y * 2, t, 22.0, 4.0) ** 3))
             return tint(hue, strength * (0.13 + 0.17 * wave(x - y * 2, t, 22.0, 4.0) ** 3))
 
-        out.append(line.paint(back))
+        out.append(line.paint(back, light=light))
     return out
 
 
-def border_ring(agent, t, bw, height=1, solid=None):
+def border_ring(agent, t, bw, height=1, solid=None, *, light_background=None):
     """Box border glyphs in the agent's gradient, lit by a wave that travels
     around the perimeter."""
     w, h = bw + 2, height + 2
@@ -807,7 +822,11 @@ def border_ring(agent, t, bw, height=1, solid=None):
             cells[(r, c)] = fg(solid) + g
             continue
         hue = grad(agent, i / len(ring) * 2 - t * 0.12)
-        dim, bright = mix(hue, (24, 24, 28), 0.5), mix(hue, (255, 255, 255), 0.45)
+        if light_background is None:
+            dim, bright = mix(hue, (24, 24, 28), 0.5), mix(hue, (255, 255, 255), 0.45)
+        else:
+            dim = mix(hue, LIGHT_INK, 0.58)
+            bright = mix(dim, light_background, 0.28)
         cells[(r, c)] = fg(mix(dim, bright, wave(i, t, length=16.0, speed=7.0) ** 2)) + g
     return cells
 
@@ -818,7 +837,7 @@ HINTS = [" ↑↓ move · → defaults · ⏎ launch · u usage · \\ schedule �
 
 
 def render(selected, available, t, cols, rows, sweep=None, agents=None, title="agent selector", hints=HINTS,
-           owners=None):
+           owners=None, *, light_background=None):
     """Lines for the current terminal size, each at most cols wide.
 
     agents: the profiles to list (the installed ones); every profile by default.
@@ -826,7 +845,7 @@ def render(selected, available, t, cols, rows, sweep=None, agents=None, title="a
     owners: a list filled with one entry per returned line, the index of the
     agent drawn on it or None, so a click can be matched to an agent."""
     agents = AGENTS if agents is None else agents
-    color = agents[selected]["color"]
+    light = light_background is not None
     iw = min(MAX_IW, cols - 2)
     edge = fg(FRAME)
 
@@ -834,13 +853,17 @@ def render(selected, available, t, cols, rows, sweep=None, agents=None, title="a
         # Too small for the panel: a bare one-line list, still with the glowing row.
         lines = []
         for i, agent in enumerate(agents):
+            active = i == selected
             if cols < 18:
-                mark = "❯ " if i == selected else "  "
-                tone = fg(grad(agent, -t * 0.15)) if i == selected else FAINT
+                mark, tone = "  ", FAINT
+                if active:
+                    hue = grad(agent, -t * 0.15)
+                    mark, tone = "❯ ", fg(light_ink(hue) if light else hue)
                 lines.append(f"{tone}{clip(mark + agent['name'], cols)}{RESET}")
                 continue
-            first = agent_rows(agent, available[i], min(cols, MAX_IW), t, i == selected)[0]
-            lines.append(lit([first], agent, t, sweep)[0] if i == selected else first.paint())
+            first = agent_rows(agent, available[i], min(cols, MAX_IW), t, active, light=light)[0]
+            lines.append(lit([first], agent, t, sweep, light_background=light_background)[0]
+                         if active else first.paint(light=light))
         first = min(max(0, selected - rows // 2), max(0, len(lines) - rows))
         if owners is not None:
             owners[:] = list(range(len(lines)))[first:first + max(1, rows)]
@@ -860,10 +883,10 @@ def render(selected, available, t, cols, rows, sweep=None, agents=None, title="a
     body, whose = [], []     # whose[n]: the agent body[n] belongs to
     for i, agent in enumerate(agents):
         before = len(body)
-        rows_i = agent_rows(agent, available[i], bw, t, i == selected)
+        rows_i = agent_rows(agent, available[i], bw, t, i == selected, light=light)
         if i == selected:
-            ring = border_ring(agent, t, bw, height=2)
-            painted = lit(rows_i, agent, t, sweep)
+            ring = border_ring(agent, t, bw, height=2, light_background=light_background)
+            painted = lit(rows_i, agent, t, sweep, light_background=light_background)
             body.append(("lid", framed(" " + "".join(ring[(0, c)] for c in range(bw + 2)) + RESET, bw + 3)))
             for y, line in enumerate(painted):
                 kind = "boxed" if y == 0 else "second"
@@ -873,7 +896,7 @@ def render(selected, available, t, cols, rows, sweep=None, agents=None, title="a
             body.append(("lid", framed(" " + "".join(ring[(3, c)] for c in range(bw + 2)) + RESET, bw + 3)))
         else:
             for y, line in enumerate(rows_i):
-                body.append(("first" if y == 0 else "second", framed("  " + line.paint(), bw + 2)))
+                body.append(("first" if y == 0 else "second", framed("  " + line.paint(light=light), bw + 2)))
         whose.extend([i] * (len(body) - before))
 
     hint = next((h for h in hints if len(h) <= iw - 2), "")
@@ -939,18 +962,18 @@ def panel(title, body, hints, cols, rows, t, plain):
     return lines[:rows]
 
 
-def ringed(agent, lines, t, bw):
+def ringed(agent, lines, t, bw, *, light_background=None):
     """Rows inside the agent's glowing ring and lit by its gradient, as panel rows."""
-    ring = border_ring(agent, t, bw, height=len(lines))
+    ring = border_ring(agent, t, bw, height=len(lines), light_background=light_background)
     lid = lambda r: ("lid", " " + "".join(ring[(r, c)] for c in range(bw + 2)) + RESET, bw + 3)
     out = [lid(0)]
-    for y, line in enumerate(lit(lines, agent, t)):
+    for y, line in enumerate(lit(lines, agent, t, light_background=light_background)):
         out.append(("selected", " " + ring[(y + 1, 0)] + RESET + line + ring[(y + 1, bw + 1)] + RESET, bw + 3))
     return out + [lid(len(lines) + 1)]
 
 
-def flat(line, bw, kind="row"):
-    return (kind, "  " + line.pad(bw).paint(), bw + 2)
+def flat(line, bw, kind="row", *, light=False):
+    return (kind, "  " + line.pad(bw).paint(light=light), bw + 2)
 
 
 def section(text, bw):
@@ -962,7 +985,7 @@ def note(text, bw, color=SOFT, kind="note"):
     return (kind, "   " + fg(color) + shown + RESET, 3 + len(shown))
 
 
-def buttons(agent, labels, choice, t, bw):
+def buttons(agent, labels, choice, t, bw, *, light_background=None):
     """A row of buttons; the chosen one sits in the agent's glowing ring."""
     total = sum(len(label) + 4 for label in labels) + 3 * (len(labels) - 1)
     if total > bw:
@@ -978,8 +1001,9 @@ def buttons(agent, labels, choice, t, bw):
     for i, label in enumerate(labels):
         inner = len(label) + 2
         if i == choice:
-            ring = border_ring(agent, t, inner, height=1)
-            face = lit([Line().put(f" {label} ", (255, 255, 255), bold=True)], agent, t)[0]
+            ring = border_ring(agent, t, inner, height=1, light_background=light_background)
+            face = lit([Line().put(f" {label} ", (255, 255, 255), bold=True)], agent, t,
+                       light_background=light_background)[0]
             parts[0] += "".join(ring[(0, c)] for c in range(inner + 2)) + RESET
             parts[1] += ring[(1, 0)] + RESET + face + ring[(1, inner + 1)] + RESET
             parts[2] += "".join(ring[(2, c)] for c in range(inner + 2)) + RESET
@@ -1001,13 +1025,13 @@ def pair(label, value, bw, label_color, value_color, mark="   ", mark_color=None
     return line.pad(bw)
 
 
-def render_defaults(menu, cols, rows, t):
+def render_defaults(menu, cols, rows, t, *, light_background=None):
     """A provider's defaults, or its scrollable model list while browsing."""
     agent = menu.agent
     name = agent["name"]
     accent = tuple(agent.get("pastel")) if isinstance(agent.get("pastel"), list) else agent["color"]
     if menu.browsing:
-        return render_models(menu, cols, rows, t, accent)
+        return render_models(menu, cols, rows, t, accent, light_background=light_background)
     title = getattr(menu, "TITLE", "{} defaults").format(name)
     if menu.original is None:
         message = "Defaults are managed by this provider."
@@ -1027,11 +1051,11 @@ def render_defaults(menu, cols, rows, t):
             if i == menu.index:
                 shown = f"{value}  ⏎" if key == "model" else f"◂ {value} ▸"
                 line = pair(menu.LABELS[key], shown, bw, (245, 245, 245), (255, 255, 255), " ❯ ", (255, 255, 255), True)
-                out += ringed(agent, [line], t, bw)
+                out += ringed(agent, [line], t, bw, light_background=light_background)
             else:
                 line = pair(menu.LABELS[key], value, bw, (205, 205, 212), accent if moved else (190, 190, 198),
                             " • " if moved else "   ", agent["color"])
-                out.append(flat(line, bw))
+                out.append(flat(line, bw, light=light_background is not None))
         out.append(("gap", "", 0))
         if field == "fast_mode":
             out.append(note("Faster replies use more quota.", bw, accent))
@@ -1060,7 +1084,7 @@ def render_defaults(menu, cols, rows, t):
     return panel(title, body, hints, cols, rows, t, plain)
 
 
-def render_models(menu, cols, rows, t, accent):
+def render_models(menu, cols, rows, t, accent, *, light_background=None):
     agent = menu.agent
     models = menu.models()
     index = min(menu.model_index, len(models) - 1)
@@ -1075,10 +1099,11 @@ def render_models(menu, cols, rows, t, accent):
             tag = "current" if row["id"] == current else ""
             if i == index:
                 line = pair(label, tag, bw, (245, 245, 245), (255, 255, 255), " ❯ ", (255, 255, 255), True)
-                out += ringed(agent, [line], t, bw)
+                out += ringed(agent, [line], t, bw, light_background=light_background)
             else:
                 mark = " ● " if row["id"] == current else "   "
-                out.append(flat(pair(label, tag, bw, (205, 205, 212), accent, mark, agent["color"]), bw))
+                out.append(flat(pair(label, tag, bw, (205, 205, 212), accent, mark, agent["color"]),
+                                bw, light=light_background is not None))
         return out
 
     plain = [(("❯ " if i == index else "  ") + row.get("name", row["id"]), i == index) for i, row in enumerate(models)]
@@ -1086,16 +1111,17 @@ def render_models(menu, cols, rows, t, accent):
     return panel(f"{agent['name']} models", body, hints, cols, rows, t, plain)
 
 
-def render_back_confirmation(menu, choice, cols, rows, t=0):
+def render_back_confirmation(menu, choice, cols, rows, t=0, *, light_background=None):
     """Choose whether to save or discard pending provider settings."""
     agent = menu.agent
     accent = tuple(agent.get("pastel")) if isinstance(agent.get("pastel"), list) else agent["color"]
     selection, delta = menu.review()
+    light = light_background is not None
 
     def body(bw):
         out = [section("selected", bw)]
         for label, value in selection:
-            out.append(flat(pair(label, value, bw, (205, 205, 212), accent, bold=True), bw))
+            out.append(flat(pair(label, value, bw, (205, 205, 212), accent, bold=True), bw, light=light))
         out += [("gap", "", 0), section("changes", bw)]
         for label, old, new in delta:
             line = Line().put("   ").put(clip(label, bw // 2), (205, 205, 212))
@@ -1107,8 +1133,9 @@ def render_back_confirmation(menu, choice, cols, rows, t=0):
             else:
                 line.at(col, change[:split], SOFT).at(col + split, " → ", LABEL)
                 line.at(col + split + 3, change[split + 3:], accent, bold=True)
-            out.append(flat(line, bw))
-        return out + [("gap", "", 0)] + buttons(agent, ("Save settings", "Discard changes"), choice, t, bw)
+            out.append(flat(line, bw, light=light))
+        return out + [("gap", "", 0)] + buttons(agent, ("Save settings", "Discard changes"), choice, t, bw,
+                                               light_background=light_background)
 
     plain = [(f"Save {agent['name']} settings?", False)]
     plain += [(f"{label}: {value}", False) for label, value in selection]
@@ -1118,7 +1145,7 @@ def render_back_confirmation(menu, choice, cols, rows, t=0):
     return panel(f"Save {agent['name']} settings?", body, hints, cols, rows, t, plain)
 
 
-def render_settings(menu, cols, rows, t, accent):
+def render_settings(menu, cols, rows, t, accent, *, light_background=None):
     """The settings screen: every registered setting, grouped by section, or
     the page opened from it."""
     items = menu.items
@@ -1160,12 +1187,12 @@ def render_settings(menu, cols, rows, t, accent):
             line.put(" ❯ ", (255, 255, 255)).put(clip(setting.label, bw - 8), (245, 245, 245), bold=True)
             shown = f"{value} ▸ " if opens else f"◂ {value} ▸ "
             line.at(max(len(line.cells) + 2, bw - len(shown)), clip(shown, bw // 2), (255, 255, 255), bold=True)
-            painted = lit([line.pad(bw)], accent, t)[0]
+            painted = lit([line.pad(bw)], accent, t, light_background=light_background)[0]
         else:
             line.put("   ").put(clip(setting.label, bw - 8), (205, 205, 212))
             shown = f"{value} ▸ " if opens else f"{value}   "
             line.at(max(len(line.cells) + 2, bw - len(shown)), clip(shown, bw // 2), SOFT)
-            painted = line.pad(bw).paint()
+            painted = line.pad(bw).paint(light=light_background is not None)
         body.append(("row" if i != index else "selected", framed("  " + painted, bw + 2)))
     hint = items[index].hint if items else ""
     if hint:
@@ -1208,6 +1235,12 @@ class Screen:
 
     def reset(self):
         self.size = None
+
+    def light_background(self):
+        if hasattr(self.terminal, "poll_background"):
+            self.terminal.poll_background()
+            return self.terminal.light_background
+        return None
 
     def show(self, frame, cols, rows):
         clear = ""
@@ -1341,22 +1374,28 @@ def choose(screen=None, only=None):
         # can never wrap and smear.
         cols, rows = shutil.get_terminal_size((80, 24))
         t = time.monotonic() - start
+        light_background = writer.light_background()
         terminal.keyboard(screen == "usage")   # key releases, for holding Tab there
         if screen == "usage":
             frame = usage_panel.render(usage, cols, rows, t)
         elif screen == "connections":
             frame = centered(connections.render(connection_menu, sys.modules[__name__], cols, rows), cols, rows)
         elif screen == "scheduler":
-            frame = centered(scheduler_menu.render(scheduler_view, cols, rows, t), cols, rows)
+            frame = centered(scheduler_menu.render(scheduler_view, cols, rows, t,
+                                                   light_background=light_background), cols, rows)
         elif screen == "settings":
-            frame = centered(render_settings(menu, cols, rows, t, usage.frame_style()), cols, rows)
+            frame = centered(render_settings(menu, cols, rows, t, usage.frame_style(),
+                                             light_background=light_background), cols, rows)
         elif screen == "defaults":
-            frame = centered(render_defaults(defaults_menu, cols, rows, t), cols, rows)
+            frame = centered(render_defaults(defaults_menu, cols, rows, t, light_background=light_background),
+                             cols, rows)
         elif screen == "confirm_back":
-            frame = centered(render_back_confirmation(defaults_menu, quit_choice, cols, rows, t), cols, rows)
+            frame = centered(render_back_confirmation(defaults_menu, quit_choice, cols, rows, t,
+                                                      light_background=light_background), cols, rows)
         else:
             owners = []
-            lines = render(selected, available, t, cols, rows, sweep, listed, owners=owners)
+            lines = render(selected, available, t, cols, rows, sweep, listed, owners=owners,
+                           light_background=light_background)
             hits[:] = hit_rows(lines, owners, cols, rows)
             frame = centered(lines, cols, rows)
         if hasattr(terminal, "mouse"):

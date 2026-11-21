@@ -77,7 +77,7 @@ class SidebarTests(unittest.TestCase):
         terminal.wait.return_value = True
         terminal.read_key.side_effect = ["down", "down", "left", "esc"]   # past Visibility
         with patch.object(team, "Terminal", return_value=terminal), \
-             patch.object(team.ap, "Screen", return_value=Mock()), \
+             patch.object(team.ap, "Screen", return_value=Mock(light_background=Mock(return_value=None))), \
              patch.object(team.sys, "stdout", io.StringIO()), \
              patch.object(sidebar, "sync") as sync:
             self.assertIsNone(team.choose(settings_only=True))
@@ -211,7 +211,7 @@ class SidebarTests(unittest.TestCase):
         terminal.wait.return_value = True
         terminal.read_key.side_effect = ["down", "left", "esc"]
         with patch.object(team, "Terminal", return_value=terminal), \
-             patch.object(team.ap, "Screen", return_value=Mock()), \
+             patch.object(team.ap, "Screen", return_value=Mock(light_background=Mock(return_value=None))), \
              patch.object(team, "refresh_usage") as refresh, \
              patch.object(team.sys, "stdout", io.StringIO()), \
              patch.object(sidebar, "sync") as sync:
@@ -227,7 +227,7 @@ class SidebarTests(unittest.TestCase):
         menus = []
         real = preferences.Menu
         with patch.object(team, "Terminal", return_value=terminal), \
-             patch.object(team.ap, "Screen", return_value=Mock()), \
+             patch.object(team.ap, "Screen", return_value=Mock(light_background=Mock(return_value=None))), \
              patch.object(team.ap, "installed", side_effect=lambda a: a["name"] in ("Star", "Codex")), \
              patch.object(team.preferences, "Menu", side_effect=lambda *a: menus.append(real(*a)) or menus[-1]), \
              patch.object(team.sys, "stdout", io.StringIO()), \
@@ -244,7 +244,7 @@ class SidebarTests(unittest.TestCase):
         terminal.wait.return_value = True
         terminal.read_key.side_effect = ["down", "down", "down", "right", "esc"]
         with patch.object(team, "Terminal", return_value=terminal), \
-             patch.object(team.ap, "Screen", return_value=Mock()), \
+             patch.object(team.ap, "Screen", return_value=Mock(light_background=Mock(return_value=None))), \
              patch.object(team.sys, "stdout", io.StringIO()), \
              patch.object(sidebar, "sync") as sync:
             self.assertIsNone(team.choose(settings_only=True))

@@ -90,6 +90,31 @@ class NonExtendedTests(unittest.TestCase):
         self.assertIsNone(terminal.shift)
 
 
+class TerminalBackgroundTests(unittest.TestCase):
+    def test_refresh_reads_light_and_dark_backgrounds_without_eating_keys(self):
+        terminal = Writes()
+        with patch("platform_runtime.time.monotonic", side_effect=[0, 1, 2]):
+            terminal.poll_background()
+            terminal.poll_background()
+            self.assertEqual(terminal.written, ["\x1b]11;?\x07\x1b[?996n"])
+            self.assertEqual(feed(terminal, b"\x1b]11;rgb:fafa/f6f6/eeee\x07\x1b[B"),
+                             [("", None), ("down", None)])
+            self.assertEqual(terminal.light_background, (250, 246, 238))
+            terminal.poll_background()
+        self.assertEqual(len(terminal.written), 2)
+        self.assertEqual(feed(terminal, b"\x1b]11;rgb:17/19/20\x1b\\q"), [("", None), ("q", None)])
+        self.assertIsNone(terminal.light_background)
+
+    def test_scheme_fallback_and_plain_escape(self):
+        terminal = Writes()
+        self.assertIsNone(terminal.light_background)
+        terminal.poll_background()
+        self.assertEqual(feed(terminal, b"\x1b[?997;2n\x1b]"), [("", None), ("esc", None), ("]", None)])
+        self.assertEqual(terminal.light_background, (250, 249, 247))
+        self.assertEqual(feed(terminal, b"\x1b[?997;1n"), [("", None)])
+        self.assertIsNone(terminal.light_background)
+
+
 class ExtendedKeyTests(unittest.TestCase):
     def test_esc_then_enter_is_shift_enter(self):
         self.assertEqual(keys(b"\x1b\r\x1b\n"), ["shift-enter", "shift-enter"])

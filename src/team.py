@@ -575,10 +575,16 @@ def choose(settings_only=False):
     def draw(sweep=None):
         cols, rows = shutil.get_terminal_size((80, 24))
         t = time.monotonic() - start
-        lines = (ap.render_settings(menu, cols, rows, t, STANDARD) if settings_open else
-                 ap.render_back_confirmation(models, choice, cols, rows, t) if confirming else
-                 ap.render_defaults(models, cols, rows, t) if models else
-                 ap.render(selected, available, t, cols, rows, sweep, options, title="herdr-ai", hints=HINTS))
+        light_background = writer.light_background()
+        if settings_open:
+            lines = ap.render_settings(menu, cols, rows, t, STANDARD, light_background=light_background)
+        elif confirming:
+            lines = ap.render_back_confirmation(models, choice, cols, rows, t, light_background=light_background)
+        elif models:
+            lines = ap.render_defaults(models, cols, rows, t, light_background=light_background)
+        else:
+            lines = ap.render(selected, available, t, cols, rows, sweep, options, title="herdr-ai", hints=HINTS,
+                              light_background=light_background)
         writer.show(ap.centered(lines, cols, rows), cols, rows)
 
     def close_models():
@@ -602,6 +608,8 @@ def choose(settings_only=False):
                 draw()
                 continue
             key = terminal.read_key()
+            if not key:
+                continue
             if settings_open:
                 if key in ("\x03", "\x04"):
                     return None
