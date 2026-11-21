@@ -325,6 +325,42 @@ class NavigationTests(Base):
 
 
 class DrawingTests(Base):
+    def test_selected_tile_uses_terminal_aware_light_surface_and_ink(self):
+        app = self.app()
+        background = (250, 246, 238)
+        app.light_background = background
+        selected = app.lit_for(app.selected(), 1.0)
+        grid = fsb.Grid.choose(120, 10, len(app.entries))
+        rows = app.tile(app.selected(), grid, app.accent(0.5), selected)
+        interior = [cell for row in rows[1:-1] for cell in row[1:-1] if cell[0].strip()]
+        self.assertTrue(interior)
+        self.assertTrue(all(cell[2] is not None for cell in interior))
+        self.assertTrue(all(max(cell[2]) > 200 for cell in interior))
+        self.assertTrue(all(max(cell[1]) < 180 for cell in interior if cell[1]))
+        self.assertEqual(selected.light_background, background)
+
+    def test_light_selection_ring_stays_dark_and_dark_palette_is_unchanged(self):
+        app = self.app()
+        style = fsb.highlight_style(app.theme(), app.selected().kind)
+        dark = fsb.Lit(style, 0.4)
+        self.assertEqual(dark.back(2, 1, 20), fsb.glow(style, 2, 1, 20, 0.4, 0.0))
+        light = fsb.Lit(style, 0.4, light_background=(250, 249, 247))
+        edge = light.ring(20, 2)
+        self.assertTrue(all(max(color) < 180 for _, color in edge.values()))
+        boosted = fsb.Lit(style, 0.4, boost=1.0, light_background=(250, 249, 247))
+        self.assertNotEqual(light.back(2, 1, 20), boosted.back(2, 1, 20))
+
+    def test_selected_details_row_uses_light_background(self):
+        app = self.app(view="details")
+        app.light_background = (250, 246, 238)
+        entry = app.selected()
+        cells = fsb.cells_of("alpha details", fsb.TEXT)
+        framed = app.lit_row(cells, entry, 1.0, lids=False)
+        content = framed[0][1:-1]
+        self.assertTrue(all(cell[2] is not None for cell in content))
+        self.assertTrue(all(max(cell[2]) > 200 for cell in content))
+        self.assertTrue(all(max(cell[1]) < 180 for cell in content if cell[1]))
+
     def test_github_marker_is_present_in_icon_details_and_tiny_views(self):
         for view, cols, rows in (("icons", 100, 12), ("details", 100, 12), ("icons", 18, 4)):
             with self.subTest(view=view, cols=cols):

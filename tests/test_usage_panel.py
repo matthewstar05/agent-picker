@@ -66,6 +66,35 @@ class UsagePanelTests(unittest.TestCase):
                     text = "".join(line) if isinstance(line, tuple) else line
                     self.assertLessEqual(len(ANSI.sub("", text)), cols, (cols, rows, text))
 
+    def test_light_terminal_uses_picker_highlights_in_compact_and_full_cards(self):
+        view = self.view()
+        light = (245, 243, 248)
+        panel.WORKING["Claude"] = 1
+        now = time.time()
+
+        compact_light = panel.compact_row(view, 0, 80, 1.5, now, light_background=light)
+        compact_dark = panel.compact_row(view, 0, 80, 1.5, now)
+        self.assertIn("\x1b[48;2;", compact_light)
+        self.assertNotEqual(compact_light, compact_dark)
+
+        full_light = panel.working_card(view, 0, 52, 1.5, now, light_background=light)
+        full_dark = panel.working_card(view, 0, 52, 1.5, now)
+        self.assertTrue(any("\x1b[48;2;" in line for line in full_light))
+        self.assertNotEqual(full_light, full_dark)
+
+        # The light background is part of the cached card key, so a live mode
+        # change cannot leave the previous background painted into the frame.
+        first = panel.card(view, 0, 50, 1.5, now, light_background=light)
+        second = panel.card(view, 0, 50, 1.5, now)
+        self.assertTrue(any("\x1b[48;2;" in line for line in first))
+        self.assertNotEqual(first, second)
+
+        preferences.put(panel.ANIMATE.key, False)
+        still = panel.card(view, 0, 50, 1.5, now, light_background=light)
+        later = panel.card(view, 0, 50, 2.5, now, light_background=light)
+        self.assertTrue(any("\x1b[48;2;" in line for line in still))
+        self.assertEqual(still, later)
+
     def test_bars_deplete_by_default_and_can_fill_instead(self):
         now = time.time()
         w = {"label": "5h", "pct": 25, "resets": now + 4 * 3600}

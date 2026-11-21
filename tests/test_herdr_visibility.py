@@ -244,12 +244,14 @@ class PickerVisibilityTests(unittest.TestCase):
                 patch.object(picker, "installed", return_value=True), \
                 patch.object(picker, "Visibility", return_value=watched), \
                 patch.object(picker, "Terminal", return_value=terminal), \
-                patch.object(picker, "Screen"), patch.object(picker, "load_usage"), \
+                patch.object(picker, "Screen") as screen, patch.object(picker, "load_usage"), \
                 patch.object(picker.model_catalog, "request_all"), patch.object(usage_panel, "start"), \
                 patch.object(usage_panel, "render", return_value=[]) as render, \
                 contextlib.redirect_stdout(io.StringIO()):
+            screen.return_value.light_background.return_value = (250, 246, 238)
             self.assertIsNone(picker.choose("usage"))
         render.assert_called_once()
+        self.assertEqual(render.call_args.kwargs["light_background"], (250, 246, 238))
         watched.close.assert_called_once()
 
 

@@ -1007,7 +1007,7 @@ def draw_bar(line, w, bar, st, t, live, stale, now, offset, pulses=1):
 CARDS = {}  # still cards, keyed by everything they show; moving ones are drawn every frame
 
 
-def card(view, i, cw, t, now, rows=3):
+def card(view, i, cw, t, now, rows=3, light_background=None):
     """The agent and its status, then a bar per limit, centered in `rows` lines
     (three at the least; a working card's glow fills all of them).
 
@@ -1029,16 +1029,19 @@ def card(view, i, cw, t, now, rows=3):
     # Working cards share the border's continuous 60 fps clock. Idle cards
     # still reuse their cached contents between countdown updates.
     step = t if working and view.anim else 0.0
-    key = (i, name, cw, rows, view.theme, view.anim, depleting(), int(now), entry and entry["fetched"], fetching,
-           int(t * 3) % 3 if fetching else 0, working, len(HISTORY.get(name) or ()), step, panes, held, driving, pools, drain_read, tuple(sorted(map(str, STAR_POOLS.values()))),
+    dots = int(t * 3) % 3 if fetching else 0
+    key = (i, name, cw, rows, view.theme, view.anim, light_background, depleting(), int(now), entry and entry["fetched"], fetching,
+           dots, working, len(HISTORY.get(name) or ()), step, panes, held, driving, pools, drain_read, tuple(sorted(map(str, STAR_POOLS.values()))),
            preferences.get(CURSOR_MODEL_BARS.key), preferences.get(CURSOR_GROK_TRANSIENT.key))
     if CARDS.get(i, (None,))[0] != key:
         CARDS[i] = (key, _card(view, i, cw, step, now, entry, fetching, working,
-                             dots=key[10], rows=rows, panes=panes, held=held))
+                             dots=dots, rows=rows, panes=panes, held=held,
+                             light_background=light_background))
     return CARDS[i][1]
 
 
-def _card(view, i, cw, t, now, entry, fetching, working, dots=None, rows=3, panes=None, held=0):
+def _card(view, i, cw, t, now, entry, fetching, working, dots=None, rows=3, panes=None, held=0,
+          light_background=None):
     agent = view.agents[i]
     name, st = agent["name"], view.style(i)
     themed = THEMES[view.theme]["stops"] is not None
@@ -1162,9 +1165,10 @@ def _card(view, i, cw, t, now, entry, fetching, working, dots=None, rows=3, pane
     top = max(0, (rows - len(lines)) // 2)
     lines = [Line().pad(cw) for _ in range(top)] + lines
     lines += [Line().pad(cw) for _ in range(rows - len(lines))]
-    if live and view.anim:
-        return ap.lit(lines, st, t)
-    return [line.paint() for line in lines]
+    if live and (view.anim or light_background is not None):
+        return ap.lit(lines, st, t if view.anim else 0.0,
+                      light_background=light_background)
+    return [line.paint(light=light_background is not None) for line in lines]
 
 
 def star_info(now):
@@ -1283,7 +1287,7 @@ def star_lines(cw, t, now, live, anim, style=None, rainbow=False):
     return [line.pad(cw), second.pad(cw)]
 
 
-def compact_row(view, i, width, t, now):
+def compact_row(view, i, width, t, now, light_background=None):
     """One line per agent for short panes: ● Claude  5h ▰▰▱ 23%  wk ▰▱▱ 18%."""
     agent = view.agents[i]
     name, st = agent["name"], view.style(i)
@@ -1360,10 +1364,16 @@ def compact_row(view, i, width, t, now):
             line.put(" " + clip(credits, width - len(line.cells) - 1), SOFT)
     else:
         line.put(" ··", SOFT)
-    content = line.pad(width).paint()
+    line.pad(width)
+    if light_background is not None and working:
+        content = ap.lit([line], border_style(view, i), t,
+                         light_background=light_background)[0]
+    else:
+        content = line.paint(light=light_background is not None)
     if border_space:
         if working:
-            ring = ap.border_ring(border_style(view, i), t, width)
+            ring = ap.border_ring(border_style(view, i), t, width,
+                                  light_background=light_background)
             return ring[(1, 0)] + RESET + content + ring[(1, width + 1)] + RESET
         return " " + content + " "
     return content
@@ -1397,15 +1407,17 @@ def overlay(cells, col, text, color, bold=False, style=None, t=0.0, readable=Fal
             cells[col + k] = f"{ap.fg(shade)}{BOLD if bold else ''}{ch}{RESET}"
 
 
-def working_card(view, i, width, t, now, lids=True, active=True, height=None):
+def working_card(view, i, width, t, now, lids=True, active=True, height=None, light_background=None):
     """Reserve the selector's border space, drawing it only while working.
     height: total lines including lids; the card grows to fill it."""
     minimum = card_rows(view.agents[i])
     inner = minimum if height is None else max(minimum, height - (2 if lids else 0))
-    content = card(view, i, width - 2, t, now, rows=inner)
+    content = card(view, i, width - 2, t, now, rows=inner,
+                   light_background=light_background)
     style = border_style(view, i)
     tick = t if view.anim else 0.4
-    ring = ap.border_ring(style, tick, width - 2, len(content)) if active else None
+    ring = ap.border_ring(style, tick, width - 2, len(content),
+                          light_background=light_background) if active else None
     lines = [(ring[(y + 1, 0)] + RESET if active else " ") + line
              + (ring[(y + 1, width - 1)] + RESET if active else " ")
              for y, line in enumerate(content)]
@@ -1476,7 +1488,7 @@ class ThemeMenu:
         return None
 
 
-def theme_panel(menu, cols, rows, t):
+def theme_panel(menu, cols, rows, t, light_background=None):
     """A scrollable grid when space permits, otherwise a compact list."""
     if cols <= 0 or rows <= 0:
         return []
@@ -1512,17 +1524,25 @@ def theme_panel(menu, cols, rows, t):
 
             def painted_label(text):
                 weight = BOLD if selected else ""
+                background = (ap.bg(ap.light_surface(light_background))
+                              if selected and light_background is not None else "")
                 if stops != "rainbow":
-                    return ap.fg(color) + weight + text + RESET
-                return "".join(ap.fg(shade((k - 2) / max(1, len(name) - 1))) + weight + ch + RESET
-                               for k, ch in enumerate(text))
+                    foreground = ap.light_ink(color) if light_background is not None else color
+                    return background + ap.fg(foreground) + weight + text + RESET
+                painted = []
+                for k, ch in enumerate(text):
+                    foreground = shade((k - 2) / max(1, len(name) - 1))
+                    if light_background is not None:
+                        foreground = ap.light_ink(foreground)
+                    painted.append(background + ap.fg(foreground) + weight + ch + RESET)
+                return "".join(painted)
 
             part = painted_label(label)
             for k in range(sample_width):
                 part += ap.fg(shade(k / max(1, sample_width - 1))) + "▰" + RESET
             if grid:
                 inner = width - 3
-                edge = WHITE if selected else SOFT
+                edge = (ap.light_ink(WHITE) if light_background is not None else WHITE) if selected else SOFT
                 border = ap.fg(edge)
                 text = clip(f"{marker} {name}" + (" ✓" if saved else ""), inner).ljust(inner)
                 samples = "".join(ap.fg(shade(k / max(1, inner))) + "▰" + RESET
@@ -1540,11 +1560,11 @@ def theme_panel(menu, cols, rows, t):
     return out[:rows]
 
 
-def render(view, cols, rows, t):
+def render(view, cols, rows, t, light_background=None):
     """The frame's rows. A framed body row is (left edge, content, right edge), so
     the redraw can rewrite the animated border without resending the content."""
     if view.theme_menu is not None:
-        return theme_panel(view.theme_menu, cols, rows, t)
+        return theme_panel(view.theme_menu, cols, rows, t, light_background=light_background)
     now = time.time()
     view.agents = view.present()   # one consistent list for the whole frame
     n = len(view.agents)
@@ -1552,9 +1572,10 @@ def render(view, cols, rows, t):
     if not n and not framed:
         return [clip(f"no agents in {SCOPE}", cols)]
     if not framed:
-        return [compact_row(view, i, cols, t, now) for i in range(n)][:rows]
+        return [compact_row(view, i, cols, t, now, light_background=light_background) for i in range(n)][:rows]
 
-    ring = ap.border_ring(view.frame_style(), t if view.anim else 0.4, cols - 2, rows - 2)
+    ring = ap.border_ring(view.frame_style(), t if view.anim else 0.4, cols - 2, rows - 2,
+                          light_background=light_background)
     top = [ring[(0, c)] for c in range(cols)]
     bottom = [ring[(rows - 1, c)] for c in range(cols)]
 
@@ -1621,7 +1642,8 @@ def render(view, cols, rows, t):
         need = [h + 2 * lids for h in heights]
         rows_h = [max(need[r * ncols:(r + 1) * ncols]) for r in range(nr)]
         spare = max(0, inner_h - (nr - 1) * gap - sum(rows_h)) // nr
-        cards = [working_card(view, i, cw, t, now, lids, active[i], height=rows_h[i // ncols] + spare)
+        cards = [working_card(view, i, cw, t, now, lids, active[i], height=rows_h[i // ncols] + spare,
+                              light_background=light_background)
                  for i in range(n)]
         for r in range(nr):
             if r:
@@ -1638,7 +1660,7 @@ def render(view, cols, rows, t):
                 body.pop(0)
         pad_top = max(0, (inner_h - len(body)) // 2)
     elif n:
-        body = [compact_row(view, i, inner_w, t, now) for i in range(n)]
+        body = [compact_row(view, i, inner_w, t, now, light_background=light_background) for i in range(n)]
         pad_top = max(0, (inner_h - len(body)) // 2)
     else:
         body = empty_state(inner_w, inner_h)

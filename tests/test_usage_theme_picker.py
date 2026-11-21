@@ -68,6 +68,14 @@ class UsageThemePickerTests(unittest.TestCase):
             panel.handle(self.view, 'down', [])
         self.assertEqual(seen, set(menu.items))
 
+    def test_light_theme_menu_highlights_the_selected_label(self):
+        panel.handle(self.view, 't', [])
+        light = (250, 246, 238)
+        for cols, rows in ((100, 14), (30, 5)):
+            frame = panel.render(self.view, cols, rows, 0, light_background=light)
+            selected = next(line for line in frame if '❯ brand ✓' in ANSI.sub('', line))
+            self.assertIn(ap.bg(ap.light_surface(light)), selected)
+
     def test_title_colors_in_full_compact_and_working_cards(self):
         def luminance(rgb):
             channels = [v / 255 for v in rgb]

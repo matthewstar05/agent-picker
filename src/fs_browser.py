@@ -323,7 +323,7 @@ def ring_path(w, h):
     return path
 
 
-def ring(style, t, bw, height, boost=0.0, solid=None):
+def ring(style, t, bw, height, boost=0.0, solid=None, *, light_background=None):
     """{(row, col): (glyph, rgb)} for a rounded box around a bw x height inside, lit by a
     wave that travels around it: agent_picker.border_ring as cells. boost (0 to 1)
     brightens and quickens it while Shift is held."""
@@ -335,9 +335,14 @@ def ring(style, t, bw, height, boost=0.0, solid=None):
             out[(r, c)] = (glyph, solid)
             continue
         hue = ap.grad(style, i / n * 2 - t * 0.12)
-        dim = ap.mix(hue, (24, 24, 28), 0.5 * (1 - 0.8 * boost))
-        bright = ap.mix(hue, WHITE, 0.45 + 0.4 * boost)
-        out[(r, c)] = (glyph, ap.mix(dim, bright, ap.wave(i, t, 16.0, 7.0 + 5.0 * boost) ** 2))
+        illumination = ap.wave(i, t, 16.0, 7.0 + 5.0 * boost) ** 2
+        if light_background is None:
+            dim = ap.mix(hue, (24, 24, 28), 0.5 * (1 - 0.8 * boost))
+            bright = ap.mix(hue, WHITE, 0.45 + 0.4 * boost)
+            shade = ap.mix(dim, bright, illumination)
+        else:
+            shade = ap.light_border(hue, light_background, illumination)
+        out[(r, c)] = (glyph, shade)
     return out
 
 
@@ -352,14 +357,26 @@ def glow(style, x, y, width, t, boost=0.0):
 class Lit:
     """How the selected item is drawn this frame."""
 
-    def __init__(self, style, t, boost=0.0, active=True, sweep=None):
+    def __init__(self, style, t, boost=0.0, active=True, sweep=None, light_background=None):
         self.style, self.t, self.boost, self.active, self.sweep = style, t, boost, active, sweep
+        self.light_background = light_background
+        self.surface = ap.light_surface(light_background) if light_background is not None else None
 
     def back(self, x, y, width):
+        if self.surface is not None:
+            if not self.active:
+                return self.surface
+            hue = ap.mix(ap.grad(self.style, x / max(1, width) * 0.9 - y * 0.04 - self.t * 0.12), WHITE, 0.58)
+            wave = ap.wave(x - y * 2, self.t, 22.0, 4.0) ** 3
+            strength = self.style.get("glow", 1.0) * (0.07 + 0.06 * wave
+                                                       + 0.08 * self.boost + 0.10 * self.boost * wave)
+            return ap.mix(self.surface, hue, strength)
         return glow(self.style, x, y, width, self.t, self.boost) if self.active else INACTIVE_BG
 
     def ring(self, bw, height):
-        return ring(self.style, self.t, bw, height, self.boost, None if self.active else INACTIVE_RING)
+        inactive = INACTIVE_RING if self.light_background is None else ap.light_ink(INACTIVE_RING)
+        return ring(self.style, self.t, bw, height, self.boost, None if self.active else inactive,
+                    light_background=self.light_background)
 
 
 def light(rows, lit, width_hint=None):
@@ -372,7 +389,9 @@ def light(rows, lit, width_hint=None):
                 bg = lit.back(x, y, width)
             elif lit.boost:
                 bg = ap.mix(bg, WHITE, 0.12 * lit.boost)
-            if fg and lit.active and not bold:
+            if fg and lit.light_background is not None:
+                fg = ap.light_ink(fg)
+            elif fg and lit.active and not bold:
                 fg = ap.mix(fg, WHITE, 0.06 + 0.18 * lit.boost)
             row[x] = (ch, fg, bg, bold)
         if lit.sweep is not None:
@@ -380,6 +399,8 @@ def light(rows, lit, width_hint=None):
                 if abs(x + 0.5 - len(row) / 2) <= lit.sweep * len(row) / 2:
                     shade = ap.mix(ap.grad(lit.style, x / max(1, len(row)) - lit.t * 0.4), WHITE,
                                    0.2 * ap.wave(x, lit.t, 8.0, 12.0))
+                    if lit.light_background is not None:
+                        shade = ap.light_ink(shade)
                     row[x] = ("█", shade, None, False)
     return rows
 
@@ -1005,6 +1026,7 @@ class App:
         self.free = (None, 0.0, None)
         self.quicklook = None
         self.terminal = None
+        self.light_background = None
         self.start = time.monotonic()
         self.static = None
         self.load(select=select)
@@ -1178,7 +1200,8 @@ class App:
                 sweep = min(1.0, (elapsed / 0.18) ** 1.6)
             else:
                 self.sweep_at = None
-        return Lit(style, t if self.animating() else 0.4, self.boost, self.lively(), sweep)
+        return Lit(style, t if self.animating() else 0.4, self.boost, self.lively(), sweep,
+                   self.light_background)
 
     def accent(self, x_frac):
         style = theme_style(self.theme())
@@ -1553,7 +1576,8 @@ class App:
             return self.theme_panel(cols, rows, t)
         if self.screen == "settings" and self.settings:
             accent = highlight_style(self.theme(), "folder")
-            return ap.render_settings(self.settings, cols, rows, t, accent)
+            return ap.render_settings(self.settings, cols, rows, t, accent,
+                                      light_background=self.light_background)
         if self.screen == "help":
             return self.help_panel(cols, rows, t)
         if self.screen == "confirm" and self.confirm:
@@ -1626,7 +1650,8 @@ class App:
                     line.at(bw - width - 1 + k, "▰", color)
                 line.pad(bw)
                 if chosen:
-                    out += ap.ringed(highlight_style(name, "folder"), [line], t, bw)
+                    out += ap.ringed(highlight_style(name, "folder"), [line], t, bw,
+                                     light_background=self.light_background)
                 else:
                     out.append(ap.flat(line, bw))
             local = next((str(p) for p, _ in themes.sources()[1:]), "")
@@ -1677,7 +1702,8 @@ class App:
 
         def body(bw):
             out = [ap.note(line, bw, TEXT) for line in lines] + [("gap", "", 0)]
-            return out + ap.buttons(style, (yes, "Cancel"), c.choice, t, bw)
+            return out + ap.buttons(style, (yes, "Cancel"), c.choice, t, bw,
+                                    light_background=self.light_background)
 
         plain = [(line, False) for line in lines] + [("❯ " + (yes if c.choice == 0 else "Cancel"), True)]
         return ap.panel(title, body, [" ←→ choose · ⏎ confirm · esc cancel ", " ⏎ confirm ", ""],
@@ -2334,6 +2360,9 @@ class App:
                         self.static = None
                         self.last_frame = frame_at = time.monotonic()
                     cols, rows = shutil.get_terminal_size((80, 24))
+                    if hasattr(self.terminal, "poll_background"):
+                        self.terminal.poll_background()
+                        self.light_background = self.terminal.light_background
                     t = time.monotonic() - self.start
                     self.writer.show(self.frame(cols, rows, t), cols, rows)
                 was_visible = visible

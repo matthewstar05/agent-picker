@@ -518,6 +518,15 @@ def light_ink(color):
     return mix(LIGHT_INK, color, 0.34)
 
 
+def light_surface(background):
+    return mix(background, (222, 218, 227), 0.2)
+
+
+def light_border(hue, background, illumination=0.0):
+    dim = mix(hue, LIGHT_INK, 0.58)
+    return mix(dim, mix(dim, background, 0.28), illumination)
+
+
 def fade(amount):
     """Ease color changes with zero slope and curvature at each palette stop."""
     return amount * amount * amount * (amount * (amount * 6 - 15) + 10)
@@ -786,7 +795,7 @@ def lit(lines, agent, t, sweep=None, *, light_background=None):
     rolling glow, or the launch bars."""
     width = len(lines[0].cells)
     light = light_background is not None
-    surface = mix(light_background, (222, 218, 227), 0.2) if light else None
+    surface = light_surface(light_background) if light else None
     out = []
     for y, line in enumerate(lines):
         if sweep is not None:
@@ -822,12 +831,13 @@ def border_ring(agent, t, bw, height=1, solid=None, *, light_background=None):
             cells[(r, c)] = fg(solid) + g
             continue
         hue = grad(agent, i / len(ring) * 2 - t * 0.12)
+        illumination = wave(i, t, length=16.0, speed=7.0) ** 2
         if light_background is None:
             dim, bright = mix(hue, (24, 24, 28), 0.5), mix(hue, (255, 255, 255), 0.45)
+            shade = mix(dim, bright, illumination)
         else:
-            dim = mix(hue, LIGHT_INK, 0.58)
-            bright = mix(dim, light_background, 0.28)
-        cells[(r, c)] = fg(mix(dim, bright, wave(i, t, length=16.0, speed=7.0) ** 2)) + g
+            shade = light_border(hue, light_background, illumination)
+        cells[(r, c)] = fg(shade) + g
     return cells
 
 
@@ -1377,7 +1387,7 @@ def choose(screen=None, only=None):
         light_background = writer.light_background()
         terminal.keyboard(screen == "usage")   # key releases, for holding Tab there
         if screen == "usage":
-            frame = usage_panel.render(usage, cols, rows, t)
+            frame = usage_panel.render(usage, cols, rows, t, light_background=light_background)
         elif screen == "connections":
             frame = centered(connections.render(connection_menu, sys.modules[__name__], cols, rows), cols, rows)
         elif screen == "scheduler":
