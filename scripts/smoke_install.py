@@ -33,7 +33,7 @@ def main():
             assert (commands_dir / (name + suffix)).is_file(), name
         # Help exits before any provider login, agent task or Herdr mutation.
         for name in ("fs", "herdr-fs", "star", "starcli", "grok", "grokbot", "grokbotcli",
-                     "schedule", "herdr-ai", "agent-route", "herdr-reset"):
+                     "schedule", "herdr-ai", "agent-route", "herdr-reset", "rexai"):
             subprocess.run([str(commands_dir / (name + suffix)), "--help"], env=env,
                            stdout=subprocess.DEVNULL, check=True, timeout=30)
         subprocess.run([str(launcher), "--picker-doctor"], env=env, check=True, timeout=30)

@@ -243,6 +243,12 @@ To switch a tab between Standard and a team, to a different team, or between sys
 
 Rerouting stops the agents, so unsaved conversation state in them is lost. herdr-ai remembers each tab's panes in `herdr-ai-tabs.json` in the local state directory.
 
+## rexai
+
+`rexai` lays out herdr-ai's Standard workbench in [Rex](https://www.superlogical.com/rex) instead of Herdr: Antigravity, Codex, the agent selector and Cursor or Kiro in an even 2x2 grid, Claude over a short usage panel on the right in a column of the same width, and `fs` in icon view along the bottom, 11 rows tall whatever the window's height so its icons show whole. Every pane starts in the directory you run it from. Quitting an agent reopens the selector in its pane, and Esc there leaves the pane's shell.
+
+Run it in a Rex tab with a single pane and that tab becomes the workbench, the pane you ran it in becoming the file browser. From a tab with other panes it opens a new tab, and outside Rex a new session. `rexai --selectors` puts an agent selector in each of the five agent panes, as `agent` does in Herdr; `--no-fs` keeps a shell in the terminal pane; a label names the tab. Teams, Star, refresh in place, handoff and the sidebar remain Herdr-only.
+
 ## File browser (fs)
 
 `fs` is a Finder-style file browser for the terminal, drawn like the agent selector. herdr-ai runs it in every setup's bottom-left pane in icon view (see above). Anywhere else, `fs` opens the current directory, `fs DIR` opens that folder, and `fs FILE` opens its folder with the file selected.

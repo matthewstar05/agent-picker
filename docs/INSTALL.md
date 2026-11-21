@@ -46,6 +46,7 @@ The core `agent` and `agent-picker` commands are always installed.
 | Grok Bot CLI (`grokbotcli`) | `grok`, `grokbot`, `grokbotcli` |
 | Prompt scheduler (`schedule`) | `schedule` |
 | Herdr helpers (`herdr`) | `herdr-ai`, `agent-route`, `herdr-reset` |
+| Rex workbench (`rex`) | `rexai` |
 
 Every selected name gets a real launcher, so short commands work in shells and
 subprocesses without creating aliases by hand. These options control installed

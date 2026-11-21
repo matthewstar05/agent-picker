@@ -21,6 +21,7 @@ COMMANDS = {
     'herdr-ai': ('herdr_ai.py', []),
     'agent-route': ('agent_route.py', []),
     'herdr-reset': ('herdr_reset.py', []),
+    'rexai': ('rex_ai.py', []),
 }
 
 COMPONENTS = {
@@ -30,6 +31,7 @@ COMPONENTS = {
     'grokbotcli': {'label': 'Grok Bot CLI', 'commands': ('grok', 'grokbot', 'grokbotcli')},
     'schedule': {'label': 'Prompt scheduler', 'commands': ('schedule',)},
     'herdr': {'label': 'Herdr helpers', 'commands': ('herdr-ai', 'agent-route', 'herdr-reset')},
+    'rex': {'label': 'Rex workbench', 'commands': ('rexai',)},
 }
 
 
