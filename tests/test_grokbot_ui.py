@@ -10,7 +10,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 import grokbot_ui as ui
-from star_input import Editor, Wake
+from star_input import Editor, Wake, visible_width
 
 
 class ByteTerminal:
@@ -216,16 +216,16 @@ class SelectionTest(unittest.TestCase):
     # The box's text row sits on screen row 10: the terminal answers the cursor query
     # with row 10, and the cursor is on the box's first text line.
     def press(self, col, row=10):
-        return ("mouse", (0, 3 + col, row, True))
+        return ("mouse", (0, 4 + col, row, True))
 
     def test_dragging_with_the_mouse_selects_and_backspace_deletes_it(self):
-        script = [self.press(0), ("report", (10, 14)), ("mouse", (32, 3 + 4, 10, True)),
-                  ("mouse", (0, 3 + 4, 10, False)), "backspace"]
+        script = [self.press(0), ("report", (10, 14)), ("mouse", (32, 4 + 4, 10, True)),
+                  ("mouse", (0, 4 + 4, 10, False)), "backspace"]
         self.assertEqual(self.type("hello world", script), (" world", 0))
 
     def test_dragging_backward_and_typing_replaces(self):
-        script = [self.press(10), ("report", (10, 14)), ("mouse", (32, 3 + 6, 10, True)),
-                  ("mouse", (0, 3 + 6, 10, False)), ("text", "W")]
+        script = [self.press(10), ("report", (10, 14)), ("mouse", (32, 4 + 6, 10, True)),
+                  ("mouse", (0, 4 + 6, 10, False)), ("text", "W")]
         self.assertEqual(self.type("hello world", script), ("hello Wd", 7))
 
     def test_a_click_moves_the_cursor_and_a_double_click_picks_the_word(self):
@@ -267,6 +267,50 @@ class SelectionTest(unittest.TestCase):
         self.assertNotEqual(ui.COLORS["selection"], ui.COLORS["select"])   # visible on the box's background
         editor.anchor = None
         self.assertEqual(editor.paint(0, "hello world"), editor.fg("text", "hello world"))
+
+
+class ComposerEdgeTest(unittest.TestCase):
+    def draw(self, editor, width):
+        out = io.StringIO()
+        with patch("sys.stdout", out), patch("shutil.get_terminal_size", return_value=os.terminal_size((width, 30))):
+            editor.draw()
+        painted = out.getvalue().rsplit("\r", 1)[0]
+        return [line.replace("\r", "") for line in painted.split("\r\n")]
+
+    def editor(self):
+        editor = ui.CursorInput([("help", "", "show commands")])
+        editor.reading, editor.drawn_rows, editor.cursor_row = True, 0, 0
+        editor.sel = 0
+        editor.hint, editor.notice = (lambda: ("Grok Bot · Auto", "Cloud · bypass permissions")), None
+        editor.text, editor.pos = "hello", 5
+        return editor
+
+    def test_prompt_keeps_a_default_cell_on_each_edge(self):
+        editor = self.editor()
+        top, prompt, bottom, _ = self.draw(editor, 48)
+
+        self.assertTrue(top.endswith(" " + ui.GRAY + "▄" * 46 + ui.RESET))
+        self.assertTrue(prompt.startswith(" " + ui.BACKGROUND))
+        self.assertTrue(bottom.startswith(" " + ui.GRAY))
+        self.assertEqual([visible_width(line) for line in (top, prompt, bottom)], [47] * 3)
+        self.assertEqual(editor.cursor_col, 8)
+
+    def test_selected_command_row_keeps_the_same_edge_spacing(self):
+        editor = self.editor()
+        editor.text, editor.pos = "/help", 5
+        *_, selected = self.draw(editor, 48)
+
+        self.assertTrue(selected.startswith(" " + ui.BACKGROUND))
+        self.assertIn("show commands", selected)
+        self.assertLessEqual(visible_width(selected), 47)
+
+    def test_footer_fits_without_writing_the_last_column(self):
+        editor = self.editor()
+        editor.text, editor.pos = "", 0
+        *_, footer = self.draw(editor, 28)
+        self.assertIn("Cloud · bypass", footer)
+        self.assertIn("…", footer)
+        self.assertLessEqual(visible_width(footer), 27)
 
 
 if __name__ == "__main__":

@@ -199,6 +199,8 @@ class CursorInput(Editor):
     queued messages above it, and a footer or command menu below."""
 
     PLACEHOLDER = "Ask Grok Bot to do anything"
+    GUTTER = " "
+    prompt_width = len(GUTTER) + 2
 
     def __init__(self, commands, **kwargs):
         super().__init__(commands, colors=COLORS, mouse=True, **kwargs)
@@ -230,16 +232,19 @@ class CursorInput(Editor):
         self.text, self.pos = "", 0
 
     def block(self, rows, width, ghost=""):
-        """The shaded message block: half-block edges around › rows, each padded to width."""
-        lines = [GRAY + "▄" * (width - 1) + RESET]
+        """Leave the outer columns at the terminal's default background."""
+        fill = width - len(self.GUTTER) - 1
+        lines = [self.GUTTER + GRAY + "▄" * fill + RESET]
         for index, (kind, piece) in enumerate(rows):
-            body = ("› " if kind == "first" else "  ") + piece
-            occupied = sum(cell_width(ch) for ch in body)
-            extra = ghost[:max(0, width - 1 - occupied)] if index == len(rows) - 1 else ""
-            text = self.fg("mark", body[:2], True) + self.paint(index, piece) + self.fg("ghost", extra)
-            text += " " * max(0, width - 1 - occupied - len(extra))
-            lines.append(BACKGROUND + text.replace(RESET, RESET + BACKGROUND) + RESET)
-        lines.append(GRAY + "▀" * (width - 1) + RESET)
+            mark = "› " if kind == "first" else "  "
+            room = fill - len(mark) - cell_width_of(piece)
+            extra = ghost if index == len(rows) - 1 else ""
+            if cell_width_of(extra) > room:
+                extra = fit_cells(extra, room)
+            text = self.fg("mark", mark, True) + self.paint(index, piece) + self.fg("ghost", extra)
+            text += " " * (room - cell_width_of(extra))
+            lines.append(self.GUTTER + BACKGROUND + text.replace(RESET, RESET + BACKGROUND) + RESET)
+        lines.append(self.GUTTER + GRAY + "▀" * fill + RESET)
         return lines
 
     def working_line(self, width):
@@ -256,20 +261,25 @@ class CursorInput(Editor):
             left = "tab to queue message"
         if self.notice and time.time() < self.notice[1]:
             left = self.notice[0]
-        room = max(0, width - len(right) - 4)
-        if len(left) > room and "Goal " in left:
+        available = width - self.prompt_width - 1
+        if cell_width_of(right) > available:
+            right = fit_cells(right, available)
+        room = available - cell_width_of(right) - 1
+        if cell_width_of(left) > room and "Goal " in left:
             left = left[left.index("Goal "):]      # the goal's state matters more than the model label
-        left = left if len(left) <= room else left[:max(0, room - 1)] + "…"
+        if cell_width_of(left) > room:
+            left = fit_cells(left, room)
         goal = left.find("Goal ")
         painted = (self.fg("note", left[:goal]) + self.fg("goal", left[goal:], True)) if goal >= 0 \
             else self.fg("note", left)
-        return "  " + painted + " " * max(1, width - 3 - len(left) - len(right)) + self.fg("mode", right)
+        gap = available - cell_width_of(left) - cell_width_of(right)
+        return " " * self.prompt_width + painted + " " * gap + self.fg("mode", right)
 
     def draw(self, final=False):
         self.track_mouse(final)
         width = self.columns()
         out = [self.rewind() + "\x1b[J"]
-        rows, (cursor_row, cursor_col) = self.wrap(2, width)
+        rows, (cursor_row, cursor_col) = self.wrap(self.prompt_width, width - 1)
         if final and self.working is not None:
             sys.stdout.write("".join(out))     # a queued message shows above the box, not as sent
             sys.stdout.flush()
@@ -296,14 +306,20 @@ class CursorInput(Editor):
         self.text_line = len(head) + 1
         if items:
             top = max(0, min(self.sel - MENU_ROWS // 2, len(items) - MENU_ROWS))
+            room = width - len(self.GUTTER) - 1
             for index, (_, label, note) in enumerate(items[top:top + MENU_ROWS], top):
-                text = ("  " + label.ljust(20) + note)[:width - 1]
+                heading = "  " + label.ljust(20)
+                text = heading + note
+                if cell_width_of(text) > room:
+                    text = fit_cells(text, room)
                 if index == self.sel:
-                    lines.append(self.bg("select", self.fg("pick", text.ljust(width - 1))))
+                    padded = text + " " * (room - cell_width_of(text))
+                    lines.append(self.GUTTER + self.bg("select", self.fg("pick", padded)))
                 elif GOAL_COMMAND.match(label):
-                    lines.append("  " + self.fg("goal", label.ljust(20), True) + self.fg("label", note[:max(0, width - 23)]))
+                    lines.append(self.GUTTER + self.fg("goal", text[:len(heading)], True)
+                                 + self.fg("label", text[len(heading):]))
                 else:
-                    lines.append(self.fg("label", text))
+                    lines.append(self.GUTTER + self.fg("label", text))
         else:
             lines.append(self.footer(width))
         out.append("\r\n".join(lines))

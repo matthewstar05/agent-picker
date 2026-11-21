@@ -181,6 +181,8 @@ class Editor:
     """commands: [(name, args hint, description)]. values(command) -> [(value, note)]
     for a command's argument. usage: {command: times used}, to rank the menu."""
 
+    prompt_width = 2
+
     def __init__(self, commands, values=None, history=None, usage=None, colors=None, image_dir=None, mouse=False):
         self.commands = commands
         self.images = {}          # [Image #n] -> its file, for the whole session
@@ -351,7 +353,7 @@ class Editor:
         if items:
             self.sel = max(0, min(self.sel, len(items) - 1))
         ghost = "" if final else self.ghost(items)
-        rows, (crow, ccol) = self.wrap(2, w)
+        rows, (crow, ccol) = self.wrap(self.prompt_width, w)
         lines = [] if final else [rule]
         mark = self.fg("mark", "› ", True)
         for k, (kind, piece) in enumerate(rows):
@@ -520,7 +522,8 @@ class Editor:
         row = y - self.origin - self.text_line
         if not 0 <= row < len(self.row_starts):
             return None if not clamp else 0 if row < 0 else len(self.text)
-        start, n, col = self.row_starts[row], self.row_lens[row], x - 3   # after the 2-cell prompt mark
+        start, n = self.row_starts[row], self.row_lens[row]
+        col = x - 1 - self.prompt_width
         i = width = 0
         while i < n and width + cell_width(self.text[start + i]) <= col:
             width += cell_width(self.text[start + i])
