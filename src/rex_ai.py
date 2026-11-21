@@ -59,9 +59,6 @@ PANES = {
 }
 AGENT_PANES = ("agy", "codex", "claude", "picker", "cursor")
 SELECTORS = {**{role: ["--picker-return"] for role in AGENT_PANES}, "usage": ["--picker-usage"]}
-LABELS = {"agy": "Antigravity", "codex": "Codex", "claude": "Claude", "cursor": "Cursor/Kiro",
-          "picker": "agent", "usage": "usage", "terminal": "fs"}
-SELECTOR_LABELS = {role: "agent" for role in AGENT_PANES}
 
 # Each is the share kept by the left or upper part. Three equal columns, the
 # 2x2 agents in equal rows, and a usage panel a little over a quarter of the
@@ -157,8 +154,11 @@ def dry():
     return os.environ.get("REXAI_DRY", "0") == "1"
 
 
-def shell(role, cwd, labels):
-    return {"block": {"flavor": SHELL, "label": labels.get(role, role), "options": {"cwd": cwd}}}
+def shell(cwd, label=None):
+    block = {"flavor": SHELL, "options": {"cwd": cwd}}
+    if label is not None:
+        block["label"] = label
+    return {"block": block}
 
 
 def split(left, right, direction, ratio):
@@ -286,24 +286,22 @@ def fit_main(argv):
     return 0
 
 
-def build(rex, session, root, cwd, commands=None, labels=None):
+def build(rex, session, root, cwd, commands):
     """Split root into the workbench. root stays the terminal, bottom left.
     Returns {role: block_id}, with the fs border's share under "ratio"."""
-    commands = commands or PANES
-    labels = labels or LABELS
     panes = {"terminal": root}
     ratio = terminal_ratio(rex, session, root)   # measured before the splits shrink root
-    rex("block", "rename", "-s", session, root, labels.get("terminal", "terminal"), json_out=False)
+    rex("block", "rename", "-s", session, root, "fs", json_out=False)
     # The right column: Claude over usage.
     out = rex.api(session, "session.new_split", {
         "anchor_id": root, "direction": "horizontal", "side": "after", "ratio": SIZES["side"],
-        "layout": split(shell("claude", cwd, labels), shell("usage", cwd, labels), "vertical", SIZES["usage"])})
+        "layout": split(shell(cwd), shell(cwd, label="usage"), "vertical", SIZES["usage"])})
     panes["claude"], panes["usage"] = out["block_ids"]
     # The 2x2 grid above the terminal: Antigravity and the selector on the left,
     # Codex and Cursor/Kiro on the right.
     rows = SIZES["rows"]
-    grid = split(split(shell("agy", cwd, labels), shell("picker", cwd, labels), "vertical", rows),
-                 split(shell("codex", cwd, labels), shell("cursor", cwd, labels), "vertical", rows),
+    grid = split(split(shell(cwd), shell(cwd), "vertical", rows),
+                 split(shell(cwd), shell(cwd), "vertical", rows),
                  "horizontal", SIZES["columns"])
     out = rex.api(session, "session.new_split", {
         "anchor_id": root, "direction": "vertical", "side": "before", "ratio": ratio,
@@ -352,7 +350,7 @@ def main(argv=None, rex=None, cwd=None):
         rex = Rex(binary)
     cwd = cwd or os.getcwd()
     label = argv[0] if argv else (Path(cwd).name or "home")
-    commands, labels = (SELECTORS, {**LABELS, **SELECTOR_LABELS}) if selectors else (PANES, LABELS)
+    commands = SELECTORS if selectors else PANES
     fs = browser_wanted(no_fs)
 
     session, block = os.environ.get("REX_SESSION"), os.environ.get("REX_BLOCK")
@@ -379,13 +377,13 @@ def main(argv=None, rex=None, cwd=None):
         first = out["initial_windows"][0]
         window, root = first["window_id"], first["block_ids"][0]
 
-    panes = build(rex, session, root, cwd, commands, labels)
+    panes = build(rex, session, root, cwd, commands)
     ratio = panes.pop("ratio")
     if in_place:
         # The pane rexai runs in takes the terminal's place, keeping its
         # history, and its old tab closes with the spare shell.
         rex("swap", "-s", session, block, root, json_out=False)
-        rex("block", "rename", "-s", session, block, labels["terminal"], json_out=False)
+        rex("block", "rename", "-s", session, block, "fs", json_out=False)
         panes["terminal"] = block
     if os.environ.get("REX_SESSION"):
         rex("focus", "-s", session, window, json_out=False)

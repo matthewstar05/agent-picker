@@ -85,11 +85,22 @@ class RexAiTests(unittest.TestCase):
         self.assertEqual(grid["ratio"], round(1 - (rex_ai.FS_ROWS + rex_ai.CHROME) / 74, 4))
         self.assertEqual(grid["layout"]["split"]["ratio"], 0.5)
         self.assertEqual(grid["layout"]["split"]["before"]["split"]["ratio"], 0.5)
-        labels = [node["block"]["label"] for half in ("before", "after")
-                  for node in grid["layout"]["split"][half]["split"].values() if isinstance(node, dict)]
-        self.assertEqual(labels, ["Antigravity", "agent", "Codex", "Cursor/Kiro"])
         self.assertTrue(all(n["block"]["options"]["cwd"] == "/work/proj"
                             for n in side["layout"]["split"].values() if isinstance(n, dict)))
+
+    def test_only_fs_and_usage_have_fixed_labels(self):
+        for argv in ([], ["--selectors"]):
+            with self.subTest(argv=argv):
+                rex = FakeRex()
+                self.run_main(rex, argv)
+                side, grid = (split["layout"]["split"] for split in rex.splits)
+                self.assertEqual(side["after"]["block"]["label"], "usage")
+                self.assertNotIn("label", side["before"]["block"])
+                for column in ("before", "after"):
+                    for row in ("before", "after"):
+                        self.assertNotIn("label", grid[column]["split"][row]["block"])
+                renames = [call for call in rex.calls if call[:2] == ("block", "rename")]
+                self.assertEqual(renames, [("block", "rename", "-s", "session:new", "block:root", "fs")])
 
     def test_fs_keeps_its_rows_in_any_tab_height(self):
         for rows, want in ((44, 0.6875), (100, 0.8558)):
