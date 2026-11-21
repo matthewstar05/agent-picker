@@ -932,6 +932,7 @@ def main(argv=None):
         parser().error("--output-format requires --print")
     gateway, conversation = Gateway(), None
     output = Output(args.output_format, interactive=not args.printing and sys.stdin.isatty(), verbose=args.verbose)
+    rex_title = False
     if command not in ("usage", "ls", "machines"):
         gateway.warm()      # EnsureSandBox overlaps the machine lookup and the user's typing
     try:
@@ -985,6 +986,9 @@ def main(argv=None):
         if not sys.stdin.isatty():
             raise GrokError("Use --print for non-interactive tasks.")
         from grokbot_ui import CursorInput, Working, chip as ui_chip, fg as ui_fg, goal_line
+        if os.environ.get("REX_SESSION") and sys.stdout.isatty():
+            rex_title = True
+            print("\x1b]2;Grok Bot\x07", end="", flush=True)
         banner(cwd, session, mode)
         editor = CursorInput(COMMANDS, history=[m["user"] for m in (session or {}).get("messages", [])],
                              image_dir=str(store.directory().parent / "attachments"))
@@ -1159,6 +1163,8 @@ def main(argv=None):
     finally:
         if conversation:
             conversation.release()
+        if rex_title:
+            print("\x1b]2;\x07", end="", flush=True)
 
 
 if __name__ == "__main__":

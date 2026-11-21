@@ -336,6 +336,21 @@ class GrokBotTests(unittest.TestCase):
             self.assertIn("Answer in one line.", sent[1])
         self.assertLess(self.gateway.sent[1][1].index("Answer in one line."), self.gateway.sent[1][1].index("Second"))
 
+    def test_interactive_rex_pane_uses_grok_bot_title_until_exit(self):
+        for rex_session, tty in (("session:rex", True), ("session:rex", False), ("", True)):
+            with self.subTest(rex_session=rex_session, tty=tty), \
+                 patch.dict(os.environ, REX_SESSION=rex_session), \
+                 patch.object(cli, "Gateway", return_value=self.gateway), \
+                 patch.object(cli.sys.stdin, "isatty", return_value=True), \
+                 contextlib.redirect_stdout(io.StringIO()) as output, \
+                 patch.object(output, "isatty", return_value=tty):
+                self.assertEqual(cli.main(["--cloud", "--workspace", str(self.root), "/quit"]), 0)
+                if rex_session and tty:
+                    self.assertTrue(output.getvalue().startswith("\x1b]2;Grok Bot\x07"))
+                    self.assertTrue(output.getvalue().endswith("\x1b]2;\x07"))
+                else:
+                    self.assertNotIn("\x1b]2;", output.getvalue())
+
     def test_piped_stdin_joins_a_prompt_argument(self):
         with patch.object(cli, "Gateway", return_value=self.gateway), patch.object(cli, "select_machine", return_value=MACHINE), \
              patch.object(cli.time, "sleep"), patch.object(cli.sys, "stdin", io.StringIO("def broken(): pass")), \
