@@ -380,18 +380,16 @@ class Lit:
 
 
 def light(rows, lit, width_hint=None):
-    """Glow behind every transparent cell of rows (in place), brighten the icon's pixels,
-    and draw the launch sweep."""
+    """Fill transparent pixels, apply the dark-mode glow, and draw the launch sweep."""
     width = width_hint or (len(rows[0]) if rows else 1)
+    dark = lit.light_background is None
     for y, row in enumerate(rows):
         for x, (ch, fg, bg, bold) in enumerate(row):
             if bg is None:
                 bg = lit.back(x, y, width)
-            elif lit.boost:
+            elif dark and lit.boost:
                 bg = ap.mix(bg, WHITE, 0.12 * lit.boost)
-            if fg and lit.light_background is not None:
-                fg = ap.light_ink(fg)
-            elif fg and lit.active and not bold:
+            if dark and fg and lit.active and not bold:
                 fg = ap.mix(fg, WHITE, 0.06 + 0.18 * lit.boost)
             row[x] = (ch, fg, bg, bold)
         if lit.sweep is not None:
@@ -896,16 +894,20 @@ def tile_name(name, width, lines):
     return [head.rstrip(" "), middle(rest, width)]
 
 
-def filename_cells(entry, width, color, bold=False, lines=1, theme=None, selected=False):
+def filename_cells(entry, width, color, bold=False, lines=1, theme=None, selected=False, *, light_text=False):
     """A GitHub marker belongs to the label, leaving the folder icon plain."""
     width = max(0, width)
     marker = cells_of("★ ", WHITE, None, bold)[:width] if entry.kind == "folder-github" else []
     room = width - len(marker)
     names = tile_name(entry.name, room, lines) if room else [""]
-    return [(marker if i == 0 else []) + (label_cells(theme, name, selected, entry.hidden, entry.kind, bold,
-                                                        sum(len(n) for n in names[:i]))
-                                            if theme is not None else cells_of(name, color, None, bold))
+    rows = [(marker if i == 0 else []) + (label_cells(theme, name, selected, entry.hidden, entry.kind, bold,
+                                                       sum(len(n) for n in names[:i]))
+                                           if theme is not None else cells_of(name, color, None, bold))
             for i, name in enumerate(names)]
+    if light_text:
+        return [[(ch, ap.light_ink(fg) if fg is not None else None, bg, weight)
+                 for ch, fg, bg, weight in row] for row in rows]
+    return rows
 
 
 class Region:
@@ -1288,7 +1290,10 @@ class App:
         side = 1 if g.lids else 0
         iw, ih = g.tile_w - 2 * side, g.tile_h - 2 * side
         inner = [[BLANK] * iw for _ in range(ih)]
-        name_color = filename_color(self.theme(), bool(lit), entry.hidden, entry.kind)
+        theme = self.theme()
+        selected = lit is not None
+        light_text = selected and lit.light_background is not None
+        name_color = filename_color(theme, selected, entry.hidden, entry.kind)
         try:
             icon = self.entry_icon(entry, g.size, accent)
         except Exception:
@@ -1297,12 +1302,13 @@ class App:
             icon = [[dim_cell(c, 0.45) if c[1] or c[2] else c for c in row] for row in icon]
         if g.inline:
             put(inner[0], 1, icon[0])
-            put(inner[0], 4, filename_cells(entry, iw - 5, name_color, bool(lit), theme=self.theme(), selected=bool(lit))[0])
+            put(inner[0], 4, filename_cells(entry, iw - 5, name_color, selected, theme=theme,
+                                            selected=selected, light_text=light_text)[0])
         else:
             x = (iw - len(icon[0])) // 2
             for y, row in enumerate(icon):
                 put(inner[y], x, row)
-            names = filename_cells(entry, iw, name_color, bool(lit), g.lines, self.theme(), bool(lit))
+            names = filename_cells(entry, iw, name_color, selected, g.lines, theme, selected, light_text=light_text)
             # A one-line name takes the last row, leaving a row between it and the icon,
             # so the icon and name sit evenly inside the highlight's ring.
             first = len(icon) + g.lines - len(names)
@@ -1353,9 +1359,14 @@ class App:
                 put(cells, 1, self.entry_icon(entry, "mini", self.accent(0.3))[0])
             except Exception:
                 pass
-            main = filename_color(self.theme(), selected, entry.hidden, entry.kind)
-            put(cells, 5, filename_cells(entry, name_w, main, selected, theme=self.theme(), selected=selected)[0])
+            theme = self.theme()
+            light_text = selected and self.light_background is not None
+            main = filename_color(theme, selected, entry.hidden, entry.kind)
+            put(cells, 5, filename_cells(entry, name_w, main, selected, theme=theme,
+                                         selected=selected, light_text=light_text)[0])
             side = TEXT if selected else SOFT
+            if light_text:
+                side = ap.light_ink(side)
             for key, at, width in columns[1:]:
                 if key == "date":
                     put(cells, at, cells_of(when(entry.mtime, width), side))
@@ -1555,11 +1566,15 @@ class App:
         for i in range(first, min(n, first + rows)):
             e = self.entries[i]
             cells = [BLANK] * cols
-            put(cells, 0, cells_of("❯ " if i == self.index else "  ",
-                                   filename_color(self.theme(), i == self.index, e.hidden, e.kind), None, i == self.index))
-            put(cells, 2, filename_cells(e, cols - 2, filename_color(self.theme(), i == self.index, e.hidden, e.kind),
-                                         i == self.index, theme=self.theme(), selected=i == self.index)[0])
-            if i == self.index:
+            selected = i == self.index
+            light_text = selected and self.light_background is not None
+            theme = self.theme()
+            color = filename_color(theme, selected, e.hidden, e.kind)
+            put(cells, 0, cells_of("❯ " if selected else "  ", ap.light_ink(color) if light_text else color,
+                                   bold=selected))
+            put(cells, 2, filename_cells(e, cols - 2, color, selected, theme=theme,
+                                         selected=selected, light_text=light_text)[0])
+            if selected:
                 light([cells], self.lit_for(e, t))
             self.hits.append((1, len(out) + 1, cols, 1, i))
             out.append([(1, paint(cells))])
