@@ -63,6 +63,10 @@ FAST_POLL = 0.5
 QUIET_POLLS = 20        # about 10 s without a new entry before slowing to --poll
 CONFIRM_POLL = 0.25     # the second idle check after the final reply
 ROSTER_EVERY = 8
+# The bot is asked to end its final message with the request's marker, but a model can
+# forget it. As in Claude Code and Codex, a turn also ends when the agent stops: once the
+# bot has been idle this long with no new transcript entries, its last reply is the answer.
+IDLE_FINISH = 90
 
 # Reverse-engineering requests get REA's local CLI; Grok Bot cannot attach a local MCP server.
 REVERSE = re.compile(r"\brevers(?:e|ing)[- ]?engineer|\bdecompil|\bdisassembl|\bREA\b", re.I)
@@ -540,6 +544,7 @@ class Conversation:
         deadline = time.monotonic() + self.timeout
         shown = set(pending.get("shown", []))
         done, final_text, settled, polls, quiet, seen = False, "", 0, 0, 0, None
+        last_reply, idle_since = "", None   # the latest reply, and since when the bot has sat idle without new entries
         while time.monotonic() < deadline:
             entries = self.watch_read(self.gateway.transcript, deadline)
             polls += 1
@@ -563,13 +568,23 @@ class Conversation:
                 elif entries and not set(pending.get("before", [])).intersection(ids):
                     raise GrokError("Transcript coverage was lost. Inspect the bot in Grok Bot; the pending request has been preserved.")
             start = ids.index(root) + 1 if root in ids else 0
+            # Grok Bot can carry a turn on under a new requestId with no user prompt of its
+            # own, for example when it wakes after background work to post its report. Those
+            # entries belong to this turn until someone sends another prompt from the app.
+            prompted = {e.get("requestId") for e in entries if e.get("role") == "user" and e.get("requestId")}
+            others = False
             for entry in entries[start:]:
                 ident = entry.get("id")
+                if entry.get("role") == "user" and entry.get("clientNonce") != pending["nonce"]:
+                    others = True
                 if not ident or ident in pending.get("before", []):
                     continue
-                if not root and marker(pending["nonce"]) not in entry_text(entry):
+                final = marker(pending["nonce"]) in entry_text(entry)
+                if not root and not final:
                     continue  # Wait for the nonce anchor before displaying or approving anything.
-                if pending.get("request_id") and entry.get("requestId") != pending["request_id"]:
+                ours = pending.get("request_id")
+                if ours and entry.get("requestId") != ours and not final and (
+                        others or not entry.get("requestId") or entry.get("requestId") in prompted):
                     continue
                 kind, message = entry.get("kind"), entry.get("message") or {}
                 if kind == "send-message" and isinstance(message, dict):
@@ -582,22 +597,30 @@ class Conversation:
                             store.save(self.session)
                         continue
                 text = entry_text(entry)
-                if kind == "send-message" and marker(pending["nonce"]) in text:
-                    done, final_text = True, text.replace(marker(pending["nonce"]), "").strip()
-                if ident in shown:
-                    continue
-                if kind == "send-message" and text and (not isinstance(message, dict) or message.get("type") in (None, "text")):
-                    self.output.text(text.replace(marker(pending["nonce"]), "").strip(), final=marker(pending["nonce"]) in text)
-                elif kind in ("tool-call", "tool-result"):
-                    label = entry.get("toolName") or entry.get("name") or entry.get("tool") or kind
-                    self.output.event({"type": "tool_call", "subtype": "started" if kind == "tool-call" else "completed",
-                                       "label": str(label), "entry_id": ident})
-                shown.add(ident)
+                reply = kind == "send-message" and text and (not isinstance(message, dict) or message.get("type") in (None, "text"))
+                if reply:
+                    last_reply = text.replace(marker(pending["nonce"]), "").strip()
+                if kind == "send-message" and final:
+                    done, final_text = True, last_reply
+                if ident not in shown:
+                    if reply:
+                        self.output.text(last_reply, final=final)
+                    elif kind in ("tool-call", "tool-result"):
+                        label = entry.get("toolName") or entry.get("name") or entry.get("tool") or kind
+                        self.output.event({"type": "tool_call", "subtype": "started" if kind == "tool-call" else "completed",
+                                           "label": str(label), "entry_id": ident})
+                    shown.add(ident)
+                if done:
+                    break   # nothing after the final reply belongs to this request
             if quiet == 0 or polls == 1 or done:
                 pending["shown"] = list(shown)
                 store.save(self.session)
+            if quiet == 0:
+                idle_since = None
             idle = False
-            if done or (not accepted and self.may_be_lost(pending)) or polls % ROSTER_EVERY == 0:
+            # One extra roster read confirms the bot is still idle once IDLE_FINISH has passed.
+            if done or (not accepted and self.may_be_lost(pending)) or polls % ROSTER_EVERY == 0 \
+                    or (accepted and last_reply and idle_since is not None and time.monotonic() - idle_since >= IDLE_FINISH):
                 remote = self.watch_read(self.gateway.agent, deadline)
                 if remote is None:
                     raise GrokError("The bot disappeared while this request was running.")
@@ -605,7 +628,17 @@ class Conversation:
                     self.undelivered(pending)
                     raise GrokError("Grok Bot never received this request, so nothing ran. Send it again once Grok Bot accepts prompts.")
                 idle = remote.get("isRunningTurn") is False and not remote.get("isRunning") and not remote.get("isComposingMessage")
+                if not idle:
+                    idle_since = None
+                elif idle_since is None:
+                    idle_since = time.monotonic()
             settled = settled + 1 if done and idle else 0
+            if not done and idle and accepted and last_reply and quiet >= QUIET_POLLS \
+                    and time.monotonic() - idle_since >= IDLE_FINISH:
+                # The bot stopped without the marker. Its last reply is the answer, as when any agent's turn ends.
+                done, final_text, settled = True, last_reply, 2
+                if self.output.kind == "text" and not self.output.interactive:
+                    self.output.text(final_text)   # -p printed it only as progress, so print it as the answer
             if settled >= 2:
                 route = self.routed(pending)
                 self.session["messages"].append({"user": pending["text"], "assistant": final_text, "at": time.time(),

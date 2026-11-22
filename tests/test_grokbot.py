@@ -95,6 +95,53 @@ class GrokBotTests(unittest.TestCase):
         self.assertIsNone(saved["pending"])
         self.assertEqual(saved["messages"][-1]["user"], "Fix the tests")
 
+    def follow_up(self, entries):
+        """The 2026-11-22 shape: progress under the prompt's request, the rest under a follow-up one."""
+        def send(ident, prompt, nonce, machine=None):
+            self.gateway.sent.append((ident, prompt, nonce, machine))
+            self.gateway.entries += [{"kind": "message", "id": "root", "role": "user", "clientNonce": nonce, "requestId": "run"},
+                                     {"kind": "send-message", "id": "plan", "requestId": "run",
+                                      "message": {"type": "text", "content": "I'll report back with counts."}}]
+            self.gateway.entries += [dict(e, message={"type": "text", "content": e["message"]["content"].replace("NONCE", cli.marker(nonce))})
+                                     if "message" in e else e for e in entries]
+        self.gateway.send = send
+
+    def test_final_reply_under_a_follow_up_request_ends_the_turn(self):
+        self.follow_up([{"kind": "send-message", "id": "report", "requestId": "wake",
+                         "message": {"type": "text", "content": "Labeled 49 emails.\n\nNONCE"}}])
+        c = self.conversation("text")
+        c.output.interactive = True
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            c.turn("Label my job emails")
+        self.assertIn("Labeled 49 emails.", output.getvalue())
+        saved = sessions.load(BOT)
+        self.assertIsNone(saved["pending"])
+        self.assertEqual(saved["messages"][-1]["assistant"], "Labeled 49 emails.")
+
+    def test_a_reply_without_the_marker_ends_once_the_bot_stays_idle(self):
+        self.follow_up([{"kind": "send-message", "id": "report", "requestId": "wake",
+                         "message": {"type": "text", "content": "Labeled 49 emails."}}])
+        c = cli.Conversation(self.gateway, cli.Output("text"), self.root, MACHINE, None, poll=0)
+        clock = iter(range(0, 10**9, 5))
+        with patch.object(cli.time, "monotonic", side_effect=lambda: next(clock)), \
+             contextlib.redirect_stdout(io.StringIO()) as output:
+            c.turn("Label my job emails")
+        self.assertEqual(output.getvalue().strip(), "Labeled 49 emails.")   # -p prints the answer on stdout
+        self.assertIsNone(sessions.load(BOT)["pending"])
+
+    def test_a_prompt_sent_from_the_app_is_not_taken_for_this_turn(self):
+        self.follow_up([{"kind": "message", "id": "app", "role": "user", "requestId": "app-run", "content": "Something else"},
+                        {"kind": "send-message", "id": "other", "requestId": "app-run",
+                         "message": {"type": "text", "content": "Unrelated reply"}},
+                        {"kind": "send-message", "id": "late", "requestId": "wake-later",
+                         "message": {"type": "text", "content": "Also unrelated"}}])
+        c = self.conversation("stream-json")
+        c.timeout = 0.05
+        with contextlib.redirect_stdout(io.StringIO()) as output, self.assertRaises(gateway.GrokError):
+            c.turn("Label my job emails")
+        self.assertNotIn("Unrelated", output.getvalue())
+        self.assertNotIn("Also unrelated", output.getvalue())
+
     def test_unknown_receipt_observes_exact_nonce_without_replay(self):
         self.gateway.unknown = True
         c = self.conversation()

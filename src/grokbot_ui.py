@@ -119,7 +119,12 @@ class Working:
     def ask(self, prompt):
         reply = queue.Queue(1)
         self.questions.put((prompt, reply))
-        return reply.get()
+        while True:
+            try:
+                return reply.get(timeout=0.2)
+            except queue.Empty:
+                if self.cancel.is_set():
+                    raise KeyboardInterrupt from None
 
     def wait(self, seconds):
         if self.cancel.wait(seconds):
@@ -185,6 +190,11 @@ class Working:
                             reply.put("")
                 except EOFError:
                     self.cancel.set()     # ctrl-d twice on an empty box: stop this turn
+        except BaseException:
+            # A signal (a closed pane, kill, Ctrl+\) arrives here as KeyboardInterrupt. Stop
+            # the turn too, or join() waits forever on a thread that is still watching.
+            self.cancel.set()
+            raise
         finally:
             self.thread.join()
             self.flush(raw=False)

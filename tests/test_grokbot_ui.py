@@ -67,6 +67,8 @@ class Box:
             return step[5:]                      # enter on that text
         if step.startswith("wake:"):
             raise Wake(step[5:], initial)
+        if step == "signal":
+            raise KeyboardInterrupt              # SIGTERM or SIGHUP, as platform_runtime's handler raises it
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:       # wait for the turn the way the editor does
             woke = idle()
@@ -109,6 +111,20 @@ class WorkingTest(unittest.TestCase):
                 runner.wait(0.01)
         _, runner, _ = self.run_turn(["wake:interrupt"], job)
         self.assertIsInstance(runner.error, KeyboardInterrupt)
+
+    def test_a_signal_stops_the_turn_instead_of_hanging_on_it(self):
+        stopped = []
+
+        def job(runner):
+            try:
+                while True:
+                    runner.wait(0.01)
+            except KeyboardInterrupt:
+                stopped.append(True)
+                raise
+        with self.assertRaises(KeyboardInterrupt):
+            self.run_turn(["signal"], job)
+        self.assertEqual(stopped, [True])
 
     def test_slash_stop_interrupts_instead_of_queueing(self):
         def job(runner):
