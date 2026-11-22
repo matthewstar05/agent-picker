@@ -326,7 +326,8 @@ class Conversation:
         self.mark(state)
         if getattr(self.output, "interactive", False):
             # Rex lists the pane in its sidebar from this (Program Status Protocol).
-            rex_status.report(state if state in ("working", "blocked") else "idle", "grokbot",
+            # Rex picks its icon from the app id, so Grok Bot (it runs on Cursor) shows Cursor's logo.
+            rex_status.report(state if state in ("working", "blocked") else "idle", rex_status.GROKBOT_APP,
                               kind="permission" if state == "blocked" else None)
         pane = os.environ.get("HERDR_PANE_ID")
         if os.environ.get("HERDR_ENV") != "1" or not pane:

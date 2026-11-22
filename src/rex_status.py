@@ -31,6 +31,9 @@ KINDS = ("permission", "question", "auth")
 APP = re.compile(r"[A-Za-z0-9_.+-]{1,32}")
 # Agents that never send OSC 7501 and the app id each is reported under.
 PICKER_REPORTED = {"Cursor": "cursor-agent"}
+# Rex picks a pane's icon from its app id, and has none for Grok Bot, which runs
+# on Cursor's backend. Reporting as Cursor gives the pane Cursor's logo.
+GROKBOT_APP = "cursor-agent"
 CURSOR_HOOK = """import base64, os, sys
 # Cursor hook: report this pane's state to Rex. Cursor's payload is not needed.
 sys.stdin.read()

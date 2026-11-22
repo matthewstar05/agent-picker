@@ -112,6 +112,8 @@ class GrokbotTests(unittest.TestCase):
             convo.report("working")
         self.assertEqual([a[0] for a, _ in sent], ["working", "blocked", "idle", "idle"])
         self.assertEqual(sent[1][1]["kind"], "permission")
+        # Rex shows Cursor's logo for this app id.
+        self.assertEqual({a[1] for a, _ in sent}, {"cursor-agent"})
 
 
 if __name__ == "__main__":
