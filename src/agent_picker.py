@@ -1805,17 +1805,21 @@ def main():
     argv = system_prompts.prepare(agent, argv + args)
     import claude_ultracode
     argv = claude_ultracode.prepare(agent, argv)
+    import rex_status
+    argv, rex_app = rex_status.prepare(agent, argv)
     save_last(index)
     defaults = provider_defaults.current(agent)
     if os.environ.get("AGENT_PICKER_NO_PRETRUST") != "1" and (defaults is None or defaults["bypass_permissions"]):
         pretrust(agent)
     print_launch_banner(agent)
+    if rex_app:
+        rex_status.report("idle", rex_app)   # lists the pane in Rex's sidebar from the start
     if returning:
-        return launch_and_return(argv)
+        return launch_and_return(argv, rex_app)
     return launch(argv)
 
 
-def launch_and_return(argv):
+def launch_and_return(argv, rex_app=None):
     """Run the agent, then reopen the selector in return mode once it quits."""
     import signal
     stopped = []
@@ -1835,6 +1839,9 @@ def launch_and_return(argv):
     finally:
         for sig, handler in previous.items():
             signal.signal(sig, handler)
+        if rex_app:
+            import rex_status
+            rex_status.report("clear")   # the selector is back; the agent left the sidebar
     if stopped:
         return 128 + stopped[0]
     os.execv(sys.executable, [sys.executable, str(Path(__file__).resolve()), "--picker-return"])

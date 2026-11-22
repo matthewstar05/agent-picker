@@ -21,6 +21,7 @@ from grokbot_goal import Goal
 import grokbot_sections as sections
 import grokbot_where as where
 import grokbot_sessions as store
+import rex_status
 from platform_runtime import state_dir
 
 VERSION = "0.1.0"
@@ -323,6 +324,10 @@ class Conversation:
 
     def report(self, state):
         self.mark(state)
+        if getattr(self.output, "interactive", False):
+            # Rex lists the pane in its sidebar from this (Program Status Protocol).
+            rex_status.report(state if state in ("working", "blocked") else "idle", "grokbot",
+                              kind="permission" if state == "blocked" else None)
         pane = os.environ.get("HERDR_PANE_ID")
         if os.environ.get("HERDR_ENV") != "1" or not pane:
             return
@@ -1164,6 +1169,7 @@ def main(argv=None):
         if conversation:
             conversation.release()
         if rex_title:
+            rex_status.report("clear")
             print("\x1b]2;\x07", end="", flush=True)
 
 
